@@ -19,7 +19,13 @@ RUN apt-get update \
 
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+# Embeddings run on CPU in the API/worker image. Install the CPU wheel
+# first so sentence-transformers does not resolve a multi-gigabyte CUDA
+# runtime into the production image.
+RUN pip install --no-cache-dir --prefix=/install \
+        --index-url https://download.pytorch.org/whl/cpu \
+        "torch>=2.0,<3.0" \
+    && pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ---------------------------------------------------------------------------
 # Runtime: slim image, no compilers, non-root user

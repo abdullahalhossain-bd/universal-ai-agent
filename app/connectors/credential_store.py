@@ -64,17 +64,20 @@ class CredentialStore:
             return None
 
         if not ciphertext.startswith(_ENC_PREFIX):
-            # A row written before encryption-at-rest existed. Don't
-            # hard-fail merchants over this — but make it loud, since
-            # it means a plaintext secret is still sitting in the DB
-            # until this datasource is next updated (update() always
-            # re-encrypts). Run the one-off migration described in
-            # CredentialStore's module docstring / ops runbook to
-            # close the gap immediately instead of waiting for edits.
+            from app.core.config import settings
+
+            if (settings.environment or settings.app_env).lower() in {
+                "production",
+                "prod",
+            }:
+                raise ValueError(
+                    "stored datasource credential is not encrypted; "
+                    "run the credential backfill before production"
+                )
+
             logger.warning(
                 "read a connection secret with no encryption prefix "
-                "(legacy plaintext row) — it will remain unencrypted "
-                "at rest until re-saved; run the backfill migration"
+                "(legacy plaintext row); run the credential backfill"
             )
             return ciphertext
 

@@ -43,6 +43,7 @@ from app.chat.schemas import (
     ImageChatResponse,
 )
 from app.chat.service import ChatService
+from app.chat.models import ChatSession
 
 from app.images.hashing import compute_image_hash
 from app.images.repository import ImageRepository
@@ -72,6 +73,21 @@ async def upload_image(
     store = resolve_active_store(api_key=api_key, db=db)
 
     require_feature(store, FEATURE_IMAGE_SEARCH)
+
+    if conversation_id:
+        foreign_session = (
+            db.query(ChatSession)
+            .filter(
+                ChatSession.conversation_key == conversation_id,
+                ChatSession.store_id != store.id,
+            )
+            .first()
+        )
+        if foreign_session is not None:
+            raise HTTPException(
+                status_code=404,
+                detail="Conversation not found",
+            )
 
     # Read the whole upload up front: hashing, mime-sniffing, and the
     # size check below all need the full bytes anyway, and 10 MB (the
