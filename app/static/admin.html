@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Universal Commerce AI — Dashboard</title>
+<style>
+  :root{
+    --accent:#111827;
+    --accent-light:#eef0f3;
+    --bg:#f7f7f8;
+    --border:#e3e4e8;
+    --text:#1f2328;
+    --muted:#6b7280;
+    --danger:#b3261e;
+    --danger-bg:#fdecea;
+    --ok:#0f7a3d;
+    --ok-bg:#e8f6ee;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  .shell{max-width:760px;margin:0 auto;padding:28px 20px 80px;}
+  header.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;}
+  header.top h1{font-size:17px;margin:0;}
+  #store-badge{font-size:12.5px;color:var(--muted);display:none;align-items:center;gap:8px;}
+  #store-badge.show{display:flex;}
+  #store-badge b{color:var(--text);}
+  .pill{padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;background:var(--accent-light);}
+  .pill.live{background:var(--ok-bg);color:var(--ok);}
+  #logout-btn{background:none;border:1px solid var(--border);border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;color:var(--muted);}
+
+  .steps{display:flex;gap:6px;margin-bottom:24px;}
+  .step-dot{flex:1;height:4px;border-radius:4px;background:var(--border);}
+  .step-dot.active{background:var(--accent);}
+  .step-dot.done{background:#8a8f98;}
+
+  .card{background:#fff;border:1px solid var(--border);border-radius:14px;padding:22px;margin-bottom:16px;}
+  .card h2{font-size:15.5px;margin:0 0 4px;}
+  .card p.sub{color:var(--muted);font-size:13px;margin:0 0 16px;}
+
+  label{display:block;font-size:12.5px;font-weight:600;margin:12px 0 5px;color:#3a3d44;}
+  label:first-of-type{margin-top:0;}
+  input, select, textarea{
+    width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:9px;
+    font-size:13.5px;font-family:inherit;outline:none;
+  }
+  input:focus, select:focus, textarea:focus{border-color:var(--accent);}
+  textarea{resize:vertical;min-height:70px;}
+  .row{display:flex;gap:10px;}
+  .row > *{flex:1;}
+
+  .actions{display:flex;gap:10px;margin-top:18px;align-items:center;flex-wrap:wrap;}
+  button.btn{
+    border:none;border-radius:9px;padding:10px 16px;font-size:13.5px;font-weight:600;
+    cursor:pointer;background:var(--accent);color:#fff;
+  }
+  button.btn:disabled{opacity:.5;cursor:default;}
+  button.btn.secondary{background:var(--accent-light);color:var(--text);}
+  button.btn.link{background:none;color:var(--muted);text-decoration:underline;padding:6px 2px;}
+
+  .msg{border-radius:10px;padding:10px 12px;font-size:12.5px;margin-top:12px;display:none;}
+  .msg.show{display:block;}
+  .msg.error{background:var(--danger-bg);color:var(--danger);}
+  .msg.ok{background:var(--ok-bg);color:var(--ok);}
+  .msg.info{background:var(--accent-light);color:#3a3d44;}
+
+  .key-box{
+    display:flex;align-items:center;gap:8px;background:#0f1117;color:#e6e6e9;
+    border-radius:9px;padding:10px 12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+    font-size:12.5px;overflow-x:auto;white-space:nowrap;margin-top:6px;
+  }
+  .key-box button{
+    background:#26282f;color:#fff;border:none;border-radius:6px;padding:5px 9px;font-size:11.5px;
+    cursor:pointer;flex-shrink:0;
+  }
+  .warn-box{background:#fff8e6;border:1px solid #f0dca0;color:#7a5b00;font-size:12px;border-radius:9px;padding:10px 12px;margin-top:10px;}
+
+  details.advanced{margin-top:16px;border-top:1px dashed var(--border);padding-top:14px;}
+  details.advanced summary{cursor:pointer;font-size:12.5px;font-weight:600;color:var(--muted);}
+  details.advanced[open] summary{color:var(--text);}
+
+  .tab-nav{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap;}
+  .tab-btn{
+    background:#fff;border:1px solid var(--border);border-radius:9px;padding:7px 12px;font-size:12.5px;
+    cursor:pointer;color:var(--muted);
+  }
+  .tab-btn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+  .tab-btn.locked{opacity:.4;cursor:not-allowed;}
+
+  .chat-window{border:1px solid var(--border);border-radius:10px;background:var(--bg);height:280px;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;margin-bottom:10px;}
+  .bubble{max-width:80%;padding:8px 11px;border-radius:10px;font-size:13px;line-height:1.4;}
+  .bubble.user{align-self:flex-end;background:var(--accent);color:#fff;}
+  .bubble.assistant{align-self:flex-start;background:#fff;border:1px solid var(--border);}
+  .composer-row{display:flex;gap:8px;}
+  .composer-row input{flex:1;}
+
+  pre.snippet{
+    background:#0f1117;color:#e6e6e9;border-radius:9px;padding:14px;font-size:12px;
+    overflow-x:auto;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;line-height:1.6;
+  }
+  .checklist{list-style:none;padding:0;margin:14px 0 0;font-size:13px;}
+  .checklist li{padding:5px 0;color:var(--muted);}
+  .checklist li.done{color:var(--ok);}
+  .checklist li.done:before{content:"✓ ";font-weight:700;}
+  .checklist li:not(.done):before{content:"○ ";}
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <header class="top">
+    <h1>Universal Commerce AI</h1>
+    <div id="store-badge">
+      <span class="pill" id="plan-pill">plan</span>
+      <span>Store: <b id="store-name-badge">—</b></span>
+      <button id="logout-btn" type="button">Log out</button>
+    </div>
+  </header>
+
+  <div class="steps">
+    <div class="step-dot" data-step="1"></div>
+    <div class="step-dot" data-step="2"></div>
+    <div class="step-dot" data-step="3"></div>
+    <div class="step-dot" data-step="4"></div>
+  </div>
+
+  <div class="tab-nav" id="tab-nav">
+    <button class="tab-btn" data-tab="1" type="button">1 · Store</button>
+    <button class="tab-btn locked" data-tab="2" type="button">2 · Connect data</button>
+    <button class="tab-btn locked" data-tab="3" type="button">3 · Test chat</button>
+    <button class="tab-btn locked" data-tab="4" type="button">4 · Go live</button>
+  </div>
+
+  <!-- STEP 1: Store -->
+  <section class="tab" id="tab-1">
+
+    <div class="card">
+      <h2>Create your store</h2>
+      <p class="sub">Takes a few seconds. You'll get an API key immediately — save it, it's shown only once.</p>
+
+      <label for="cs-name">Store name</label>
+      <input id="cs-name" type="text" placeholder="Acme Sneakers" />
+
+      <label for="cs-url">Website URL (optional)</label>
+      <input id="cs-url" type="text" placeholder="https://acme-sneakers.com" />
+
+      <label for="cs-plan">Plan</label>
+      <select id="cs-plan">
+        <option value="starter">Starter</option>
+        <option value="growth">Growth</option>
+        <option value="pro">Pro</option>
+      </select>
+
+      <div class="actions">
+        <button class="btn" id="create-store-btn" type="button">Create store</button>
+      </div>
+      <div class="msg" id="create-store-msg"></div>
+    </div>
+
+    <div class="card">
+      <h2>Already have an API key?</h2>
+      <p class="sub">Paste it to pick up where you left off.</p>
+      <label for="existing-key">API key</label>
+      <input id="existing-key" type="text" placeholder="pk_live_..." />
+      <div class="actions">
+        <button class="btn secondary" id="use-existing-btn" type="button">Continue</button>
+      </div>
+      <div class="msg" id="existing-key-msg"></div>
+    </div>
+
+  </section>
+
+  <!-- STEP 2: Connect data -->
+  <section class="tab" id="tab-2" style="display:none;">
+
+    <div class="card">
+      <h2>Connect your data</h2>
+      <p class="sub">Fastest option: point us at your site and we'll crawl it for product & policy info.</p>
+
+      <label for="ingest-url">Website URL to crawl</label>
+      <input id="ingest-url" type="text" placeholder="https://acme-sneakers.com" />
+
+      <div class="actions">
+        <button class="btn" id="ingest-btn" type="button">Crawl website</button>
+        <button class="btn link" id="skip-ingest-btn" type="button">Skip for now →</button>
+      </div>
+      <div class="msg" id="ingest-msg"></div>
+
+      <details class="advanced">
+        <summary>Advanced: connect a database instead</summary>
+        <p class="sub" style="margin-top:10px;">For merchants with a Postgres/MySQL product table. Your connection string is encrypted at rest.</p>
+
+        <label for="ds-type">Connector type</label>
+        <select id="ds-type">
+          <option value="postgresql">PostgreSQL</option>
+          <option value="mysql">MySQL</option>
+        </select>
+
+        <label for="ds-conn">Connection URL</label>
+        <input id="ds-conn" type="text" placeholder="postgresql://user:pass@host:5432/dbname" />
+
+        <div class="actions">
+          <button class="btn secondary" id="ds-test-btn" type="button">Test connection</button>
+          <button class="btn secondary" id="ds-create-btn" type="button">Create datasource</button>
+        </div>
+        <div class="msg" id="ds-msg"></div>
+      </details>
+    </div>
+
+  </section>
+
+  <!-- STEP 3: Test chat -->
+  <section class="tab" id="tab-3" style="display:none;">
+    <div class="card">
+      <h2>Test your assistant</h2>
+      <p class="sub">This calls the exact same endpoint your widget will use.</p>
+
+      <div class="chat-window" id="chat-window"></div>
+      <div class="composer-row">
+        <input id="chat-input" type="text" placeholder="Ask about a product…" />
+        <button class="btn" id="chat-send-btn" type="button">Send</button>
+      </div>
+      <div class="actions">
+        <button class="btn secondary" id="to-step4-btn" type="button">Looks good → get widget code</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 4: Go live -->
+  <section class="tab" id="tab-4" style="display:none;">
+    <div class="card">
+      <h2>Add the widget to your site</h2>
+      <p class="sub">Paste this before <code>&lt;/body&gt;</code> on every page you want the chat bubble on.</p>
+
+      <pre class="snippet" id="widget-snippet"></pre>
+      <div class="actions">
+        <button class="btn" id="copy-snippet-btn" type="button">Copy snippet</button>
+      </div>
+
+      <div class="warn-box">
+        The key in this snippet is meant to be public — it only authorizes the chat widget for this store.
+        Don't reuse it as an admin/API credential anywhere else.
+      </div>
+
+      <ul class="checklist">
+        <li id="check-store">Store created</li>
+        <li id="check-data">Data connected</li>
+        <li id="check-chat">Assistant tested</li>
+        <li id="check-widget">Widget snippet ready</li>
+      </ul>
+    </div>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var API_BASE = window.location.origin;
+  var STORAGE_KEY = "ucai_dashboard_state";
+
+  var state = load() || { apiKey: null, storeId: null, storeName: null, plan: null, dataConnected: false, chatTested: false };
+
+  function load() {
+    try { return JSON.parse(window.localStorage.getItem(STORAGE_KEY)); }
+    catch (e) { return null; }
+  }
+  function persist() {
+    try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+    catch (e) {}
+  }
+
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = Object.assign({ "content-type": "application/json" }, opts.headers || {});
+    if (state.apiKey) headers["x-api-key"] = state.apiKey;
+    return fetch(API_BASE + path, {
+      method: opts.method || "GET",
+      headers: headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (data) {
+        if (!res.ok) {
+          var err = new Error(data.detail || ("HTTP " + res.status));
+          err.data = data;
+          throw err;
+        }
+        return data;
+      });
+    });
+  }
+
+  function showMsg(id, text, kind) {
+    var el = document.getElementById(id);
+    el.textContent = text;
+    el.className = "msg show " + kind;
+  }
+  function hideMsg(id) {
+    document.getElementById(id).className = "msg";
+  }
+
+  // ---------------------------------
+  // Tabs / step nav
+  // ---------------------------------
+
+  var tabOrder = ["1", "2", "3", "4"];
+
+  function unlockUpTo(step) {
+    tabOrder.forEach(function (n) {
+      var btn = document.querySelector('.tab-btn[data-tab="' + n + '"]');
+      if (parseInt(n, 10) <= step) btn.classList.remove("locked");
+    });
+  }
+
+  function goToTab(n) {
+    tabOrder.forEach(function (i) {
+      document.getElementById("tab-" + i).style.display = i === n ? "" : "none";
+      document.querySelector('.tab-btn[data-tab="' + i + '"]').classList.toggle("active", i === n);
+      document.querySelector('.step-dot[data-step="' + i + '"]').classList.toggle("active", i === n);
+      document.querySelector('.step-dot[data-step="' + i + '"]').classList.toggle("done", parseInt(i, 10) < parseInt(n, 10));
+    });
+    if (n === "4") renderStep4();
+  }
+
+  document.querySelectorAll(".tab-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      if (btn.classList.contains("locked")) return;
+      goToTab(btn.getAttribute("data-tab"));
+    });
+  });
+
+  function refreshBadge() {
+    var badge = document.getElementById("store-badge");
+    if (!state.apiKey || !state.storeId) { badge.classList.remove("show"); return; }
+    badge.classList.add("show");
+    document.getElementById("store-name-badge").textContent = state.storeName || state.storeId;
+    var pill = document.getElementById("plan-pill");
+    pill.textContent = state.plan || "starter";
+  }
+
+  document.getElementById("logout-btn").addEventListener("click", function () {
+    state = { apiKey: null, storeId: null, storeName: null, plan: null, dataConnected: false, chatTested: false };
+    persist();
+    window.location.reload();
+  });
+
+  // ---------------------------------
+  // Step 1: create / resume store
+  // ---------------------------------
+
+  document.getElementById("create-store-btn").addEventListener("click", function () {
+    var name = document.getElementById("cs-name").value.trim();
+    if (!name) { showMsg("create-store-msg", "Store name is required.", "error"); return; }
+
+    hideMsg("create-store-msg");
+    var btn = document.getElementById("create-store-btn");
+    btn.disabled = true;
+
+    api("/v1/stores", {
+      method: "POST",
+      body: {
+        name: name,
+        website_url: document.getElementById("cs-url").value.trim() || null,
+        plan: document.getElementById("cs-plan").value,
+      },
+    }).then(function (data) {
+      state.apiKey = data.api_key;
+      state.storeId = data.store_id;
+      state.storeName = data.name;
+      state.plan = data.plan;
+      persist();
+      refreshBadge();
+
+      showMsg("create-store-msg", "Store created. Copy your API key below before continuing — it will not be shown again.", "ok");
+
+      var box = document.createElement("div");
+      box.className = "key-box";
+      box.innerHTML = '<span id="new-key-text">' + data.api_key + '</span><button type="button" id="copy-new-key">Copy</button>';
+      document.getElementById("create-store-msg").insertAdjacentElement("afterend", box);
+      document.getElementById("copy-new-key").addEventListener("click", function () {
+        navigator.clipboard.writeText(data.api_key).catch(function () {});
+      });
+
+      var cont = document.createElement("div");
+      cont.className = "actions";
+      cont.innerHTML = '<button class="btn secondary" id="continue-after-create">I saved it — continue</button>';
+      box.insertAdjacentElement("afterend", cont);
+      document.getElementById("continue-after-create").addEventListener("click", function () {
+        unlockUpTo(2);
+        document.getElementById("check-store").classList.add("done");
+        goToTab("2");
+      });
+
+      document.getElementById("cs-name").value = "";
+      document.getElementById("cs-url").value = "";
+    }).catch(function (err) {
+      showMsg("create-store-msg", err.message, "error");
+    }).finally(function () {
+      btn.disabled = false;
+    });
+  });
+
+  document.getElementById("use-existing-btn").addEventListener("click", function () {
+    var key = document.getElementById("existing-key").value.trim();
+    if (!key) { showMsg("existing-key-msg", "Paste your API key first.", "error"); return; }
+
+    hideMsg("existing-key-msg");
+    var savedKey = state.apiKey;
+    state.apiKey = key;
+
+    api("/v1/stores/me").then(function (data) {
+      state.storeId = data.store_id;
+      state.storeName = data.name;
+      state.plan = data.plan;
+      persist();
+      refreshBadge();
+      unlockUpTo(2);
+      document.getElementById("check-store").classList.add("done");
+      showMsg("existing-key-msg", "Welcome back, " + data.name + ".", "ok");
+      goToTab("2");
+    }).catch(function (err) {
+      state.apiKey = savedKey;
+      showMsg("existing-key-msg", "Couldn't verify that key: " + err.message, "error");
+    });
+  });
+
+  // ---------------------------------
+  // Step 2: connect data
+  // ---------------------------------
+
+  document.getElementById("ingest-btn").addEventListener("click", function () {
+    var url = document.getElementById("ingest-url").value.trim();
+    if (!url) { showMsg("ingest-msg", "Enter a website URL.", "error"); return; }
+
+    hideMsg("ingest-msg");
+    var btn = document.getElementById("ingest-btn");
+    btn.disabled = true;
+    showMsg("ingest-msg", "Crawling… this can take a moment for larger sites.", "info");
+
+    api("/v1/knowledge/ingest", { method: "POST", body: { website_url: url } })
+      .then(function (data) {
+        state.dataConnected = true;
+        persist();
+        showMsg("ingest-msg", "Done. " + (data.pages_created !== undefined ? data.pages_created + " page(s) ingested (" + data.pages_found + " found)." : "Site ingested."), "ok");
+        document.getElementById("check-data").classList.add("done");
+        unlockUpTo(3);
+      })
+      .catch(function (err) {
+        showMsg("ingest-msg", err.message, "error");
+      })
+      .finally(function () {
+        btn.disabled = false;
+      });
+  });
+
+  document.getElementById("skip-ingest-btn").addEventListener("click", function () {
+    unlockUpTo(3);
+    goToTab("3");
+  });
+
+  document.getElementById("ds-test-btn").addEventListener("click", function () {
+    hideMsg("ds-msg");
+    api("/v1/datasources/test", {
+      method: "POST",
+      body: {
+        connector_type: document.getElementById("ds-type").value,
+        connection_url: document.getElementById("ds-conn").value.trim(),
+      },
+    }).then(function (data) {
+      showMsg("ds-msg", data.connected ? "Connection OK." : "Could not connect.", data.connected ? "ok" : "error");
+    }).catch(function (err) {
+      showMsg("ds-msg", err.message, "error");
+    });
+  });
+
+  document.getElementById("ds-create-btn").addEventListener("click", function () {
+    hideMsg("ds-msg");
+    api("/v1/datasources", {
+      method: "POST",
+      body: {
+        connector_type: document.getElementById("ds-type").value,
+        connection_url: document.getElementById("ds-conn").value.trim(),
+      },
+    }).then(function () {
+      state.dataConnected = true;
+      persist();
+      showMsg("ds-msg", "Datasource created. You can configure table/mapping and sync via the API next.", "ok");
+      document.getElementById("check-data").classList.add("done");
+      unlockUpTo(3);
+    }).catch(function (err) {
+      showMsg("ds-msg", err.message, "error");
+    });
+  });
+
+  // ---------------------------------
+  // Step 3: test chat
+  // ---------------------------------
+
+  var conversationId = null;
+
+  function addBubble(role, text) {
+    var win = document.getElementById("chat-window");
+    var el = document.createElement("div");
+    el.className = "bubble " + role;
+    el.textContent = text;
+    win.appendChild(el);
+    win.scrollTop = win.scrollHeight;
+  }
+
+  function sendChat() {
+    var input = document.getElementById("chat-input");
+    var text = input.value.trim();
+    if (!text) return;
+    addBubble("user", text);
+    input.value = "";
+
+    api("/v1/chat", { method: "POST", body: { message: text, conversation_id: conversationId } })
+      .then(function (data) {
+        conversationId = data.conversation_id || conversationId;
+        addBubble("assistant", data.message || "…");
+        state.chatTested = true;
+        persist();
+        document.getElementById("check-chat").classList.add("done");
+      })
+      .catch(function (err) {
+        addBubble("assistant", "Error: " + err.message);
+      });
+  }
+
+  document.getElementById("chat-send-btn").addEventListener("click", sendChat);
+  document.getElementById("chat-input").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") sendChat();
+  });
+
+  document.getElementById("to-step4-btn").addEventListener("click", function () {
+    unlockUpTo(4);
+    goToTab("4");
+  });
+
+  // ---------------------------------
+  // Step 4: widget snippet
+  // ---------------------------------
+
+  function renderStep4() {
+    document.getElementById("check-widget").classList.add("done");
+    var snippet =
+      '<script src="' + API_BASE + '/widget.js"\n' +
+      '        data-key="' + (state.apiKey || "pk_live_xxxxxxxx") + '"\n' +
+      '        async><' + '/script>';
+    document.getElementById("widget-snippet").textContent = snippet;
+  }
+
+  document.getElementById("copy-snippet-btn").addEventListener("click", function () {
+    navigator.clipboard.writeText(document.getElementById("widget-snippet").textContent).catch(function () {});
+    var btn = document.getElementById("copy-snippet-btn");
+    var original = btn.textContent;
+    btn.textContent = "Copied!";
+    setTimeout(function () { btn.textContent = original; }, 1500);
+  });
+
+  // ---------------------------------
+  // Resume state on load
+  // ---------------------------------
+
+  refreshBadge();
+  if (state.apiKey && state.storeId) {
+    document.getElementById("check-store").classList.add("done");
+    unlockUpTo(state.chatTested ? 4 : state.dataConnected ? 3 : 2);
+    if (state.dataConnected) document.getElementById("check-data").classList.add("done");
+    if (state.chatTested) document.getElementById("check-chat").classList.add("done");
+    goToTab(state.chatTested ? "4" : state.dataConnected ? "3" : "2");
+  } else {
+    goToTab("1");
+  }
+})();
+</script>
+
+</body>
+</html>

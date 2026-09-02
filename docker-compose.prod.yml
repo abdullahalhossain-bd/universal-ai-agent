@@ -1,0 +1,114 @@
+name: universal-ai-agent
+
+# Standalone production compose file (does not extend
+# docker-compose.yml, to avoid depending on newer Compose
+# merge/override syntax that may not exist on every host).
+#
+#   cp .env.production.example .env    # fill in real values first
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# vs. the dev docker-compose.yml:
+#   - postgres/redis do NOT publish ports to the host — only
+#     reachable from other containers on the compose network
+#   - Caddy is the only public entrypoint (80/443), gets a free
+#     Let's Encrypt cert for ${DOMAIN} automatically, and proxies to
+#     the api container; the api container itself is not published
+#   - named volume for uploaded chat images so they survive
+#     restarts/rebuilds when STORAGE_BACKEND=local (switch to
+#     STORAGE_BACKEND=s3 instead once you run more than one replica)
+#   - restart: always, so containers come back after a host reboot
+
+services:
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-app}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - chat_images:/app/data/chat-images
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    command: ["python", "-m", "app.sync.worker"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-app}
+      REDIS_URL: redis://redis:6379/0
+      # The api container already ran `alembic upgrade head` in its
+      # entrypoint; skip re-running it here to avoid two containers
+      # racing the migration on cold start.
+      SKIP_MIGRATIONS: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is required, e.g. api.example.com}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required for Let's Encrypt}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  chat_images:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,197 @@
+﻿import re
+
+from app.ai.response_policy import (
+    ResponsePolicy,
+)
+
+from app.ai.template_response import (
+    TemplateResponseGenerator,
+)
+
+
+# Store currently only displays prices in Taka.
+# Any other currency symbol in an LLM response is
+# a hallucination, not a real conversion — so we
+# normalize it as a safety net on top of the prompt
+# rules and the explicit currency already baked into
+# ContextBuilder's product text.
+_FOREIGN_CURRENCY_PATTERN = re.compile(
+    r"[₹$€£]"
+)
+
+
+def _normalize_currency(text: str) -> str:
+
+    return _FOREIGN_CURRENCY_PATTERN.sub(
+        "৳",
+        text,
+    )
+
+
+class ChatResponseService:
+
+    def __init__(
+        self,
+        llm_generator,
+    ):
+
+        self.llm = llm_generator
+
+        self.policy = (
+            ResponsePolicy()
+        )
+
+        self.template = (
+            TemplateResponseGenerator()
+        )
+
+    async def generate(
+        self,
+        query: str,
+        context,
+        plan,
+    ):
+
+        # ---------------------------------
+        # Decide whether LLM is needed
+        # ---------------------------------
+
+        use_llm = (
+            self.policy.should_use_llm(
+                query=query,
+                context=context,
+                plan=plan,
+            )
+        )
+
+        # ---------------------------------
+        # Deterministic response
+        # ---------------------------------
+
+        if not use_llm:
+
+            # Product result
+            if context.product_count:
+
+                products = (
+                    context.products
+                )
+
+                # Single product
+                if len(products) == 1:
+
+                    product = products[0]
+
+                    name = getattr(
+                        product,
+                        "name",
+                        "",
+                    )
+
+                    price = getattr(
+                        product,
+                        "price",
+                        None,
+                    )
+
+                    stock = getattr(
+                        product,
+                        "stock",
+                        None,
+                    )
+
+                    message = name
+
+                    if price is not None:
+
+                        message += (
+                            f" — ৳"
+                            f"{float(price):,.0f}"
+                        )
+
+                    if stock is not None:
+
+                        if stock > 0:
+
+                            message += (
+                                f" | Stock: "
+                                f"{float(stock):g}"
+                            )
+
+                        else:
+
+                            message += (
+                                " | Out of stock"
+                            )
+
+                    return {
+                        "message": message,
+                        "used_llm": False,
+                        "provider": None,
+                    }
+
+                # Multiple products
+                message = (
+                    f"{len(products)}টি "
+                    "matching product "
+                    "পাওয়া গেছে।"
+                )
+
+                return {
+                    "message": message,
+                    "used_llm": False,
+                    "provider": None,
+                }
+
+            # Website knowledge result
+            if context.knowledge_count:
+
+                knowledge_items = [
+                    item
+                    for item in context.knowledge
+                ]
+
+                if knowledge_items:
+
+                    return {
+                        "message": (
+                            knowledge_items[
+                                0
+                            ].content
+                        ),
+                        "used_llm": False,
+                        "provider": None,
+                    }
+
+            # No context
+            return {
+                "message": (
+                    "দুঃখিত, এই তথ্যটি "
+                    "খুঁজে পাওয়া যায়নি।"
+                ),
+                "used_llm": False,
+                "provider": None,
+            }
+
+        # ---------------------------------
+        # LLM response
+        # ---------------------------------
+
+        result = await self.llm.generate(
+            query=query,
+            context=context,
+        )
+
+        message_text = _normalize_currency(
+            result["text"]
+        )
+
+        return {
+            "message": message_text,
+            "used_llm": True,
+            "provider": result["provider"],
+            "usage": result.get(
+                "usage",
+                {},
+            ),
+        }

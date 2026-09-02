@@ -1,0 +1,59 @@
+    # -------------------------------------------------------------
+    # chat_sessions unique(store_id, conversation_key)
+    # -------------------------------------------------------------
+    #
+    # Legacy databases may have been stamped at 0006 without
+    # receiving the actual 0002 DDL. Reconcile that drift here.
+    #
+    if "chat_sessions" in tables:
+        current_inspector = sa.inspect(conn)
+
+        has_unique_constraint = any(
+            uc.get("column_names") == [
+                "store_id",
+                "conversation_key",
+            ]
+            for uc in current_inspector.get_unique_constraints(
+                "chat_sessions"
+            )
+        )
+
+        has_unique_index = any(
+            idx.get("unique")
+            and idx.get("column_names") == [
+                "store_id",
+                "conversation_key",
+            ]
+            for idx in current_inspector.get_indexes(
+                "chat_sessions"
+            )
+        )
+
+        if not has_unique_constraint and not has_unique_index:
+            duplicates = conn.execute(
+                text(
+                    "SELECT store_id, conversation_key "
+                    "FROM chat_sessions "
+                    "GROUP BY store_id, conversation_key "
+                    "HAVING COUNT(*) > 1"
+                )
+            ).fetchall()
+
+            if duplicates:
+                raise RuntimeError(
+                    "Cannot add unique constraint "
+                    "uq_chat_sessions_store_conversation: "
+                    f"{len(duplicates)} duplicate groups exist."
+                )
+
+            # SQLite cannot ALTER TABLE ADD CONSTRAINT directly.
+            # batch_alter_table recreates the table and preserves
+            # the unique constraint.
+            with op.batch_alter_table(
+                "chat_sessions",
+                recreate="always",
+            ) as batch_op:
+                batch_op.create_unique_constraint(
+                    "uq_chat_sessions_store_conversation",
+                    ["store_id", "conversation_key"],
+                )

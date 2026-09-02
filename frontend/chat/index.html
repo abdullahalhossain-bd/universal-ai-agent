@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>AI Concierge</title>
+<meta name="description" content="Ask about products, sizing, availability, or anything else — answered live from the store's own catalog." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ============================================================
+       GATE — shown until a store key is known (query param, saved,
+       or pasted in here). Hidden the moment the app has a key.
+       ============================================================ -->
+  <div id="gate" class="gate" hidden>
+    <form id="gate-form" class="gate-card">
+      <p class="gate-eyebrow">Store connection</p>
+      <h1 class="gate-title">Connect a store</h1>
+      <p class="gate-copy">
+        Paste the store's public key to open its concierge. Find it on the
+        store's dashboard under <strong>Widget &amp; embed</strong>.
+      </p>
+      <label class="gate-label" for="gate-key">Public store key</label>
+      <input
+        id="gate-key"
+        class="gate-input"
+        type="text"
+        placeholder="pk_live_..."
+        autocomplete="off"
+        autocapitalize="off"
+        spellcheck="false"
+        required
+      />
+      <button type="submit" class="gate-submit">Open concierge</button>
+      <p id="gate-error" class="gate-error" hidden></p>
+    </form>
+  </div>
+
+  <!-- ============================================================
+       APP
+       ============================================================ -->
+  <div id="app" class="app" hidden>
+
+    <header class="bar">
+      <div class="bar-store">
+        <span id="status-dot" class="dot dot-connecting" aria-hidden="true"></span>
+        <span id="store-name" class="bar-name">Concierge</span>
+      </div>
+      <button id="reset-btn" class="bar-reset" type="button" title="Start a new conversation">
+        New chat
+      </button>
+    </header>
+
+    <main id="thread" class="thread" aria-live="polite">
+      <!-- messages injected by app.js -->
+    </main>
+
+    <form id="composer" class="composer">
+      <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+      <button id="attach-btn" class="composer-icon-btn" type="button" title="Attach a photo" aria-label="Attach a photo">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.5V8a5 5 0 0 0-10 0v9a3 3 0 0 0 6 0V9"/></svg>
+      </button>
+      <textarea
+        id="message-input"
+        class="composer-input"
+        placeholder="Ask about a product, size, or order…"
+        rows="1"
+        maxlength="2000"
+      ></textarea>
+      <button id="send-btn" class="composer-send" type="submit" aria-label="Send">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+    </form>
+    <p id="attach-preview" class="attach-preview" hidden></p>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
