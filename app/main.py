@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import settings
@@ -58,7 +59,6 @@ app.add_middleware(RequestContextMiddleware)
 app.include_router(chat_router); app.include_router(messages_router); app.include_router(images_router); app.include_router(media_router); app.include_router(stores_router); app.include_router(auth_router); app.include_router(api_keys_router); app.include_router(billing_router); app.include_router(admin_router); app.include_router(admin_analytics_router); app.include_router(products_router); app.include_router(datasources_router); app.include_router(knowledge_router); app.include_router(discovery_v1_router, prefix="/v1"); app.include_router(mapping_v1_router, prefix="/v1"); app.include_router(widget_router)
 _CHAT_DIR = Path(__file__).resolve().parent.parent / "frontend" / "chat"
 if _CHAT_DIR.is_dir(): app.mount("/chat", StaticFiles(directory=str(_CHAT_DIR), html=True), name="chat-ui")
-from fastapi.staticfiles import StaticFiles
 from app.core.alerting import send_alert
 from app.core.request_context import get_request_id
 
