@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
-import { api, getToken, setToken } from '../api/client'
+import { adminApi, api, getAdminToken, getToken, setAdminToken, setToken } from '../api/client'
 
 const AuthContext = createContext(null)
 
@@ -7,6 +7,9 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [store, setStore] = useState(null)
   const [loading, setLoading] = useState(true)
+
+  const [adminUser, setAdminUser] = useState(null)
+  const [adminLoading, setAdminLoading] = useState(true)
 
   const loadMe = useCallback(async () => {
     if (!getToken()) {
@@ -26,9 +29,26 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
+  const loadAdminMe = useCallback(async () => {
+    if (!getAdminToken()) {
+      setAdminLoading(false)
+      return
+    }
+    try {
+      const data = await adminApi.get('/v1/admin/me')
+      setAdminUser(data)
+    } catch {
+      setAdminToken(null)
+      setAdminUser(null)
+    } finally {
+      setAdminLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     loadMe()
-  }, [loadMe])
+    loadAdminMe()
+  }, [loadMe, loadAdminMe])
 
   const applyAuthResponse = (data) => {
     setToken(data.access_token)
@@ -60,9 +80,33 @@ export function AuthProvider({ children }) {
     setStore(data.store)
   }
 
+  const adminLogin = async (email, password) => {
+    const data = await api.post('/v1/admin/login', { email, password }, { auth: false, token: null })
+    setAdminToken(data.access_token)
+    setAdminUser(data.admin)
+    return data
+  }
+
+  const adminLogout = () => {
+    setAdminToken(null)
+    setAdminUser(null)
+  }
+
   return (
     <AuthContext.Provider
-      value={{ user, store, loading, login, signup, logout, refreshStore }}
+      value={{
+        user,
+        store,
+        loading,
+        login,
+        signup,
+        logout,
+        refreshStore,
+        adminUser,
+        adminLoading,
+        adminLogin,
+        adminLogout,
+      }}
     >
       {children}
     </AuthContext.Provider>

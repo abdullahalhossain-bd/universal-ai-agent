@@ -63,15 +63,19 @@ def get_trusted_proxies() -> list[str]:
 def get_cors_allow_origins() -> list[str]:
     """
     Parse the comma-separated `cors_allow_origins` setting into
-    a list for CORSMiddleware. Defaults to "*" (any origin) since
-    the embeddable merchant widget runs on domains the platform
-    does not control in advance; this is safe only because auth
-    is a custom header rather than a cookie (see main.py).
+    list for CORSMiddleware.
+
+    For local development, an empty value falls back to "*" to match
+    the widget's cross-origin use case. In production, the config
+    validator rejects empty or wildcard origins, so the app fails
+    closed instead of silently accepting any origin.
     """
 
-    raw = (settings.cors_allow_origins or "*").strip()
+    raw = (settings.cors_allow_origins or "").strip()
 
     if not raw:
+        if (settings.environment or settings.app_env).lower() in {"production", "prod"}:
+            return []
         return ["*"]
 
     return [

@@ -10,6 +10,8 @@ Centralized settings for:
 - Groq usage/cost calculation
 """
 
+from urllib.parse import urlparse
+
 from pydantic_settings import (
     BaseSettings,
     SettingsConfigDict,
@@ -289,6 +291,26 @@ class Settings(BaseSettings):
         if len(self.jwt_secret_key.encode("utf-8")) < 32:
             raise ValueError(
                 "JWT_SECRET_KEY must be at least 32 bytes in production"
+            )
+
+        database_host = urlparse(self.database_url).hostname
+        if database_host and (
+            database_host.endswith(".localhost")
+            or database_host in {"localhost", "127.0.0.1", "::1"}
+        ):
+            raise ValueError(
+                "DATABASE_URL must not point to localhost in production; "
+                "use the managed Postgres service host or a remote database."
+            )
+
+        redis_host = urlparse(self.redis_url).hostname
+        if redis_host and (
+            redis_host.endswith(".localhost")
+            or redis_host in {"localhost", "127.0.0.1", "::1"}
+        ):
+            raise ValueError(
+                "REDIS_URL must not point to localhost in production; "
+                "use the managed Redis service host."
             )
 
         origins = get_cors_origins_for_validation(self.cors_allow_origins)

@@ -4,6 +4,10 @@ import {
   Globe,
   KeyRound,
   CreditCard,
+  Database,
+  MessageSquareText,
+  BarChart3,
+  Settings,
   LogOut,
   Sparkles,
 } from 'lucide-react'
@@ -12,8 +16,12 @@ import { useAuth } from '../context/AuthContext'
 const NAV = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/websites', label: 'Websites', icon: Globe },
+  { to: '/datasources', label: 'Data sources', icon: Database },
   { to: '/api-keys', label: 'API Keys', icon: KeyRound },
+  { to: '/chat', label: 'Chat', icon: MessageSquareText },
+  { to: '/usage', label: 'Usage', icon: BarChart3 },
   { to: '/billing', label: 'Billing', icon: CreditCard },
+  { to: '/settings', label: 'Settings', icon: Settings },
 ]
 
 export default function Layout() {

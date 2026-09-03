@@ -7,6 +7,12 @@ import Overview from './pages/Overview'
 import Websites from './pages/Websites'
 import ApiKeys from './pages/ApiKeys'
 import Billing from './pages/Billing'
+import DataSources from './pages/DataSources'
+import ChatPreview from './pages/ChatPreview'
+import Usage from './pages/Usage'
+import Settings from './pages/Settings'
+import AdminLogin from './pages/AdminLogin'
+import AdminDashboard from './pages/AdminDashboard'
 import { Spinner } from './components/ui'
 
 function ProtectedRoute({ children }) {
@@ -31,6 +37,28 @@ function PublicOnlyRoute({ children }) {
   return children
 }
 
+function AdminProtectedRoute({ children }) {
+  const { adminUser, adminLoading } = useAuth()
+
+  if (adminLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-accent">
+        <Spinner className="h-6 w-6" />
+      </div>
+    )
+  }
+
+  if (!adminUser) return <Navigate to="/admin/login" replace />
+  return children
+}
+
+function PublicAdminOnlyRoute({ children }) {
+  const { adminUser, adminLoading } = useAuth()
+  if (adminLoading) return null
+  if (adminUser) return <Navigate to="/admin" replace />
+  return children
+}
+
 function AppRoutes() {
   return (
     <Routes>
@@ -52,6 +80,24 @@ function AppRoutes() {
       />
 
       <Route
+        path="/admin/login"
+        element={
+          <PublicAdminOnlyRoute>
+            <AdminLogin />
+          </PublicAdminOnlyRoute>
+        }
+      />
+
+      <Route
+        path="/admin"
+        element={
+          <AdminProtectedRoute>
+            <AdminDashboard />
+          </AdminProtectedRoute>
+        }
+      />
+
+      <Route
         element={
           <ProtectedRoute>
             <Layout />
@@ -61,7 +107,11 @@ function AppRoutes() {
         <Route path="/" element={<Overview />} />
         <Route path="/websites" element={<Websites />} />
         <Route path="/api-keys" element={<ApiKeys />} />
+        <Route path="/datasources" element={<DataSources />} />
+        <Route path="/chat" element={<ChatPreview />} />
+        <Route path="/usage" element={<Usage />} />
         <Route path="/billing" element={<Billing />} />
+        <Route path="/settings" element={<Settings />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

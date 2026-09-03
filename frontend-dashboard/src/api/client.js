@@ -4,6 +4,7 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
 
 const TOKEN_KEY = 'merchant_console_token'
+const ADMIN_TOKEN_KEY = 'platform_admin_token'
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY)
@@ -14,6 +15,15 @@ export function setToken(token) {
   else localStorage.removeItem(TOKEN_KEY)
 }
 
+export function getAdminToken() {
+  return localStorage.getItem(ADMIN_TOKEN_KEY)
+}
+
+export function setAdminToken(token) {
+  if (token) localStorage.setItem(ADMIN_TOKEN_KEY, token)
+  else localStorage.removeItem(ADMIN_TOKEN_KEY)
+}
+
 export class ApiError extends Error {
   constructor(status, detail) {
     super(typeof detail === 'string' ? detail : 'Request failed')
@@ -22,12 +32,12 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path, { method = 'GET', body, auth = true, headers = {} } = {}) {
+async function request(path, { method = 'GET', body, auth = true, headers = {}, token = null } = {}) {
   const finalHeaders = { ...headers }
   if (body !== undefined) finalHeaders['Content-Type'] = 'application/json'
   if (auth) {
-    const token = getToken()
-    if (token) finalHeaders['Authorization'] = `Bearer ${token}`
+    const resolvedToken = token ?? getToken()
+    if (resolvedToken) finalHeaders['Authorization'] = `Bearer ${resolvedToken}`
   }
 
   const res = await fetch(`${API_BASE}${path}`, {
@@ -57,5 +67,12 @@ async function request(path, { method = 'GET', body, auth = true, headers = {} }
 export const api = {
   get: (path, opts) => request(path, { ...opts, method: 'GET' }),
   post: (path, body, opts) => request(path, { ...opts, method: 'POST', body }),
+  patch: (path, body, opts) => request(path, { ...opts, method: 'PATCH', body }),
   del: (path, opts) => request(path, { ...opts, method: 'DELETE' }),
+}
+
+export const adminApi = {
+  get: (path, opts) => request(path, { ...opts, method: 'GET', token: getAdminToken() }),
+  post: (path, body, opts) => request(path, { ...opts, method: 'POST', body, token: getAdminToken() }),
+  patch: (path, body, opts) => request(path, { ...opts, method: 'PATCH', body, token: getAdminToken() }),
 }
