@@ -1,14 +1,14 @@
 """
 Dashboard auth dependency — `Authorization: Bearer <jwt>`.
 
-Mirrors app.auth.api_key.get_api_key's shape (fail fast on a missing
-header, look the row up fresh from the DB, 401 on anything that
-doesn't check out) but for `User` sessions instead of `APIKey`s.
+Uses FastAPI's HTTPBearer security dependency so the Authorization
+header is represented correctly in OpenAPI/Swagger UI.
 """
 
 from __future__ import annotations
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.auth.jwt_session import InvalidSessionToken, decode_access_token
@@ -16,14 +16,17 @@ from app.db.database import get_db
 from app.db.models import Store, User
 
 
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
 async def get_current_user(
-    authorization: str | None = Header(default=None),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
-    if not authorization or not authorization.startswith("Bearer "):
+    if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Session token required")
 
-    token = authorization[len("Bearer "):].strip()
+    token = credentials.credentials.strip()
     if not token:
         raise HTTPException(status_code=401, detail="Session token required")
 
