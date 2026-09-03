@@ -1,14 +1,14 @@
 """add merchant auto reply control
 
 Revision ID: 0012_agent_auto_reply
-Revises: 0011_knowledge_embedding_index
+Revises: 0012_agent_configs
 """
 
 from alembic import op
 import sqlalchemy as sa
 
 revision = "0012_agent_auto_reply"
-down_revision = "0011_knowledge_embedding_index"
+down_revision = "0012_agent_configs"
 branch_labels = None
 depends_on = None
 
