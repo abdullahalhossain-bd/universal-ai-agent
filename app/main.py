@@ -113,7 +113,7 @@ from app.api.v1.discovery import (
 )
 
 from app.api.v1.mapping import (
-    router as mapping_router,
+    router as mapping_v1_router,
 )
 
 from app.widget.router import (
@@ -225,7 +225,7 @@ app.add_middleware(
     allow_origins=get_cors_allow_origins(),
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["x-api-key", "content-type"],
+    allow_headers=["x-api-key", "content-type", "authorization"],
 )
 
 
@@ -307,7 +307,7 @@ app.include_router(
 )
 
 app.include_router(
-    mapping_router,
+    mapping_v1_router,
     prefix="/v1",
 )
 
