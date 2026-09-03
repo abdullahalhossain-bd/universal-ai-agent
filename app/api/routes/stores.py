@@ -5,7 +5,7 @@
     Request,
 )
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,7 @@ from app.db.models import (
     Store,
     APIKey,
 )
+from app.db.agent_config import AgentConfig
 
 from app.core.security import (
     generate_api_key,
@@ -67,12 +68,6 @@ async def create_store(
         forwarded_for=http_request.headers.get("x-forwarded-for"),
     )
 
-    # Public onboarding remains supported, but tenant and API-key
-    # creation is bounded per source IP and fails closed without Redis.
-    # Dashboard signup applies the same control in app.api.routes.auth.
-    # The response exposes the raw key only for this one creation call.
-    # The limiter result is intentionally not returned to avoid coupling
-    # this bootstrap response to rate-limit headers.
     await enforce_signup_rate_limit(client_ip=client_ip)
 
     plan_name = payload.plan.lower().strip()
@@ -148,3 +143,78 @@ def get_my_store(
         ),
         "status": store.status,
     }
+
+
+# ---------------------------------
+# AI Agent Configuration
+# ---------------------------------
+
+class AgentConfigRequest(BaseModel):
+    agent_name: str = Field(default="Shop Assistant", min_length=1, max_length=100)
+    welcome_message: str = Field(default="Hi! How can I help you today?", min_length=1, max_length=1000)
+    language: str = Field(default="auto", pattern="^(auto|en|bn)$")
+    tone: str = Field(default="friendly", pattern="^(friendly|professional|concise|warm)$")
+    system_instructions: str = Field(default="", max_length=5000)
+    product_behavior: str = Field(default="accurate", pattern="^(accurate|helpful|sales)$")
+    fallback_message: str = Field(default="I couldn't find that information. Please contact the store for help.", min_length=1, max_length=1000)
+    enabled: bool = True
+
+
+def _agent_config_response(config: AgentConfig):
+    return {
+        "agent_name": config.agent_name,
+        "welcome_message": config.welcome_message,
+        "language": config.language,
+        "tone": config.tone,
+        "system_instructions": config.system_instructions,
+        "product_behavior": config.product_behavior,
+        "fallback_message": config.fallback_message,
+        "enabled": config.enabled,
+        "updated_at": config.updated_at,
+    }
+
+
+@router.get("/me/agent-config")
+def get_agent_config(
+    store: Store = Depends(get_current_store),
+    db: Session = Depends(get_db),
+):
+    config = db.query(AgentConfig).filter(
+        AgentConfig.store_id == store.id
+    ).first()
+
+    if config is None:
+        config = AgentConfig(
+            id=__import__("uuid").uuid4().hex,
+            store_id=store.id,
+        )
+        db.add(config)
+        db.commit()
+        db.refresh(config)
+
+    return _agent_config_response(config)
+
+
+@router.put("/me/agent-config")
+def update_agent_config(
+    payload: AgentConfigRequest,
+    store: Store = Depends(get_current_store),
+    db: Session = Depends(get_db),
+):
+    config = db.query(AgentConfig).filter(
+        AgentConfig.store_id == store.id
+    ).first()
+
+    if config is None:
+        config = AgentConfig(
+            id=__import__("uuid").uuid4().hex,
+            store_id=store.id,
+        )
+        db.add(config)
+
+    for field in payload.model_fields:
+        setattr(config, field, getattr(payload, field))
+
+    db.commit()
+    db.refresh(config)
+    return _agent_config_response(config)
