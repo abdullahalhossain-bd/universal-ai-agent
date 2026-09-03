@@ -16,12 +16,7 @@ router = APIRouter(prefix="/v1/admin", tags=["platform-admin"])
 @router.get("/analytics/overview")
 def analytics_overview(days: int = Query(default=30, ge=1, le=365), admin: PlatformAdmin = Depends(get_current_admin), db: Session = Depends(get_db)):
     since = datetime.utcnow() - timedelta(days=days)
-    usage = db.query(
-        func.count(UsageRecord.id),
-        func.coalesce(func.sum(UsageRecord.input_tokens), 0),
-        func.coalesce(func.sum(UsageRecord.output_tokens), 0),
-        func.coalesce(func.sum(UsageRecord.estimated_cost), 0),
-    ).filter(UsageRecord.created_at >= since, UsageRecord.status == "completed").one()
+    usage = db.query(func.count(UsageRecord.id), func.coalesce(func.sum(UsageRecord.input_tokens), 0), func.coalesce(func.sum(UsageRecord.output_tokens), 0), func.coalesce(func.sum(UsageRecord.estimated_cost), 0)).filter(UsageRecord.created_at >= since, UsageRecord.status == "completed").one()
     conversations = db.query(func.count(ChatSession.id)).filter(ChatSession.created_at >= since).scalar() or 0
     messages = db.query(func.count(ChatMessage.id)).join(ChatSession, ChatMessage.session_id == ChatSession.id).filter(ChatMessage.created_at >= since).scalar() or 0
     return {"days": days, "usage_requests": int(usage[0] or 0), "input_tokens": int(usage[1] or 0), "output_tokens": int(usage[2] or 0), "ai_cost": float(usage[3] or 0), "conversations": int(conversations), "messages": int(messages)}
@@ -29,14 +24,19 @@ def analytics_overview(days: int = Query(default=30, ge=1, le=365), admin: Platf
 @router.get("/analytics/daily")
 def analytics_daily(days: int = Query(default=30, ge=1, le=365), admin: PlatformAdmin = Depends(get_current_admin), db: Session = Depends(get_db)):
     since = datetime.utcnow() - timedelta(days=days)
-    rows = db.query(
-        func.date(UsageRecord.created_at).label("day"),
-        func.count(UsageRecord.id).label("requests"),
-        func.coalesce(func.sum(UsageRecord.estimated_cost), 0).label("cost"),
-        func.coalesce(func.sum(UsageRecord.input_tokens), 0).label("input_tokens"),
-        func.coalesce(func.sum(UsageRecord.output_tokens), 0).label("output_tokens"),
-    ).filter(UsageRecord.created_at >= since, UsageRecord.status == "completed").group_by(func.date(UsageRecord.created_at)).order_by(func.date(UsageRecord.created_at)).all()
+    rows = db.query(func.date(UsageRecord.created_at).label("day"), func.count(UsageRecord.id).label("requests"), func.coalesce(func.sum(UsageRecord.estimated_cost), 0).label("cost"), func.coalesce(func.sum(UsageRecord.input_tokens), 0).label("input_tokens"), func.coalesce(func.sum(UsageRecord.output_tokens), 0).label("output_tokens")).filter(UsageRecord.created_at >= since, UsageRecord.status == "completed").group_by(func.date(UsageRecord.created_at)).order_by(func.date(UsageRecord.created_at)).all()
     return {"days": days, "series": [{"date": str(r.day), "requests": int(r.requests), "cost": float(r.cost or 0), "input_tokens": int(r.input_tokens or 0), "output_tokens": int(r.output_tokens or 0)} for r in rows]}
+
+@router.get("/billing-overview")
+def billing_overview(admin: PlatformAdmin = Depends(get_current_admin), db: Session = Depends(get_db)):
+    rows = db.query(Store.plan, Store.stripe_subscription_status, func.count(Store.id)).group_by(Store.plan, Store.stripe_subscription_status).all()
+    by_plan = {}
+    by_subscription_status = {}
+    for plan, subscription_status, count in rows:
+        by_plan[plan] = by_plan.get(plan, 0) + int(count)
+        key = subscription_status or "none"
+        by_subscription_status[key] = by_subscription_status.get(key, 0) + int(count)
+    return {"stores_by_plan": by_plan, "subscription_status": by_subscription_status, "note": "Subscription revenue is intentionally not estimated from AI-spend budgets; use Stripe reporting for actual revenue."}
 
 @router.get("/conversations")
 def admin_conversations(limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0), store_id: str | None = Query(default=None), admin: PlatformAdmin = Depends(get_current_admin), db: Session = Depends(get_db)):
