@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowRight, Check, Copy, Database, Globe, KeyRound, Loader2 } from 'lucide-react'
+import { ArrowRight, Check, Copy, Database, Globe, KeyRound, Code2, ExternalLink } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api/client'
 import { Alert, Badge, Button, Card, Input, Spinner } from '../components/ui'
@@ -8,6 +8,7 @@ const STEPS = [
   { id: 'website', label: 'Website', icon: Globe },
   { id: 'database', label: 'Database', icon: Database },
   { id: 'api', label: 'API key', icon: KeyRound },
+  { id: 'install', label: 'Install', icon: Code2 },
 ]
 
 export default function Onboarding() {
@@ -57,13 +58,22 @@ export default function Onboarding() {
 
   const setField = (field) => (event) => setDb((current) => ({ ...current, [field]: event.target.value }))
 
+  const copyText = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      setError('Copy failed. Please select and copy the code manually.')
+    }
+  }
+
   const connectWebsite = async () => {
     setWorking(true)
     setError('')
     try {
       const result = await api.post('/v1/knowledge/ingest', { website_url: websiteUrl })
-      setWebsiteState((current) => ({ ...(current || {}), count: Math.max(1, current?.count || 0), websites: current?.websites || [] }))
-      setWebsiteState((current) => ({ ...current, lastResult: result }))
+      setWebsiteState((current) => ({ ...(current || {}), count: Math.max(1, current?.count || 0), websites: current?.websites || [], lastResult: result }))
       setStep(1)
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : 'We could not crawl that website.')
@@ -114,6 +124,12 @@ export default function Onboarding() {
 
   const finish = () => navigate('/')
 
+  const apiBase = (import.meta.env.VITE_API_BASE_URL || window.location.origin).replace(/\/$/, '')
+  const installKey = issuedKey
+  const installCode = installKey
+    ? `<script src="${apiBase}/widget/widget.js" data-api-key="${installKey}" data-api-url="${apiBase}"></script>`
+    : ''
+
   if (loading) {
     return <div className="flex min-h-screen items-center justify-center text-accent"><Spinner className="h-6 w-6" /></div>
   }
@@ -125,14 +141,14 @@ export default function Onboarding() {
           <Badge tone="accent">Quick setup</Badge>
           <h1 className="mt-3 font-display text-3xl font-semibold">Get your AI agent live</h1>
           <p className="mx-auto mt-2 max-w-xl text-sm text-muted">
-            Connect your storefront and product database, then use your API key to install the chat widget.
+            Connect your storefront and product database, create an API key, then install the chat widget.
           </p>
         </div>
 
-        <div className="mb-6 grid grid-cols-3 gap-2">
+        <div className="mb-6 grid grid-cols-2 gap-2 md:grid-cols-4">
           {STEPS.map((item, index) => {
             const Icon = item.icon
-            const complete = index < step || (index === 0 && hasWebsite) || (index === 1 && hasDatabase)
+            const complete = index < step
             return (
               <button key={item.id} type="button" onClick={() => index <= step && setStep(index)} className={`rounded-lg border px-3 py-3 text-left ${index === step ? 'border-accent bg-accent-soft' : 'border-line bg-card'}`}>
                 <div className="flex items-center gap-2 text-sm font-medium">
@@ -182,6 +198,7 @@ export default function Onboarding() {
                   </div>
                   <Input label="Connection URL" type="password" value={db.connection_url} onChange={setField('connection_url')} placeholder="postgresql://user:password@host:5432/dbname" />
                   <Input label="Product table (optional)" value={db.table_name} onChange={setField('table_name')} placeholder="products" />
+                  <p className="text-xs text-muted">The API encrypts the saved connection URL and redacts secrets from responses.</p>
                 </div>
               )}
               <div className="mt-6 flex justify-between gap-2">
@@ -200,23 +217,53 @@ export default function Onboarding() {
                   <div className="text-xs font-medium uppercase tracking-wide text-muted">Copy now — shown once</div>
                   <div className="mt-2 flex items-center gap-2 rounded-lg border border-line bg-white p-3">
                     <code className="min-w-0 flex-1 truncate text-sm">{issuedKey}</code>
-                    <Button size="sm" variant="secondary" onClick={() => { navigator.clipboard.writeText(issuedKey); setCopied(true); setTimeout(() => setCopied(false), 1500) }}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? 'Copied' : 'Copy'}</Button>
+                    <Button size="sm" variant="secondary" onClick={() => copyText(issuedKey)}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? 'Copied' : 'Copy'}</Button>
                   </div>
                 </div>
               ) : activeKey ? (
                 <div className="mt-6 rounded-lg border border-line bg-paper p-4">
                   <div className="flex items-center gap-2 text-sm font-medium"><Check size={16} /> API key already active</div>
                   <p className="mt-1 text-xs text-muted">For security, the full existing key cannot be displayed again.</p>
+                  <Button className="mt-4" onClick={createKey} disabled={working}>{working && <Spinner />}{working ? 'Creating…' : 'Create a new install key'}</Button>
                 </div>
               ) : (
                 <div className="mt-6 rounded-lg border border-line bg-paper p-4"><p className="text-sm text-muted">Create a production widget key to finish setup.</p><Button className="mt-4" onClick={createKey} disabled={working}>{working && <Spinner />}{working ? 'Creating…' : 'Create API key'}</Button></div>
               )}
-              <div className="mt-6 flex justify-between gap-2"><Button variant="secondary" onClick={() => setStep(1)}>Back</Button><Button onClick={finish}>Go to dashboard <ArrowRight size={16} /></Button></div>
+              <div className="mt-6 flex justify-between gap-2"><Button variant="secondary" onClick={() => setStep(1)}>Back</Button><Button onClick={() => setStep(3)}>Continue <ArrowRight size={16} /></Button></div>
+            </>
+          )}
+
+          {step === 3 && (
+            <>
+              <h2 className="font-display text-xl font-semibold">Install the chat widget</h2>
+              <p className="mt-1 text-sm text-muted">Paste this snippet before the closing <code>&lt;/body&gt;</code> tag on your storefront.</p>
+              {installCode ? (
+                <div className="mt-6">
+                  <div className="rounded-lg border border-line bg-[#111] p-4 text-xs text-white">
+                    <pre className="overflow-x-auto whitespace-pre-wrap break-all">{installCode}</pre>
+                  </div>
+                  <Button className="mt-3" onClick={() => copyText(installCode)} variant="secondary">{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? 'Copied' : 'Copy install code'}</Button>
+                  <div className="mt-5 rounded-lg border border-line bg-paper p-4">
+                    <div className="flex items-center gap-2 text-sm font-medium"><Check size={16} /> Ready to install</div>
+                    <p className="mt-1 text-xs text-muted">Keep this API key private. It is intended for your storefront widget configuration.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-6 rounded-lg border border-line bg-paper p-4">
+                  <p className="text-sm text-muted">You do not have a newly issued key available in this setup session.</p>
+                  <p className="mt-1 text-xs text-muted">Create a new key from API Keys so the full secret can be shown once and copied into this snippet.</p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button onClick={() => navigate('/api-keys')}>Open API Keys <ExternalLink size={15} /></Button>
+                    <Button variant="secondary" onClick={finish}>Finish setup</Button>
+                  </div>
+                </div>
+              )}
+              <div className="mt-6 flex justify-between gap-2"><Button variant="secondary" onClick={() => setStep(2)}>Back</Button><Button onClick={finish}>Go to dashboard <ArrowRight size={16} /></Button></div>
             </>
           )}
         </Card>
 
-        <div className="mt-5 flex items-center justify-center gap-2 text-xs text-muted"><Loader2 size={13} /> You can change these settings later from the dashboard.</div>
+        <div className="mt-5 text-center text-xs text-muted">You can change these settings later from the dashboard.</div>
       </div>
     </div>
   )
