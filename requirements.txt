@@ -1,7 +1,8 @@
 ﻿# Generated from a full AST scan of app/**/*.py (see audit notes below).
 # Pinned to major.minor ranges, not exact versions â€” bump within these
 # ranges as needed, but re-run the import scan before widening them.
-
+psycopg[binary]>=3.2,<4
+bcrypt>=4.2,<5
 # --- Web framework / server ---
 fastapi>=0.115,<0.120
 starlette>=0.40,<0.42          # pulled in by fastapi; pinned explicitly since app/main.py imports it directly
