@@ -1,5 +1,7 @@
 from app.ai.prompts import RESPONSE_SYSTEM_PROMPT
 from app.ai.context_formatter import ContextFormatter
+from app.db.agent_config import AgentConfig
+from app.db.database import SessionLocal
 
 
 class ResponseGenerator:
@@ -50,6 +52,27 @@ class ResponseGenerator:
         )
         return "\n".join(parts)
 
+    @staticmethod
+    def _load_agent_config(context):
+        """Load the tenant-scoped profile when the caller did not supply one."""
+        store_id = getattr(context, "tenant_id", None)
+        if not store_id:
+            return None
+
+        db = SessionLocal()
+        try:
+            return (
+                db.query(AgentConfig)
+                .filter(AgentConfig.store_id == str(store_id))
+                .first()
+            )
+        except Exception:
+            # Agent customization must never take down chat if the
+            # optional profile table is unavailable during rollout.
+            return None
+        finally:
+            db.close()
+
     async def generate(self, query: str, context, agent_config=None):
         formatted_context = self.formatter.format(context)
         history_text = "\n".join(
@@ -69,6 +92,9 @@ RECENT CONVERSATION:
 Answer the user naturally and concisely.
 Use only the provided context.
 """
+
+        if agent_config is None:
+            agent_config = self._load_agent_config(context)
 
         system_prompt = RESPONSE_SYSTEM_PROMPT
         profile = self._agent_instructions(agent_config)
