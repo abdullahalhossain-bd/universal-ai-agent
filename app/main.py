@@ -31,6 +31,7 @@ from app.api.routes.auth import router as auth_router
 from app.api.routes.api_keys import router as api_keys_router
 from app.api.routes.billing import router as billing_router
 from app.api.routes.admin import router as admin_router
+from app.api.routes.admin_analytics import router as admin_analytics_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.knowledge.vector_support import resolve_vector_support
@@ -47,7 +48,7 @@ from app.core.security import get_cors_allow_origins
 app.add_middleware(CORSMiddleware, allow_origins=get_cors_allow_origins(), allow_credentials=False, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], allow_headers=["x-api-key", "content-type", "authorization"])
 from app.core.middleware import RequestContextMiddleware
 app.add_middleware(RequestContextMiddleware)
-app.include_router(chat_router); app.include_router(messages_router); app.include_router(images_router); app.include_router(media_router); app.include_router(stores_router); app.include_router(auth_router); app.include_router(api_keys_router); app.include_router(billing_router); app.include_router(admin_router); app.include_router(products_router); app.include_router(datasources_router); app.include_router(knowledge_router); app.include_router(discovery_v1_router, prefix="/v1"); app.include_router(mapping_v1_router, prefix="/v1"); app.include_router(widget_router)
+app.include_router(chat_router); app.include_router(messages_router); app.include_router(images_router); app.include_router(media_router); app.include_router(stores_router); app.include_router(auth_router); app.include_router(api_keys_router); app.include_router(billing_router); app.include_router(admin_router); app.include_router(admin_analytics_router); app.include_router(products_router); app.include_router(datasources_router); app.include_router(knowledge_router); app.include_router(discovery_v1_router, prefix="/v1"); app.include_router(mapping_v1_router, prefix="/v1"); app.include_router(widget_router)
 from pathlib import Path as _Path
 from fastapi.staticfiles import StaticFiles
 _CHAT_DIR = _Path(__file__).resolve().parent.parent / "frontend" / "chat"
