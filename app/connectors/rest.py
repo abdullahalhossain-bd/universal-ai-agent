@@ -1,4 +1,4 @@
-﻿from typing import Any
+from typing import Any
 from urllib.parse import quote
 
 import httpx
@@ -77,8 +77,7 @@ class RESTConnector(Connector):
     async def get_product(self, product_id: str) -> UniversalProduct | None:
         try:
             payload = await self._request_json(
-                "GET",
-                self._endpoint("product_endpoint", "/products") + f"/{quote(str(product_id), safe='')}",
+                "GET", self._endpoint("product_endpoint", "/products") + f"/{quote(str(product_id), safe='')}"
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
@@ -109,26 +108,57 @@ class RESTConnector(Connector):
         and columns are compatibility parameters. The endpoint returns the
         merchant's product objects and the existing mapping/normalizer handles
         the selected fields.
+
+        Some hosted merchant APIs can transiently return gateway errors while
+        waking or recycling an instance. Retry only those transient statuses;
+        authentication and application errors still fail immediately.
         """
         _ = table_name, columns
         url = self._endpoint("products_endpoint", "/products")
         assert_safe_http_url(url)
-        with httpx.Client(
-            timeout=httpx.Timeout(10.0, connect=3.0),
-            follow_redirects=False,
-        ) as client:
-            response = client.get(
-                url,
-                headers=self._headers(),
-                params={"limit": limit, "offset": offset},
-            )
-            response.raise_for_status()
-            payload = response.json()
+        timeout = httpx.Timeout(30.0, connect=10.0)
+        last_error: Exception | None = None
 
-        rows = payload.get("products", payload) if isinstance(payload, dict) else payload
-        if not isinstance(rows, list):
-            raise ValueError("REST products endpoint must return a list or an object with a 'products' list")
-        return [row for row in rows if isinstance(row, dict)]
+        for attempt in range(3):
+            try:
+                with httpx.Client(
+                    timeout=timeout,
+                    follow_redirects=False,
+                ) as client:
+                    response = client.get(
+                        url,
+                        headers=self._headers(),
+                        params={"limit": limit, "offset": offset},
+                    )
+
+                if response.status_code in {502, 503, 504} and attempt < 2:
+                    last_error = httpx.HTTPStatusError(
+                        f"transient REST gateway status {response.status_code}",
+                        request=response.request,
+                        response=response,
+                    )
+                    continue
+
+                response.raise_for_status()
+                payload = response.json()
+                rows = payload.get("products", payload) if isinstance(payload, dict) else payload
+                if not isinstance(rows, list):
+                    raise ValueError(
+                        "REST products endpoint must return a list or an object with a 'products' list"
+                    )
+                return [row for row in rows if isinstance(row, dict)]
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+                last_error = exc
+                if attempt >= 2:
+                    raise
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                if exc.response.status_code not in {502, 503, 504} or attempt >= 2:
+                    raise
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("REST product fetch failed without a response")
 
     async def _request_json(self, method: str, url: str, **kwargs) -> Any:
         assert_safe_http_url(url)
