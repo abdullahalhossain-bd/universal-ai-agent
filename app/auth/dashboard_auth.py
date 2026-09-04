@@ -2,12 +2,13 @@
 Dashboard auth dependency — `Authorization: Bearer <jwt>`.
 
 Uses FastAPI's HTTPBearer security dependency so the Authorization
-header is represented correctly in OpenAPI/Swagger UI.
+header is represented correctly in OpenAPI/Swagger UI. The optional
+raw `authorization` argument is retained for direct/unit callers.
 """
 
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Header
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -22,7 +23,17 @@ bearer_scheme = HTTPBearer(auto_error=False)
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None, include_in_schema=False),
 ) -> User:
+    # `authorization` is a compatibility path for direct/unit invocation;
+    # normal HTTP requests are parsed by HTTPBearer above.
+    if credentials is None and authorization:
+        parts = authorization.strip().split(None, 1)
+        if len(parts) == 2:
+            credentials = HTTPAuthorizationCredentials(
+                scheme=parts[0], credentials=parts[1]
+            )
+
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Session token required")
 
