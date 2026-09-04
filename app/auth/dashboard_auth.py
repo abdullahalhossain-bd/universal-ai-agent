@@ -25,8 +25,14 @@ async def get_current_user(
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None, include_in_schema=False),
 ) -> User:
-    # `authorization` is a compatibility path for direct/unit invocation;
-    # normal HTTP requests are parsed by HTTPBearer above.
+    # When FastAPI resolves this dependency, `credentials` is either None or
+    # an HTTPAuthorizationCredentials instance. Direct/unit callers may invoke
+    # the function without FastAPI resolving Depends(), so normalize that case
+    # through the explicit raw Authorization header instead of dereferencing
+    # the Depends sentinel.
+    if not isinstance(credentials, HTTPAuthorizationCredentials):
+        credentials = None
+
     if credentials is None and authorization:
         parts = authorization.strip().split(None, 1)
         if len(parts) == 2:
