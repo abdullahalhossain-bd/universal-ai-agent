@@ -13,7 +13,7 @@ class AgentConfig(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     store_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+        String(36), ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, unique=True
     )
     agent_name: Mapped[str] = mapped_column(String(100), nullable=False, default="Shop Assistant", server_default="Shop Assistant")
     welcome_message: Mapped[str] = mapped_column(Text, nullable=False, default="Hi! How can I help you today?", server_default="Hi! How can I help you today?")
