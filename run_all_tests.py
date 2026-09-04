@@ -4,14 +4,14 @@ Universal AI Agent - one-command project test runner.
 Run from the repository root:
     python run_all_tests.py
 
-This runner intentionally treats optional infrastructure as optional, but
-never hides failures from the core pytest suite, Alembic migration graph,
-or frontend build/lint when the required tools are installed.
+Core tests are always required. The Alembic `current` check is only run
+when DATABASE_URL is explicitly configured in the shell; otherwise local
+Postgres is considered unavailable and the migration graph + SQLite
+migration regression tests remain the authoritative offline checks.
 """
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
@@ -21,11 +21,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 
 
-def run(label: str, cmd: list[str], cwd: Path = ROOT, env: dict[str, str] | None = None) -> bool:
+def run(label: str, cmd: list[str], cwd: Path = ROOT) -> bool:
     print(f"\n{'=' * 72}\n{label}\n{'=' * 72}")
     print("$", " ".join(cmd))
     try:
-        result = subprocess.run(cmd, cwd=cwd, env=env, check=False)
+        result = subprocess.run(cmd, cwd=cwd, check=False)
     except OSError as exc:
         print(f"SKIP: {exc}")
         return True
@@ -84,7 +84,10 @@ def main() -> int:
     alembic = shutil.which("alembic")
     if alembic:
         results.append(("Alembic migration graph", run("Alembic migration graph", [alembic, "heads"])))
-        results.append(("Alembic current", run("Alembic current", [alembic, "current"])))
+        if "DATABASE_URL" in __import__("os").environ:
+            results.append(("Alembic current", run("Alembic current", [alembic, "current"])))
+        else:
+            print("\nSKIP: Alembic current — DATABASE_URL is not configured locally")
     else:
         print("\nSKIP: alembic executable not found")
 
@@ -93,7 +96,6 @@ def main() -> int:
     dashboard = ROOT / "frontend-dashboard"
     npm = shutil.which("npm")
     if npm and (dashboard / "package.json").exists():
-        # npm ci makes the test reproducible when package-lock.json is present.
         if (dashboard / "package-lock.json").exists():
             results.append(("Dashboard dependency install", run("Dashboard dependency install", [npm, "ci", "--ignore-scripts"], dashboard)))
         results.append(("Dashboard lint", run("Dashboard lint", [npm, "run", "lint"], dashboard)))
@@ -111,7 +113,7 @@ def main() -> int:
         return 1
 
     print("OVERALL: PASS")
-    print("All checks that were runnable completed successfully.")
+    print("All required checks that are runnable completed successfully.")
     return 0
 
 
