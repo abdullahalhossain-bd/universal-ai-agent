@@ -31,31 +31,16 @@ class RESTConnector(Connector):
         return url
 
     def _headers(self) -> dict[str, str]:
-
-        headers = {
-            "Accept": "application/json",
-        }
-
+        headers = {"Accept": "application/json"}
         if self.api_key:
-            headers["Authorization"] = (
-                f"Bearer {self.api_key}"
-            )
-
+            headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
     async def test_connection(self) -> bool:
-
         try:
-
             async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
-
-                response = await client.get(
-                    self.base_url,
-                    headers=self._headers(),
-                )
-
+                response = await client.get(self.base_url, headers=self._headers())
                 return response.status_code < 400
-
         except Exception:
             return False
 
@@ -80,11 +65,7 @@ class RESTConnector(Connector):
             )
         return DatabaseSchema(tables=tables)
 
-    async def get_products(
-        self,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> list[UniversalProduct]:
+    async def get_products(self, limit: int = 50, offset: int = 0) -> list[UniversalProduct]:
         payload = await self._request_json(
             "GET",
             self._endpoint("products_endpoint", "/products"),
@@ -93,15 +74,11 @@ class RESTConnector(Connector):
         rows = payload.get("products", payload) if isinstance(payload, dict) else payload
         return [self._normalize_product(row) for row in rows]
 
-    async def get_product(
-        self,
-        product_id: str,
-    ) -> UniversalProduct | None:
+    async def get_product(self, product_id: str) -> UniversalProduct | None:
         try:
             payload = await self._request_json(
                 "GET",
-                self._endpoint("product_endpoint", "/products")
-                + f"/{quote(str(product_id), safe='')}",
+                self._endpoint("product_endpoint", "/products") + f"/{quote(str(product_id), safe='')}",
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
@@ -109,22 +86,49 @@ class RESTConnector(Connector):
             raise
         return self._normalize_product(payload)
 
-    async def get_inventory(
-        self,
-        product_id: str,
-    ) -> dict[str, Any]:
+    async def get_inventory(self, product_id: str) -> dict[str, Any]:
         return await self._request_json(
             "GET",
-            self._endpoint("inventory_endpoint", "/products")
-            + f"/{quote(str(product_id), safe='')}/inventory",
+            self._endpoint("inventory_endpoint", "/products") + f"/{quote(str(product_id), safe='')}/inventory",
         )
 
-    async def get_store_info(
+    async def get_store_info(self) -> dict[str, Any]:
+        return await self._request_json("GET", self._endpoint("store_endpoint", "/store"))
+
+    def fetch_product_rows(
         self,
-    ) -> dict[str, Any]:
-        return await self._request_json(
-            "GET", self._endpoint("store_endpoint", "/store")
-        )
+        table_name: str,
+        columns: list[str],
+        *,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Synchronous paginated row fetch used by the generic sync service.
+
+        REST APIs expose product objects rather than SQL rows, so table_name
+        and columns are compatibility parameters. The endpoint returns the
+        merchant's product objects and the existing mapping/normalizer handles
+        the selected fields.
+        """
+        _ = table_name, columns
+        url = self._endpoint("products_endpoint", "/products")
+        assert_safe_http_url(url)
+        with httpx.Client(
+            timeout=httpx.Timeout(10.0, connect=3.0),
+            follow_redirects=False,
+        ) as client:
+            response = client.get(
+                url,
+                headers=self._headers(),
+                params={"limit": limit, "offset": offset},
+            )
+            response.raise_for_status()
+            payload = response.json()
+
+        rows = payload.get("products", payload) if isinstance(payload, dict) else payload
+        if not isinstance(rows, list):
+            raise ValueError("REST products endpoint must return a list or an object with a 'products' list")
+        return [row for row in rows if isinstance(row, dict)]
 
     async def _request_json(self, method: str, url: str, **kwargs) -> Any:
         assert_safe_http_url(url)
@@ -132,12 +136,7 @@ class RESTConnector(Connector):
             timeout=httpx.Timeout(10.0, connect=3.0),
             follow_redirects=False,
         ) as client:
-            response = await client.request(
-                method,
-                url,
-                headers=self._headers(),
-                **kwargs,
-            )
+            response = await client.request(method, url, headers=self._headers(), **kwargs)
             response.raise_for_status()
             return response.json()
 
