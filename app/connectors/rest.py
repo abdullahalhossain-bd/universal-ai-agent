@@ -1,5 +1,6 @@
 from typing import Any
 from urllib.parse import quote
+import time
 
 import httpx
 
@@ -102,24 +103,23 @@ class RESTConnector(Connector):
         limit: int = 200,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        """Synchronous paginated row fetch used by the generic sync service.
+        """Fetch product objects from a REST merchant API with wake-up retries.
 
-        REST APIs expose product objects rather than SQL rows, so table_name
-        and columns are compatibility parameters. The endpoint returns the
-        merchant's product objects and the existing mapping/normalizer handles
-        the selected fields.
-
-        Some hosted merchant APIs can transiently return gateway errors while
-        waking or recycling an instance. Retry only those transient statuses;
-        authentication and application errors still fail immediately.
+        Render/free-tier merchant APIs can briefly return 502/503/504 while an
+        idle service is waking up. Retry only those transient gateway statuses
+        and transport timeouts; authentication and application errors still
+        fail immediately so syncs never silently ingest bad data.
         """
         _ = table_name, columns
         url = self._endpoint("products_endpoint", "/products")
         assert_safe_http_url(url)
-        timeout = httpx.Timeout(30.0, connect=10.0)
-        last_error: Exception | None = None
 
-        for attempt in range(3):
+        timeout = httpx.Timeout(60.0, connect=15.0)
+        transient_statuses = {502, 503, 504}
+        last_error: Exception | None = None
+        max_attempts = 4
+
+        for attempt in range(max_attempts):
             try:
                 with httpx.Client(
                     timeout=timeout,
@@ -131,13 +131,16 @@ class RESTConnector(Connector):
                         params={"limit": limit, "offset": offset},
                     )
 
-                if response.status_code in {502, 503, 504} and attempt < 2:
+                if response.status_code in transient_statuses:
                     last_error = httpx.HTTPStatusError(
                         f"transient REST gateway status {response.status_code}",
                         request=response.request,
                         response=response,
                     )
-                    continue
+                    if attempt < max_attempts - 1:
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                    raise last_error
 
                 response.raise_for_status()
                 payload = response.json()
@@ -147,14 +150,17 @@ class RESTConnector(Connector):
                         "REST products endpoint must return a list or an object with a 'products' list"
                     )
                 return [row for row in rows if isinstance(row, dict)]
+
             except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
                 last_error = exc
-                if attempt >= 2:
+                if attempt >= max_attempts - 1:
                     raise
+                time.sleep(2 * (attempt + 1))
             except httpx.HTTPStatusError as exc:
                 last_error = exc
-                if exc.response.status_code not in {502, 503, 504} or attempt >= 2:
+                if exc.response.status_code not in transient_statuses or attempt >= max_attempts - 1:
                     raise
+                time.sleep(2 * (attempt + 1))
 
         if last_error is not None:
             raise last_error
