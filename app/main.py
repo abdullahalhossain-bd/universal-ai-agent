@@ -79,6 +79,10 @@ async def unhandled_exception_handler(request, exc):
     asyncio.create_task(send_alert(title="Unhandled exception", detail=f"{type(exc).__name__}: {exc}", extra={"path": request.url.path, "method": request.method}))
     return JSONResponse(status_code=500, content={"detail": "Internal server error.", "request_id": request_id}, headers={"X-Request-ID": request_id or "-"})
 
+@app.get("/", tags=["Health"])
+async def root():
+    return {"name": "Universal Commerce AI API", "version": "1.0.0", "status": "ok", "docs": "/docs", "health": "/health", "ready": "/ready"}
+
 @app.get("/health", tags=["Health"])
 async def health(): return {"status": "ok"}
 
