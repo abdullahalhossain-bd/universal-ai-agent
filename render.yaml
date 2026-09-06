@@ -37,6 +37,9 @@ services:
         generateValue: true
       - key: JWT_SECRET_KEY
         generateValue: true
+      # Explicitly defined so other Blueprint services can reference it.
+      - key: API_BASE_URL
+        value: https://universal-ai-agent-1.onrender.com
       - key: CORS_ALLOW_ORIGINS
         sync: false
       - key: GROQ_API_KEY_1
@@ -136,7 +139,7 @@ services:
         fromService:
           name: universal-ai-agent-1
           type: web
-          envVarKey: RENDER_EXTERNAL_URL
+          envVarKey: API_BASE_URL
 
 databases:
   - name: universal-ai-agent-db
