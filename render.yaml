@@ -1,12 +1,13 @@
 services:
   - type: web
-    name: universal-ai-agent-api
-    runtime: docker
+    name: universal-ai-agent-1
+    runtime: python
     plan: free
-    region: singapore
+    region: oregon
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
     branch: main
-    dockerfilePath: ./Dockerfile
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /ready
     autoDeployTrigger: checksPass
     maxShutdownDelaySeconds: 60
@@ -27,7 +28,7 @@ services:
           property: connectionString
       - key: REDIS_URL
         fromService:
-          name: universal-ai-agent-cache
+          name: universal-ai-agent-redis
           type: keyvalue
           property: connectionString
       - key: CREDENTIAL_ENCRYPTION_KEY
@@ -55,13 +56,13 @@ services:
 
   - type: worker
     name: universal-ai-agent-worker
-    runtime: docker
+    runtime: python
     plan: free
-    region: singapore
+    region: oregon
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
     branch: main
-    dockerfilePath: ./Dockerfile
-    dockerCommand: python -m app.sync.worker
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.sync.worker
     autoDeployTrigger: checksPass
     maxShutdownDelaySeconds: 60
     envVars:
@@ -81,34 +82,34 @@ services:
           property: connectionString
       - key: REDIS_URL
         fromService:
-          name: universal-ai-agent-cache
+          name: universal-ai-agent-redis
           type: keyvalue
           property: connectionString
       - key: CREDENTIAL_ENCRYPTION_KEY
         fromService:
-          name: universal-ai-agent-api
+          name: universal-ai-agent-1
           envVarKey: CREDENTIAL_ENCRYPTION_KEY
       - key: JWT_SECRET_KEY
         fromService:
-          name: universal-ai-agent-api
+          name: universal-ai-agent-1
           envVarKey: JWT_SECRET_KEY
       - key: CORS_ALLOW_ORIGINS
         fromService:
-          name: universal-ai-agent-api
+          name: universal-ai-agent-1
           envVarKey: CORS_ALLOW_ORIGINS
       - key: GROQ_API_KEY_1
         fromService:
-          name: universal-ai-agent-api
+          name: universal-ai-agent-1
           envVarKey: GROQ_API_KEY_1
       - key: GROQ_API_KEY_2
         fromService:
-          name: universal-ai-agent-api
+          name: universal-ai-agent-1
           envVarKey: GROQ_API_KEY_2
 
   - type: keyvalue
-    name: universal-ai-agent-cache
+    name: universal-ai-agent-redis
     plan: free
-    region: singapore
+    region: oregon
     maxmemoryPolicy: allkeys-lru
     ipAllowList:
       - source: 0.0.0.0/0
@@ -118,7 +119,7 @@ services:
     name: universal-ai-agent-dashboard
     runtime: static
     plan: free
-    region: singapore
+    region: oregon
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
     branch: main
     rootDir: frontend-dashboard
@@ -128,14 +129,14 @@ services:
     envVars:
       - key: VITE_API_BASE_URL
         fromService:
-          name: universal-ai-agent-api
+          name: universal-ai-agent-1
           type: web
           envVarKey: RENDER_EXTERNAL_URL
 
 databases:
   - name: universal-ai-agent-db
     plan: free
-    region: singapore
-    postgresMajorVersion: "16"
-    databaseName: universal_ai_agent
-    user: universal_ai_agent
+    region: oregon
+    postgresMajorVersion: "18"
+    databaseName: universal_ai_agent_db
+    user: universal_ai_agent_db_user
