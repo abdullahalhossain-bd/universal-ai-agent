@@ -39,6 +39,55 @@ from app.api.routes.billing import router as billing_router
 from app.api.routes.admin import router as admin_router
 from app.api.routes.admin_analytics import router as admin_analytics_router
 
+
+def _ensure_alembic_baseline() -> None:
+    """Stamp an already-provisioned schema when Alembic state is missing.
+
+    The live Render database was provisioned from the ORM schema before
+    Alembic version tracking was enabled. Never run the historical
+    migrations against that existing schema: validate that every active
+    ORM table and column exists first, then create only the Alembic state
+    table by stamping the current head.
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    if inspector.has_table("alembic_version"):
+        return
+
+    missing_tables = [
+        table.name
+        for table in Base.metadata.sorted_tables
+        if not inspector.has_table(table.name)
+    ]
+    missing_columns = []
+    for table in Base.metadata.sorted_tables:
+        if not inspector.has_table(table.name):
+            continue
+        actual_columns = {column["name"] for column in inspector.get_columns(table.name)}
+        for column in table.columns:
+            if column.name not in actual_columns:
+                missing_columns.append(f"{table.name}.{column.name}")
+
+    if missing_tables or missing_columns:
+        details = []
+        if missing_tables:
+            details.append(f"tables={missing_tables}")
+        if missing_columns:
+            details.append(f"columns={missing_columns}")
+        raise RuntimeError(
+            "Alembic version table is missing and the existing schema does not "
+            "match the active ORM schema; refusing to stamp head: " + "; ".join(details)
+        )
+
+    from alembic import command
+    from alembic.config import Config
+
+    alembic_config = Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
+    command.stamp(alembic_config, "head")
+    logger.info("Alembic version table was missing; validated existing schema and stamped head")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.knowledge.vector_support import resolve_vector_support
@@ -48,7 +97,9 @@ async def lifespan(app: FastAPI):
         if settings.environment.lower() in ("production", "prod"):
             raise RuntimeError("auto_create_tables=true with environment=production. Set AUTO_CREATE_TABLES=false and run `alembic upgrade head` as a deploy step instead — see alembic/README.md.")
         Base.metadata.create_all(bind=engine)
-    else: logger.info("auto_create_tables=false: skipping schema creation; run `alembic upgrade head` to manage the schema")
+    else:
+        _ensure_alembic_baseline()
+        logger.info("auto_create_tables=false: schema creation skipped; Alembic state verified")
     yield
 
 app = FastAPI(title="Universal Commerce AI API", version="1.0.0", lifespan=lifespan)
@@ -78,6 +129,10 @@ async def unhandled_exception_handler(request, exc):
     logger.exception("Unhandled error on %s %s: %s", request.method, request.url.path, exc, extra={"http_method": request.method, "path": request.url.path})
     asyncio.create_task(send_alert(title="Unhandled exception", detail=f"{type(exc).__name__}: {exc}", extra={"path": request.url.path, "method": request.method}))
     return JSONResponse(status_code=500, content={"detail": "Internal server error.", "request_id": request_id}, headers={"X-Request-ID": request_id or "-"})
+
+@app.get("/", tags=["Health"])
+async def root():
+    return {"name": "Universal Commerce AI API", "version": "1.0.0", "status": "ok", "docs": "/docs", "health": "/health", "ready": "/ready"}
 
 @app.get("/health", tags=["Health"])
 async def health(): return {"status": "ok"}

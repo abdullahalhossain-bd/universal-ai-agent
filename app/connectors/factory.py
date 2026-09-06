@@ -35,7 +35,6 @@ class ConnectorFactory:
             create(database_type: str, url: str)
         """
 
-        # Form 1: create(config)
         if (
             len(args) == 1
             and not kwargs
@@ -43,7 +42,6 @@ class ConnectorFactory:
         ):
             return ConnectorFactory._from_config(args[0])
 
-        # Form 2: create(database_type, url)
         if (
             len(args) == 2
             and isinstance(args[0], str)
@@ -76,9 +74,6 @@ class ConnectorFactory:
                 raise ValueError(
                     "MySQL connector requires `connection_url`."
                 )
-            # The MySQL connector currently expects individual connection
-            # parameters rather than a URL; until it grows URL parsing,
-            # parse the URL with SQLAlchemy and forward the components.
             from sqlalchemy.engine import make_url
 
             url = make_url(config.connection_url)
@@ -126,6 +121,9 @@ class ConnectorFactory:
                 password=parsed.password or "",
                 database=parsed.database or "",
             )
+
+        if normalized == "rest":
+            return RESTConnector(base_url=url)
 
         raise ValueError(
             f"Unsupported database type: {database_type}"

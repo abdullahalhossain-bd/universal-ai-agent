@@ -82,7 +82,7 @@ export function AuthShell({ children }) {
             Merchant Console
           </span>
         </div>
-        <div className="rounded-2xl border border-line bg-card p-8 shadow-[0_1px_2px_rgba(20,21,31,0.04)]">
+        <div className="rounded-lg border border-line bg-card p-8">
           {children}
         </div>
       </div>

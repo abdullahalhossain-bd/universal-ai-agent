@@ -49,7 +49,7 @@ NOT loaded.
 | `app.discovery` | dead | old website analysis prototype |
 | `app.domain` | dead | early domain-model draft |
 | `app.images` | dead | unused image handling |
-| `app.models` | dead + broken | imports non-existent `app.core.database` |
+| `app.models` | dead (not broken) | thin re-export shims around `app.db.models`; import from `app.db.database`/`app.db.models`, resolve cleanly, kept only for legacy-test compatibility |
 | `app.products` | dead | superseded by `app.api.routes.products` |
 | `app.query` | dead | superseded by planner/search stack |
 | `app.query_engine` | dead | old tool-based engine |
@@ -57,7 +57,7 @@ NOT loaded.
 | `app.schemas` | dead | superseded by per-module schemas |
 | `app.services` | dead in app | product_sync/query_engine helpers, only legacy tests reference |
 | `app.sync` | dead | old catalog sync |
-| `app.tenants` | dead + broken | pre-store multi-tenancy draft |
+| `app.tenants` | dead (not broken) | pre-store multi-tenancy draft; `api_keys.py` imports `APIKey` from `app.db.models` and resolves cleanly |
 | `app.vision`, `app.workers` | dead | never wired |
 | `app.db.session.py` | duplicate | only legacy code imports it; use `app.db.database` |
 | `app.db.init_db.py` | dead | legacy bootstrap, imports app.db.session |

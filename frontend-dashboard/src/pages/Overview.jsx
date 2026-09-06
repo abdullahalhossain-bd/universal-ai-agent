@@ -164,7 +164,7 @@ function StatCard({ icon: Icon, label, value, sub, progress, link }) {
   return (
     <Card>
       <div className="flex items-center gap-2 text-muted"><Icon size={16} strokeWidth={1.9} /><span className="text-sm">{label}</span></div>
-      <div className="mt-3 font-display text-2xl font-semibold text-text">{value}</div>
+      <div className="nums mt-3 font-display text-[28px] font-medium text-text">{value}</div>
       <div className="mt-1 text-xs text-muted">{sub}</div>
       {typeof progress === 'number' && <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-paper"><div className={`h-full rounded-full ${progress > 0.9 ? 'bg-danger' : 'bg-accent'}`} style={{ width: `${Math.max(4, progress * 100)}%` }} /></div>}
       {link && <Link to={link.to} className="mt-3 inline-block text-xs font-medium text-accent hover:text-accent-hover">{link.text} →</Link>}

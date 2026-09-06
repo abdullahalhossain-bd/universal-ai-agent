@@ -142,7 +142,7 @@ export default function ApiKeys() {
           }
         />
       ) : (
-        <div className="overflow-hidden rounded-xl border border-line bg-card">
+        <div className="overflow-hidden rounded-lg border border-line bg-card">
           <table className="w-full text-left text-sm">
             <thead className="border-b border-line bg-paper text-xs uppercase tracking-wide text-muted">
               <tr>

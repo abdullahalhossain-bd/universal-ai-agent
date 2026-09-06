@@ -117,7 +117,7 @@ export default function ChatPreview() {
             <MessageSquareText size={16} /> Live chat test
           </div>
 
-          <div className="space-y-3 rounded-xl border border-line bg-paper p-3">
+          <div className="space-y-3 rounded-lg border border-line bg-paper p-3">
             {conversation.map((item, index) => (
               <div key={`${item.role}-${index}`} className={`rounded-lg px-3 py-2 text-sm ${item.role === 'user' ? 'ml-8 bg-accent text-white' : 'mr-8 bg-white text-text border border-line'}`}>
                 {item.content}

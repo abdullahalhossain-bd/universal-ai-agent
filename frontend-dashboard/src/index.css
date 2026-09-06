@@ -1,32 +1,40 @@
 @import "tailwindcss";
 
 @theme {
-  --font-display: "Manrope", "Inter", ui-sans-serif, system-ui, sans-serif;
+  /* Fraunces carries the ledger/passbook character on numbers and
+     headings; Inter stays for interface text and stays legible at
+     small sizes. Two families, clearly distinct roles. */
+  --font-display: "Fraunces", "Iowan Old Style", ui-serif, serif;
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
 
-  --color-ink: #14151f;
-  --color-ink-soft: #1d1f2c;
-  --color-ink-line: #2a2c3a;
-  --color-ink-muted: #8b8da3;
+  /* Ink: a deep, warm forest — not the generic near-black, and not
+     navy. Ties the sidebar to "growth/ledger" without reaching for
+     bright green. */
+  --color-ink: #17251e;
+  --color-ink-soft: #203129;
+  --color-ink-line: #35473c;
+  --color-ink-muted: #9caa9f;
 
-  --color-paper: #faf9f6;
-  --color-card: #ffffff;
-  --color-line: #e7e4dc;
-  --color-text: #17181f;
-  --color-muted: #6b6d7c;
+  --color-paper: #f6f4ee;
+  --color-card: #fffefb;
+  --color-line: #e3ddcd;
+  --color-text: #1c1a15;
+  --color-muted: #736c5c;
 
-  --color-accent: #5457e5;
-  --color-accent-hover: #4144cf;
-  --color-accent-soft: #eeeeff;
+  /* Brass accent — evokes receipts, coin, ledger ink. Deliberately
+     not the indigo/violet "AI tool" default. */
+  --color-accent: #a8792f;
+  --color-accent-hover: #8b6323;
+  --color-accent-soft: #f3e8d2;
 
-  --color-success: #3e7c59;
-  --color-success-soft: #e9f3ec;
+  --color-success: #43664a;
+  --color-success-soft: #e6ece3;
 
-  --color-warn: #a9741f;
-  --color-warn-soft: #faf1de;
+  --color-warn: #96631a;
+  --color-warn-soft: #f4e9d3;
 
-  --color-danger: #c1443b;
-  --color-danger-soft: #fbeae8;
+  --color-danger: #a23f30;
+  --color-danger-soft: #f6e6e0;
 }
 
 body {
@@ -38,6 +46,16 @@ body {
 
 h1, h2, h3, h4 {
   font-family: var(--font-display);
+  font-feature-settings: "ss01" 1;
+}
+
+/* Ledger numerals: tabular figures wherever a number is meant to be
+   scanned/compared (stat cards, tables, amounts). Opt in with
+   .font-display or the .nums utility rather than applying globally,
+   since body copy shouldn't use tabular spacing. */
+.nums {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
 }
 
 :focus-visible {
@@ -47,4 +65,10 @@ h1, h2, h3, h4 {
 
 ::selection {
   background-color: var(--color-accent-soft);
+}
+
+/* Hairline rule, used in place of card shadows for a flatter,
+   ledger-page feel. */
+.rule {
+  border-color: var(--color-line);
 }

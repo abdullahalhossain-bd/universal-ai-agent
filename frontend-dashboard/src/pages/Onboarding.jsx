@@ -127,7 +127,7 @@ export default function Onboarding() {
   const apiBase = (import.meta.env.VITE_API_BASE_URL || window.location.origin).replace(/\/$/, '')
   const installKey = issuedKey
   const installCode = installKey
-    ? `<script src="${apiBase}/widget/widget.js" data-api-key="${installKey}" data-api-url="${apiBase}"></script>`
+    ? `<script src="${apiBase}/widget.js" data-key="${installKey}" data-api-base="${apiBase}" async></script>`
     : ''
 
   if (loading) {

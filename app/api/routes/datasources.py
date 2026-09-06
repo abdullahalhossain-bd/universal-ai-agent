@@ -21,15 +21,8 @@ from app.db.database import get_db
 from app.db.models import Store
 from app.sync.processor import process_sync
 
-router = APIRouter(
-    prefix="/v1/datasources",
-    tags=["datasources"],
-)
+router = APIRouter(prefix="/v1/datasources", tags=["datasources"])
 
-
-# ---------------------------------------------------------------------------
-# Schemas
-# ---------------------------------------------------------------------------
 
 class CreateDataSourceRequest(BaseModel):
     name: str = "default"
@@ -64,10 +57,6 @@ class DiscoverRequest(BaseModel):
     connector_type: str = "postgresql"
 
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
 @router.post("")
 async def create_datasource(
     payload: CreateDataSourceRequest,
@@ -75,7 +64,6 @@ async def create_datasource(
     store: Store = Depends(get_current_store),
 ):
     require_feature(store, FEATURE_DATABASE_SYNC)
-
     service = DataSourceService(db)
     try:
         ds = service.create(
@@ -94,7 +82,6 @@ async def create_datasource(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ConnectionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     return public_datasource_dict(ds)
 
 
@@ -105,10 +92,7 @@ def list_datasources(
 ):
     service = DataSourceService(db)
     items = service.list_for_store(store.id)
-    return {
-        "count": len(items),
-        "items": [public_datasource_dict(ds) for ds in items],
-    }
+    return {"count": len(items), "items": [public_datasource_dict(ds) for ds in items]}
 
 
 @router.get("/{datasource_id}")
@@ -163,7 +147,6 @@ async def test_connection(
     store: Store = Depends(get_current_store),
     db: Session = Depends(get_db),
 ):
-    # store dependency enforces auth; db unused but keeps signature consistent
     _ = store
     service = DataSourceService(db)
     connected = service.test_connection(
@@ -188,24 +171,15 @@ def discover_schema(
     ctype = payload.connector_type.lower()
     if ctype == "postgres":
         ctype = "postgresql"
-    if ctype not in SUPPORTED_SYNC_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail="discovery supported only for postgresql/mysql",
-        )
-
+    if ctype not in {"postgresql", "mysql", "postgres"}:
+        raise HTTPException(status_code=400, detail="discovery supported only for postgresql/mysql")
     service = DataSourceService(db)
     if not service.test_connection(ctype, payload.connection_url):
         raise HTTPException(status_code=400, detail="connection test failed")
-
     try:
         result = service.discover(payload.connection_url)
     except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"discovery failed: {type(exc).__name__}",
-        ) from exc
-
+        raise HTTPException(status_code=400, detail=f"discovery failed: {type(exc).__name__}") from exc
     result["connection_url"] = redact_url(payload.connection_url)
     return result
 
@@ -222,21 +196,13 @@ def discover_datasource(
         raise HTTPException(status_code=404, detail="datasource not found")
     if not ds.connection_url:
         raise HTTPException(status_code=400, detail="no connection_url configured")
-    if ds.connector_type not in SUPPORTED_SYNC_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail="discovery supported only for postgresql/mysql",
-        )
-
+    if ds.connector_type not in {"postgresql", "mysql", "postgres"}:
+        raise HTTPException(status_code=400, detail="discovery supported only for postgresql/mysql")
     plaintext_url = DataSourceService.decrypt_connection_url(ds)
     try:
         result = service.discover(plaintext_url)
     except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"discovery failed: {type(exc).__name__}",
-        ) from exc
-
+        raise HTTPException(status_code=400, detail=f"discovery failed: {type(exc).__name__}") from exc
     result["datasource_id"] = ds.id
     result["connection_url"] = redact_url(plaintext_url)
     return result
@@ -249,7 +215,6 @@ async def trigger_sync(
     store: Store = Depends(get_current_store),
 ):
     require_feature(store, FEATURE_DATABASE_SYNC)
-
     service = DataSourceService(db)
     ds = service.get(store.id, datasource_id)
     if ds is None:
@@ -257,30 +222,21 @@ async def trigger_sync(
     if not ds.active:
         raise HTTPException(status_code=400, detail="datasource is inactive")
     if ds.connector_type not in SUPPORTED_SYNC_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail="product sync not supported for this connector type",
-        )
-    if not ds.table_name or not ds.mapping:
-        raise HTTPException(
-            status_code=400,
-            detail="table_name and mapping must be configured before sync",
-        )
-    if not ds.connection_url:
+        raise HTTPException(status_code=400, detail="product sync not supported for this connector type")
+    if not ds.mapping:
+        raise HTTPException(status_code=400, detail="mapping must be configured before sync")
+    if ds.connector_type != "rest" and not ds.table_name:
+        raise HTTPException(status_code=400, detail="table_name must be configured before sync")
+    if ds.connector_type != "rest" and not ds.connection_url:
         raise HTTPException(status_code=400, detail="no connection_url configured")
+    if ds.connector_type == "rest" and not ds.api_base_url:
+        raise HTTPException(status_code=400, detail="no api_base_url configured")
 
     job = service.build_sync_job(ds)
     result = await process_sync(job)
-
     status = "success" if not result.errors else "error"
     error_msg = "; ".join(result.errors) if result.errors else None
-    service.record_sync_result(
-        store.id,
-        ds.id,
-        status=status,
-        error=error_msg,
-    )
-
+    service.record_sync_result(store.id, ds.id, status=status, error=error_msg)
     return {
         "datasource_id": ds.id,
         "store_id": store.id,

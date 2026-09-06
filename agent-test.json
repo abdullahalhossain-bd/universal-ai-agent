@@ -1,0 +1,11 @@
+{
+  "agent_name": "Render Test Assistant",
+  "welcome_message": "\u0986\u09b8\u09b8\u09be\u09b2\u09be\u09ae\u09c1 \u0986\u09b2\u09be\u09887\u0995\u09c1\u09ae! \u0986\u09ae\u09bf \u0986\u09aa\u09a8\u09be\u09b0 AI shopping assistant\u0964 \u0995\u09c0\u09ad\u09be\u09ac\u09c7 \u09b8\u09be\u09b9\u09be\u09af\u09cd\u09af \u0995\u09b0\u09a4\u09c7 \u09aa\u09be\u09b0\u09bf?",
+  "language": "bn",
+  "tone": "friendly",
+  "system_instructions": "Always answer based on the store knowledge and available product information. Never invent product details, prices, stock, or policies.",
+  "product_behavior": "accurate",
+  "fallback_message": "\u09a6\u09c1\u0983\u0996\u09bf\u09a4, \u098f\u0987 \u09a4\u09a5\u09cd\u09af\u099f\u09bf \u0986\u09ae\u09bf \u09a8\u09bf\u09b6\u09cd\u099a\u09bf\u09a4\u09ad\u09be\u09ac\u09c7 \u0996\u09c1\u0981\u099c\u09c7 \u09aa\u09be\u0987\u09a8\u09bf\u0964",
+  "enabled": true,
+  "auto_reply_enabled": true
+}

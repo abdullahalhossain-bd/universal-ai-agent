@@ -6,7 +6,7 @@ export function Button({
   ...props
 }) {
   const base =
-    'inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none'
+    'inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none'
   const sizes = {
     sm: 'px-3 py-1.5 text-sm',
     md: 'px-4 py-2.5 text-sm',
@@ -14,7 +14,7 @@ export function Button({
   }
   const variants = {
     primary: 'bg-accent text-white hover:bg-accent-hover',
-    secondary: 'bg-white text-text border border-line hover:bg-paper',
+    secondary: 'bg-card text-text border border-line hover:border-ink-muted/40 hover:bg-paper',
     ghost: 'text-muted hover:text-text hover:bg-paper',
     danger: 'bg-danger-soft text-danger hover:bg-danger hover:text-white',
     dark: 'bg-ink text-white hover:bg-ink-soft',
@@ -30,7 +30,7 @@ export function Input({ label, hint, error, className = '', id, ...props }) {
       {label && <span className="mb-1.5 block text-sm font-medium text-text">{label}</span>}
       <input
         id={id}
-        className={`w-full rounded-lg border bg-white px-3.5 py-2.5 text-sm text-text placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-accent/30 ${
+        className={`w-full rounded-md border bg-card px-3.5 py-2.5 text-sm text-text placeholder:text-muted/70 focus:outline-none focus:ring-2 focus:ring-accent/25 ${
           error ? 'border-danger' : 'border-line focus:border-accent'
         } ${className}`}
         {...props}
@@ -44,7 +44,7 @@ export function Input({ label, hint, error, className = '', id, ...props }) {
 export function Card({ className = '', children, ...props }) {
   return (
     <div
-      className={`rounded-xl border border-line bg-card p-6 shadow-[0_1px_2px_rgba(20,21,31,0.04)] ${className}`}
+      className={`rounded-lg border border-line bg-card p-6 ${className}`}
       {...props}
     >
       {children}
@@ -62,7 +62,7 @@ export function Badge({ tone = 'muted', children }) {
   }
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${tones[tone]}`}
+      className={`inline-flex items-center rounded border px-2.5 py-0.5 text-xs font-medium ${tones[tone]}`}
     >
       {children}
     </span>
@@ -80,9 +80,9 @@ export function Alert({ tone = 'danger', children }) {
 
 export function PageHeader({ title, description, action }) {
   return (
-    <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+    <div className="mb-9 flex flex-wrap items-start justify-between gap-4 border-b border-line pb-6">
       <div>
-        <h1 className="font-display text-2xl font-semibold text-text">{title}</h1>
+        <h1 className="font-display text-[26px] font-medium tracking-tight text-text">{title}</h1>
         {description && <p className="mt-1.5 text-sm text-muted">{description}</p>}
       </div>
       {action}
@@ -90,15 +90,24 @@ export function PageHeader({ title, description, action }) {
   )
 }
 
+export function Stat({ value, label }) {
+  return (
+    <div>
+      <div className="nums font-display text-3xl font-medium text-text">{value}</div>
+      <div className="mt-1 text-sm text-muted">{label}</div>
+    </div>
+  )
+}
+
 export function EmptyState({ icon: Icon, title, description, action }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-line px-6 py-16 text-center">
+    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-line px-6 py-16 text-center">
       {Icon && (
-        <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-accent-soft text-accent">
-          <Icon size={22} strokeWidth={1.75} />
+        <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-full bg-accent-soft text-accent">
+          <Icon size={20} strokeWidth={1.75} />
         </div>
       )}
-      <h3 className="font-display text-base font-semibold text-text">{title}</h3>
+      <h3 className="font-display text-lg font-medium text-text">{title}</h3>
       {description && <p className="mt-1.5 max-w-sm text-sm text-muted">{description}</p>}
       {action && <div className="mt-5">{action}</div>}
     </div>
