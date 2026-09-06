@@ -1,0 +1,145 @@
+services:
+  - type: web
+    name: universal-ai-agent-1
+    runtime: python
+    plan: free
+    region: oregon
+    repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    # IMPORTANT: Render's Python runtime bypasses Dockerfile ENTRYPOINT.
+    # Invoke the same startup gate explicitly so every web instance:
+    # 1) waits for Postgres, 2) runs Alembic to head, 3) starts Uvicorn.
+    startCommand: bash docker/entrypoint.sh uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /ready
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: ENVIRONMENT
+        value: production
+      - key: AUTO_CREATE_TABLES
+        value: "false"
+      - key: LOG_JSON
+        value: "true"
+      - key: STORAGE_BACKEND
+        value: local
+      - key: DATABASE_URL
+        fromDatabase:
+          name: universal-ai-agent-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: universal-ai-agent-redis
+          type: keyvalue
+          property: connectionString
+      - key: CREDENTIAL_ENCRYPTION_KEY
+        generateValue: true
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: CORS_ALLOW_ORIGINS
+        sync: false
+      - key: GROQ_API_KEY_1
+        sync: false
+      - key: GROQ_API_KEY_2
+        sync: false
+      - key: GROQ_API_KEY_3
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_STARTER
+        sync: false
+      - key: STRIPE_PRICE_GROWTH
+        sync: false
+      - key: STRIPE_PRICE_PRO
+        sync: false
+
+  - type: worker
+    name: universal-ai-agent-worker
+    runtime: python
+    plan: free
+    region: oregon
+    repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.sync.worker
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: ENVIRONMENT
+        value: production
+      - key: AUTO_CREATE_TABLES
+        value: "false"
+      - key: LOG_JSON
+        value: "true"
+      - key: SKIP_MIGRATIONS
+        value: "1"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: universal-ai-agent-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: universal-ai-agent-redis
+          type: keyvalue
+          property: connectionString
+      - key: CREDENTIAL_ENCRYPTION_KEY
+        fromService:
+          name: universal-ai-agent-1
+          envVarKey: CREDENTIAL_ENCRYPTION_KEY
+      - key: JWT_SECRET_KEY
+        fromService:
+          name: universal-ai-agent-1
+          envVarKey: JWT_SECRET_KEY
+      - key: CORS_ALLOW_ORIGINS
+        fromService:
+          name: universal-ai-agent-1
+          envVarKey: CORS_ALLOW_ORIGINS
+      - key: GROQ_API_KEY_1
+        fromService:
+          name: universal-ai-agent-1
+          envVarKey: GROQ_API_KEY_1
+      - key: GROQ_API_KEY_2
+        fromService:
+          name: universal-ai-agent-1
+          envVarKey: GROQ_API_KEY_2
+
+  - type: keyvalue
+    name: universal-ai-agent-redis
+    plan: free
+    region: oregon
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: Render private-network connectivity
+
+  - type: web
+    name: universal-ai-agent-dashboard
+    runtime: static
+    plan: free
+    region: oregon
+    repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
+    branch: main
+    rootDir: frontend-dashboard
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: VITE_API_BASE_URL
+        fromService:
+          name: universal-ai-agent-1
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+
+databases:
+  - name: universal-ai-agent-db
+    plan: free
+    region: oregon
+    postgresMajorVersion: "18"
+    databaseName: universal_ai_agent_db
+    user: universal_ai_agent_db_user

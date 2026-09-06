@@ -54,6 +54,7 @@ RUN mkdir -p /app/.cache && chown -R app:app /app
 
 USER app
 
+# Render supplies PORT at runtime. Keep 8000 as the local/default value.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/.cache \
@@ -62,11 +63,12 @@ ENV PYTHONUNBUFFERED=1 \
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${PORT}/ready" || exit 1
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/ready" || exit 1
 
 # `entrypoint.sh` runs migrations (`alembic upgrade head`) before
 # handing off to uvicorn — see that file for why this is safe to run
 # on every container start, including scaled-out replicas.
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Use Render's PORT when present; fall back to 8000 for local Docker runs.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
