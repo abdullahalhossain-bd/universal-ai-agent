@@ -7,10 +7,10 @@ services:
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
     branch: main
     buildCommand: pip install -r requirements.txt
-    # IMPORTANT: Render's Python runtime bypasses Dockerfile ENTRYPOINT.
-    # Invoke the same startup gate explicitly so every web instance:
-    # 1) waits for Postgres, 2) runs Alembic to head, 3) starts Uvicorn.
-    startCommand: bash docker/entrypoint.sh uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # Render's Python runtime bypasses Dockerfile ENTRYPOINT.
+    # Invoke the startup gate explicitly; the API launcher also starts
+    # the Redis sync consumer in-process so no worker service is needed.
+    startCommand: bash docker/entrypoint.sh python -m app.run
     healthCheckPath: /ready
     autoDeployTrigger: checksPass
     envVars:
@@ -56,53 +56,6 @@ services:
       - key: STRIPE_PRICE_GROWTH
         sync: false
       - key: STRIPE_PRICE_PRO
-        sync: false
-
-  - type: worker
-    name: universal-ai-agent-worker
-    runtime: python
-    plan: free
-    region: oregon
-    repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
-    branch: main
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m app.sync.worker
-    autoDeployTrigger: checksPass
-    envVars:
-      - key: APP_ENV
-        value: production
-      - key: ENVIRONMENT
-        value: production
-      - key: AUTO_CREATE_TABLES
-        value: "false"
-      - key: LOG_JSON
-        value: "true"
-      - key: SKIP_MIGRATIONS
-        value: "1"
-      - key: DATABASE_URL
-        fromDatabase:
-          name: universal-ai-agent-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          name: universal-ai-agent-redis
-          type: keyvalue
-          property: connectionString
-      - key: CREDENTIAL_ENCRYPTION_KEY
-        fromService:
-          name: universal-ai-agent-1
-          type: web
-          envVarKey: CREDENTIAL_ENCRYPTION_KEY
-      - key: JWT_SECRET_KEY
-        fromService:
-          name: universal-ai-agent-1
-          type: web
-          envVarKey: JWT_SECRET_KEY
-      # API credentials are declared directly on the worker because
-      # sync:false variables on another service cannot be referenced safely.
-      - key: GROQ_API_KEY_1
-        sync: false
-      - key: GROQ_API_KEY_2
         sync: false
 
   - type: keyvalue
