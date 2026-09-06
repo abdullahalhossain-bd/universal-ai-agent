@@ -7,7 +7,10 @@ services:
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
     branch: main
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # IMPORTANT: Render's Python runtime bypasses Dockerfile ENTRYPOINT.
+    # Invoke the same startup gate explicitly so every web instance:
+    # 1) waits for Postgres, 2) runs Alembic to head, 3) starts Uvicorn.
+    startCommand: bash docker/entrypoint.sh uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /ready
     autoDeployTrigger: checksPass
     maxShutdownDelaySeconds: 60
