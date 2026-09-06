@@ -13,7 +13,6 @@ services:
     startCommand: bash docker/entrypoint.sh uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /ready
     autoDeployTrigger: checksPass
-    maxShutdownDelaySeconds: 60
     envVars:
       - key: APP_ENV
         value: production
@@ -67,7 +66,6 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.sync.worker
     autoDeployTrigger: checksPass
-    maxShutdownDelaySeconds: 60
     envVars:
       - key: APP_ENV
         value: production
@@ -91,22 +89,27 @@ services:
       - key: CREDENTIAL_ENCRYPTION_KEY
         fromService:
           name: universal-ai-agent-1
+          type: web
           envVarKey: CREDENTIAL_ENCRYPTION_KEY
       - key: JWT_SECRET_KEY
         fromService:
           name: universal-ai-agent-1
+          type: web
           envVarKey: JWT_SECRET_KEY
       - key: CORS_ALLOW_ORIGINS
         fromService:
           name: universal-ai-agent-1
+          type: web
           envVarKey: CORS_ALLOW_ORIGINS
       - key: GROQ_API_KEY_1
         fromService:
           name: universal-ai-agent-1
+          type: web
           envVarKey: GROQ_API_KEY_1
       - key: GROQ_API_KEY_2
         fromService:
           name: universal-ai-agent-1
+          type: web
           envVarKey: GROQ_API_KEY_2
 
   - type: keyvalue
@@ -122,7 +125,6 @@ services:
     name: universal-ai-agent-dashboard
     runtime: static
     plan: free
-    region: oregon
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
     branch: main
     rootDir: frontend-dashboard
