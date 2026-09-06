@@ -37,7 +37,6 @@ services:
         generateValue: true
       - key: JWT_SECRET_KEY
         generateValue: true
-      # Explicitly defined so other Blueprint services can reference it.
       - key: API_BASE_URL
         value: https://universal-ai-agent-1.onrender.com
       - key: CORS_ALLOW_ORIGINS
@@ -99,21 +98,12 @@ services:
           name: universal-ai-agent-1
           type: web
           envVarKey: JWT_SECRET_KEY
-      - key: CORS_ALLOW_ORIGINS
-        fromService:
-          name: universal-ai-agent-1
-          type: web
-          envVarKey: CORS_ALLOW_ORIGINS
+      # API credentials are declared directly on the worker because
+      # sync:false variables on another service cannot be referenced safely.
       - key: GROQ_API_KEY_1
-        fromService:
-          name: universal-ai-agent-1
-          type: web
-          envVarKey: GROQ_API_KEY_1
+        sync: false
       - key: GROQ_API_KEY_2
-        fromService:
-          name: universal-ai-agent-1
-          type: web
-          envVarKey: GROQ_API_KEY_2
+        sync: false
 
   - type: keyvalue
     name: universal-ai-agent-redis
@@ -127,7 +117,6 @@ services:
   - type: web
     name: universal-ai-agent-dashboard
     runtime: static
-    # Static sites do not have a compute plan; do not set plan: free here.
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
     branch: main
     rootDir: frontend-dashboard
