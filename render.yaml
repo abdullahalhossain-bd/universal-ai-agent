@@ -124,7 +124,7 @@ services:
   - type: web
     name: universal-ai-agent-dashboard
     runtime: static
-    plan: free
+    # Static sites do not have a compute plan; do not set plan: free here.
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
     branch: main
     rootDir: frontend-dashboard
