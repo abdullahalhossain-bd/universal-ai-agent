@@ -1,12 +1,9 @@
 """
-Normalize a raw merchant row into the local Product field shape.
+Normalize a raw merchant row into the local product field shape.
 
-Mapping keys are semantic types (id, name, price, stock, …). Values may be
-either a column name string or a dict with a ``column`` key (legacy shape
-from the mapping engine).
-
-Only fields that exist on the products table are produced:
-  id, name, description, price, stock, image_url, product_url
+Mapping values may be a column name or the legacy {"column": ...} shape.
+Unknown connector columns are intentionally not guessed here; the mapping
+engine remains the source of truth for semantic fields.
 """
 
 from __future__ import annotations
@@ -20,15 +17,8 @@ REQUIRED_FIELDS = ("id", "name")
 def _resolve_column(mapping: dict, field: str) -> str | None:
     entry = mapping.get(field)
     if entry is None:
-        # Alias: mapping engines use "image" / "url" while the ORM uses
-        # image_url / product_url.
-        aliases = {
-            "image_url": "image",
-            "product_url": "url",
-        }
-        alt = aliases.get(field)
-        if alt:
-            entry = mapping.get(alt)
+        aliases = {"image_url": "image", "product_url": "url"}
+        entry = mapping.get(aliases.get(field, ""))
     if isinstance(entry, dict):
         return entry.get("column")
     return entry
@@ -36,9 +26,7 @@ def _resolve_column(mapping: dict, field: str) -> str | None:
 
 def _get(raw: dict, mapping: dict, field: str) -> Any:
     column = _resolve_column(mapping, field)
-    if not column:
-        return None
-    return raw.get(column)
+    return raw.get(column) if column else None
 
 
 def _as_float(value: Any) -> float | None:
@@ -58,13 +46,9 @@ def _as_str(value: Any) -> str | None:
 
 
 def normalize_row(raw: dict, mapping: dict) -> dict | None:
-    """
-    Return a dict suitable for Product upsert, or None if the row cannot
-    be normalized (missing required id/name).
-    """
+    """Return a Product upsert payload, or None for invalid id/name rows."""
     raw_id = _get(raw, mapping, "id")
     raw_name = _get(raw, mapping, "name")
-
     if raw_id is None or raw_name is None:
         return None
 
@@ -79,6 +63,9 @@ def normalize_row(raw: dict, mapping: dict) -> dict | None:
         "description": _as_str(_get(raw, mapping, "description")),
         "price": _as_float(_get(raw, mapping, "price")),
         "stock": _as_float(_get(raw, mapping, "stock")),
+        "sku": _as_str(_get(raw, mapping, "sku")),
+        "category": _as_str(_get(raw, mapping, "category")),
+        "brand": _as_str(_get(raw, mapping, "brand")),
         "image_url": _as_str(_get(raw, mapping, "image_url")),
         "product_url": _as_str(_get(raw, mapping, "product_url")),
     }
