@@ -94,7 +94,11 @@ class ProductSearchTool(BaseTool):
             group_conditions.append(
                 or_(
                     *[
-                        Product.name.ilike(f"%{synonym}%")
+                        or_(
+                            Product.name.ilike(f"%{synonym}%"),
+                            Product.description.ilike(f"%{synonym}%"),
+                            Product.category.ilike(f"%{synonym}%"),
+                        )
                         for synonym in synonyms
                     ]
                 )
