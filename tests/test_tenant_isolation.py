@@ -192,7 +192,8 @@ def test_get_products_by_ids_mixed_batch_drops_foreign_ids_silently(
 # ---------------------------------------------------------------------------
 
 
-def test_search_products_never_returns_other_store_matches(
+@pytest.mark.asyncio
+async def test_search_products_never_returns_other_store_matches(
     db_session, two_stores, chat_service
 ):
     store_a, store_b = two_stores
@@ -205,7 +206,7 @@ def test_search_products_never_returns_other_store_matches(
     )
     db_session.commit()
 
-    results = chat_service._search_products(
+    results = await chat_service._search_products(
         store_id=store_a.id,
         message="Blue Cotton Shirt",
         filters=None,
