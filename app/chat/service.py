@@ -1,4 +1,4 @@
-﻿import json
+import json
 import logging
 import re
 import uuid
@@ -728,7 +728,7 @@ class ChatService:
     # Product search
     # ---------------------------------
 
-    def _search_products(
+    async def _search_products(
         self,
         store_id: str,
         message: str,
@@ -872,8 +872,16 @@ class ChatService:
 
             condition = or_(
                 *[
-                    Product.name.ilike(
-                        f"%{synonym}%"
+                    or_(
+                        Product.name.ilike(
+                            f"%{synonym}%"
+                        ),
+                        Product.description.ilike(
+                            f"%{synonym}%"
+                        ),
+                        Product.category.ilike(
+                            f"%{synonym}%"
+                        ),
                     )
                     for synonym in term_group
                 ]
@@ -889,12 +897,175 @@ class ChatService:
                 and_(*group_conditions)
             )
 
-        return (
+        results = (
             query
             .order_by(Product.name.asc())
             .limit(10)
             .all()
         )
+
+        # ---------------------------------
+        # Typo-tolerant LLM fallback
+        # ---------------------------------
+        #
+        # If the raw terms produced zero name/description/category
+        # matches, the term is likely misspelled (e.g. "leptop"),
+        # a synonym we don't have in SEARCH_SYNONYMS, or a Banglish
+        # transliteration. Ask the LLM to normalize it to a plain
+        # product keyword and retry once with that. This never runs
+        # when raw_terms is empty (no product-ish text was typed at
+        # all) or when a Groq key isn't configured — see
+        # _llm_correct_search_term.
+
+        if not results and raw_terms:
+
+            corrected = await self._llm_correct_search_term(
+                " ".join(raw_terms)
+            )
+
+            if (
+                corrected
+                and corrected.lower()
+                not in {t.lower() for t in raw_terms}
+            ):
+
+                retry_group = expand_terms(
+                    [corrected]
+                )
+
+                retry_condition = or_(
+                    *[
+                        or_(
+                            Product.name.ilike(
+                                f"%{synonym}%"
+                            ),
+                            Product.description.ilike(
+                                f"%{synonym}%"
+                            ),
+                            Product.category.ilike(
+                                f"%{synonym}%"
+                            ),
+                        )
+                        for synonym in retry_group
+                    ]
+                )
+
+                retry_query = (
+                    self.db.query(Product)
+                    .filter(
+                        Product.store_id == store_id
+                    )
+                    .filter(retry_condition)
+                )
+
+                if filters:
+
+                    if filters.min_price is not None:
+                        retry_query = retry_query.filter(
+                            Product.price >= filters.min_price
+                        )
+
+                    if filters.max_price is not None:
+                        retry_query = retry_query.filter(
+                            Product.price <= filters.max_price
+                        )
+
+                    if filters.in_stock:
+                        retry_query = retry_query.filter(
+                            Product.stock > 0
+                        )
+
+                results = (
+                    retry_query
+                    .order_by(Product.name.asc())
+                    .limit(10)
+                    .all()
+                )
+
+        return results
+
+    async def _llm_correct_search_term(
+        self,
+        raw_text: str,
+    ) -> str | None:
+        """
+        Best-effort spelling/typo correction for a product search
+        phrase, using the LLM as a fallback ONLY (never as the
+        primary search path — the DB query above always runs
+        first). Used when a user's Bangla/English/Banglish input
+        (e.g. "leptop", "mobil", "sandel") doesn't literally match
+        any stored name/description/category text or synonym.
+
+        Returns None (never raises) if no Groq key is configured,
+        the call fails, or the model's reply doesn't look like a
+        short product keyword — callers must treat that as
+        "no correction available" and keep the original empty
+        result set.
+        """
+
+        try:
+            response_service = self._shared_llm_stack()
+        except RuntimeError:
+            # No GROQ_API_KEY_* configured — typo correction is
+            # an enhancement, not a requirement; fail open to the
+            # original (empty) result set.
+            return None
+
+        generator = getattr(
+            response_service,
+            "llm",
+            None,
+        )
+
+        if generator is None:
+            return None
+
+        try:
+            result = await generator.provider_router.generate(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "The user typed a possibly "
+                            "misspelled product search term "
+                            "in Bangla, English, or Banglish "
+                            "for an ecommerce chat. Reply "
+                            "with ONLY the single corrected "
+                            "product keyword (one word or "
+                            "short phrase, no punctuation, "
+                            "no explanation). If the input "
+                            "is already a reasonable product "
+                            "term, return it unchanged."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": raw_text,
+                    },
+                ],
+            )
+        except Exception:
+            logger.warning(
+                "LLM typo-correction fallback failed",
+                exc_info=True,
+            )
+            return None
+
+        reply = (result or {}).get("text")
+
+        if not reply:
+            return None
+
+        candidate = reply.strip().strip(
+            ".,!?;:()[]{}\"'"
+        )
+
+        # Guard against the model returning a sentence instead of
+        # a keyword — only accept short replies.
+        if not candidate or len(candidate.split()) > 4:
+            return None
+
+        return candidate
 
     # ---------------------------------
     # Pagination ("আরেকটা দেখাও")
@@ -1522,7 +1693,7 @@ class ChatService:
             "mixed",
         }:
 
-            products = self._search_products(
+            products = await self._search_products(
                 store_id=store_id,
                 message=message,
                 filters=planned.product_filters,
