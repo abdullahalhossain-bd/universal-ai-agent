@@ -1,92 +1,168 @@
 services:
+  # ============================================================
+  # BACKEND API
+  # ============================================================
   - type: web
     name: universal-ai-agent-1
     runtime: python
     plan: free
     region: oregon
+
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
     branch: main
+
     buildCommand: pip install -r requirements.txt
+
     # Render's Python runtime bypasses Dockerfile ENTRYPOINT.
-    # Invoke the startup gate explicitly; the API launcher also starts
-    # the Redis sync consumer in-process so no worker service is needed.
+    # Invoke the startup gate explicitly.
+    # The API launcher also starts the Redis sync consumer
+    # in-process, so no separate worker service is required.
     startCommand: bash docker/entrypoint.sh python -m app.run
+
     healthCheckPath: /ready
     autoDeployTrigger: checksPass
+
     envVars:
+      # --------------------------------------------------------
+      # Application
+      # --------------------------------------------------------
       - key: APP_ENV
         value: production
+
       - key: ENVIRONMENT
         value: production
+
       - key: AUTO_CREATE_TABLES
         value: "false"
+
       - key: LOG_JSON
         value: "true"
+
+      # --------------------------------------------------------
+      # Storage
+      # --------------------------------------------------------
       - key: STORAGE_BACKEND
         value: local
+
+      # --------------------------------------------------------
+      # PostgreSQL
+      # --------------------------------------------------------
       - key: DATABASE_URL
         fromDatabase:
           name: universal-ai-agent-db
           property: connectionString
+
+      # --------------------------------------------------------
+      # Redis / Key Value
+      # --------------------------------------------------------
       - key: REDIS_URL
         fromService:
           name: universal-ai-agent-redis
           type: keyvalue
           property: connectionString
+
+      # --------------------------------------------------------
+      # Security
+      # --------------------------------------------------------
       - key: CREDENTIAL_ENCRYPTION_KEY
         generateValue: true
+
       - key: JWT_SECRET_KEY
         generateValue: true
+
+      # --------------------------------------------------------
+      # Backend public URL
+      # --------------------------------------------------------
       - key: API_BASE_URL
-        value: https://universal-ai-agent-1.onrender.com
+        value: https://universal-ai-agent-1-2jyk.onrender.com
+
+      # --------------------------------------------------------
+      # CORS
+      # --------------------------------------------------------
       - key: CORS_ALLOW_ORIGINS
-        sync: false
+        value: https://universal-ai-agent-dashboard-i5pc.onrender.com
+
+      # --------------------------------------------------------
+      # Groq
+      # --------------------------------------------------------
       - key: GROQ_API_KEY_1
         sync: false
+
       - key: GROQ_API_KEY_2
         sync: false
+
       - key: GROQ_API_KEY_3
         sync: false
+
+      # --------------------------------------------------------
+      # Stripe
+      # --------------------------------------------------------
       - key: STRIPE_SECRET_KEY
         sync: false
+
       - key: STRIPE_WEBHOOK_SECRET
         sync: false
+
       - key: STRIPE_PRICE_STARTER
         sync: false
+
       - key: STRIPE_PRICE_GROWTH
         sync: false
+
       - key: STRIPE_PRICE_PRO
         sync: false
 
+
+  # ============================================================
+  # REDIS / KEY VALUE
+  # ============================================================
   - type: keyvalue
     name: universal-ai-agent-redis
     plan: free
     region: oregon
+
     maxmemoryPolicy: allkeys-lru
+
     ipAllowList:
       - source: 0.0.0.0/0
         description: Render private-network connectivity
 
+
+  # ============================================================
+  # FRONTEND DASHBOARD
+  # ============================================================
   - type: web
     name: universal-ai-agent-dashboard
     runtime: static
+
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
     branch: main
+
     rootDir: frontend-dashboard
+
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
+
     autoDeployTrigger: checksPass
+
     envVars:
+      # Automatically gets API_BASE_URL from backend service
       - key: VITE_API_BASE_URL
         fromService:
           name: universal-ai-agent-1
           type: web
           envVarKey: API_BASE_URL
 
+
+# ==============================================================
+# POSTGRESQL DATABASE
+# ==============================================================
 databases:
   - name: universal-ai-agent-db
     plan: free
     region: oregon
+
     postgresMajorVersion: "18"
+
     databaseName: universal_ai_agent_db
     user: universal_ai_agent_db_user
