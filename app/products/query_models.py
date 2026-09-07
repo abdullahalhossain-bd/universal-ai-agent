@@ -1,8 +1,10 @@
-﻿from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field
 
 
 class ProductSearchRequest(BaseModel):
 
+    # Free-text query. Kept separate from product_name for API compatibility;
+    # callers may still use product_name as the legacy search input.
     query: str | None = None
 
     product_name: str | None = None
@@ -10,6 +12,10 @@ class ProductSearchRequest(BaseModel):
     brand: str | None = None
 
     category: str | None = None
+
+    model: str | None = None
+
+    attributes: dict | None = None
 
     min_price: float | None = None
 
