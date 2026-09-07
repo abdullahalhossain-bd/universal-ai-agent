@@ -430,7 +430,8 @@ class TestCrossStoreIsolation(IsolatedStoreTestBase):
         assert resolved_b.id == session_b.id
         assert resolved_b.store_id == store_b.id
 
-    def test_product_search_never_crosses_store_boundary(self):
+    @pytest.mark.asyncio
+    async def test_product_search_never_crosses_store_boundary(self):
         store_a = self.make_store()
         store_b = self.make_store()
 
@@ -444,19 +445,21 @@ class TestCrossStoreIsolation(IsolatedStoreTestBase):
 
         service = ChatService(self._db)
 
-        results_a = service._search_products(store_a.id, token_a, None)
+        results_a = await service._search_products(store_a.id, token_a, None)
         assert [p.id for p in results_a] == [product_a.id]
         assert all(p.store_id == store_a.id for p in results_a)
         assert product_b.id not in [p.id for p in results_a]
 
-        results_b = service._search_products(store_b.id, token_b, None)
+        results_b = await service._search_products(store_b.id, token_b, None)
         assert [p.id for p in results_b] == [product_b.id]
         assert all(p.store_id == store_b.id for p in results_b)
         assert product_a.id not in [p.id for p in results_b]
 
         # Searching store A for a token that only exists in store B's
-        # catalog must return nothing at all.
-        assert service._search_products(store_a.id, token_b, None) == []
+        # catalog must return nothing at all. No Groq key is
+        # configured in tests, so the typo-correction fallback fails
+        # open (returns None) and the empty result stays empty.
+        assert await service._search_products(store_a.id, token_b, None) == []
 
 
 # ---------------------------------
