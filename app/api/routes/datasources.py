@@ -141,6 +141,28 @@ def delete_datasource(
     return {"status": "deleted", "id": datasource_id}
 
 
+@router.get("/debug/egress-ip")
+async def debug_egress_ip():
+    """Report this service's current outbound (egress) IPv4 address.
+
+    Useful for matching against a remote host's firewall/block logs when
+    diagnosing connection failures - Render's published outbound CIDR
+    range is too broad for some providers to test against directly.
+    """
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get("https://api.ipify.org?format=json")
+            resp.raise_for_status()
+            ip = resp.json().get("ip")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"could not determine egress ip: {exc}"
+        ) from exc
+    return {"egress_ip": ip}
+
+
 @router.post("/test")
 async def test_connection(
     payload: TestConnectionRequest,
