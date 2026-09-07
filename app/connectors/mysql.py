@@ -93,7 +93,19 @@ class MySQLConnector:
             except Exception:
                 return False
 
-        connection = await aiomysql.connect(**self.config)
+        try:
+            connection = await asyncio.wait_for(
+                aiomysql.connect(**self.config, connect_timeout=10),
+                timeout=12,
+            )
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"Timed out after 12s connecting to MySQL host "
+                f"{self.config.get('host')!r}:{self.config.get('port')!r}. "
+                "The TCP handshake or auth never completed - check that "
+                "the destination host/port accepts connections from this "
+                "server's outbound IP and is not silently dropping packets."
+            ) from exc
 
         try:
             connection.close()
