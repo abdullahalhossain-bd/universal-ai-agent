@@ -158,6 +158,7 @@ async def test_connection(
         "connected": connected,
         "connector_type": payload.connector_type.lower(),
         "connection_url": redact_url(payload.connection_url),
+        "error": None if connected else service.last_test_error,
     }
 
 
