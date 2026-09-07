@@ -182,6 +182,8 @@ class DataSourceService:
         ds.updated_at = datetime.utcnow()
         self.db.commit()
 
+    last_test_error: str | None = None
+
     def test_connection(
         self,
         connector_type: str,
@@ -191,6 +193,7 @@ class DataSourceService:
         ctype = connector_type.lower().strip()
         if ctype == "postgres":
             ctype = "postgresql"
+        self.last_test_error = None
         return self._test_connection_sync(
             ctype, connection_url, api_base_url=api_base_url
         )
@@ -235,8 +238,9 @@ class DataSourceService:
                         return pool.submit(asyncio.run, coro).result(timeout=15)
                 return asyncio.run(coro)
             return bool(coro)
-        except Exception:
+        except Exception as exc:
             logger.exception("connection test failed")
+            self.last_test_error = f"{type(exc).__name__}: {exc}"
             return False
 
     def discover(
