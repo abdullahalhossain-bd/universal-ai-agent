@@ -7,6 +7,7 @@ from app.search.synonyms import expand_terms
 from app.products.query_models import ProductSearchRequest
 from app.products.sql_builder import ProductSQLBuilder
 from app.products.dialect import MySQLDialect
+from app.sync.normalize import normalize_row
 
 
 def test_arbitrary_product_name_is_product_intent():
@@ -28,6 +29,23 @@ def test_mixed_query_keeps_terms_and_price_filter():
     assert result.product_filters.max_price == 5000
     assert "Nike" in result.product_filters.product_name
     assert "shoes" in result.product_filters.product_name
+
+
+def test_normalization_preserves_searchable_fields():
+    mapping = {
+        "id": "id", "name": "title", "description": "details",
+        "price": "price", "stock": "qty", "sku": "sku",
+        "category": "category", "brand": "brand",
+    }
+    row = {
+        "id": "P1", "title": "X200", "details": "running shoe",
+        "price": "1200", "qty": "4", "sku": "X200-BLK",
+        "category": "Shoes", "brand": "Acme",
+    }
+    result = normalize_row(row, mapping)
+    assert result["category"] == "Shoes"
+    assert result["brand"] == "Acme"
+    assert result["sku"] == "X200-BLK"
 
 
 def test_synonym_expansion_handles_bengali_and_english():
