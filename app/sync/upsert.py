@@ -16,6 +16,7 @@ from app.sync.result import SyncResult
 _TRACKED_FIELDS = (
     "name",
     "description",
+    "category",
     "price",
     "stock",
     "image_url",
@@ -73,6 +74,7 @@ def upsert_products(
                 store_id=store_id,
                 name=data["name"],
                 description=data.get("description"),
+                category=data.get("category"),
                 price=data.get("price"),
                 stock=data.get("stock"),
                 image_url=data.get("image_url"),
