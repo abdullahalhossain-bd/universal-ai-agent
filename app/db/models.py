@@ -272,6 +272,12 @@ class Product(Base):
         nullable=True,
     )
 
+    category: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+
     price: Mapped[float | None] = mapped_column(
         "selling_price",
         Numeric(12, 2),
