@@ -109,3 +109,17 @@ class SearchLearning(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now())
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+class LearnedVocabulary(Base):
+    """Global (NOT store-scoped) cache of filler/quantity words the rule-based
+    search planner/matcher couldn't classify and had to ask the LLM about.
+
+    Deliberately not scoped by store_id: words like "কয়ডা" (how many) carry
+    no store-specific meaning, so once any store's chatbot asks the LLM about
+    such a word, no store ever needs to ask again. See app/search/learned_vocabulary.py.
+    """
+    __tablename__ = "learned_vocabulary"
+    term: Mapped[str] = mapped_column(String(120), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    resolved_value: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
