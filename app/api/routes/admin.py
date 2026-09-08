@@ -1,9 +1,8 @@
 """Platform admin: operator-only cross-tenant controls."""
-
 from __future__ import annotations
 import json
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
@@ -12,35 +11,43 @@ from app.auth.admin_session import create_admin_access_token
 from app.auth.password import verify_password
 from app.billing.plans import PLAN_BUDGETS, all_plans
 from app.core.features import FEATURE_CATALOG, catalog_payload, normalized_features
+from app.core.rate_limit import enforce_login_rate_limit
+from app.core.security import resolve_client_ip
 from app.db.database import get_db, engine
 from app.db.admin_audit import AdminAuditLog
 from app.db.models import APIKey, DataSource, PlatformAdmin, Store, User
 from app.usage.models import UsageRecord
 
 router = APIRouter(prefix="/v1/admin", tags=["platform-admin"])
-
 class AdminLoginRequest(BaseModel):
     email: str
     password: str
-
 class AdminLoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     admin: dict
 
 @router.post("/login", response_model=AdminLoginResponse)
-def admin_login(payload: AdminLoginRequest, db: Session = Depends(get_db)):
+async def admin_login(payload: AdminLoginRequest, http_request: Request, db: Session = Depends(get_db)):
+    email = payload.email.lower().strip()
+    client_ip = resolve_client_ip(peer_host=http_request.client.host if http_request.client else None, forwarded_for=http_request.headers.get("x-forwarded-for"))
+    await enforce_login_rate_limit(client_ip=client_ip, email=email, admin=True)
     generic_error = HTTPException(status_code=401, detail="Invalid email or password")
-    admin = db.query(PlatformAdmin).filter(PlatformAdmin.email == payload.email.lower().strip()).first()
+    admin = db.query(PlatformAdmin).filter(PlatformAdmin.email == email).first()
     if admin is None:
         verify_password(payload.password, "$2b$12$" + "0" * 53)
         raise generic_error
     if not verify_password(payload.password, admin.password_hash):
         raise generic_error
-    admin.last_login_at = datetime.utcnow()
-    db.add(admin); db.commit()
-    token = create_admin_access_token(admin_id=admin.id)
+    admin.last_login_at = datetime.utcnow(); db.add(admin); db.commit()
+    token = create_admin_access_token(admin_id=admin.id, session_version=admin.session_version)
     return AdminLoginResponse(access_token=token, admin={"id": admin.id, "email": admin.email})
+
+@router.post("/logout")
+def admin_logout(admin: PlatformAdmin = Depends(get_current_admin), db: Session = Depends(get_db)):
+    admin.session_version += 1
+    db.add(admin); db.commit()
+    return {"ok": True}
 
 @router.get("/me")
 def admin_me(admin: PlatformAdmin = Depends(get_current_admin)):
@@ -66,11 +73,18 @@ def _store_summary(db: Session, store: Store) -> dict:
     month_spend = db.query(func.coalesce(func.sum(UsageRecord.estimated_cost), 0)).filter(UsageRecord.store_id == store.id).filter(UsageRecord.created_at >= month_start).filter(UsageRecord.status == "completed").scalar() or 0
     return {"id": store.id, "name": store.name, "website_url": store.website_url, "plan": store.plan, "monthly_budget": float(store.monthly_budget), "status": store.status, "stripe_subscription_status": store.stripe_subscription_status, "user_count": user_count, "month_to_date_spend": float(month_spend), "enabled_features": normalized_features(store), "created_at": store.created_at.isoformat()}
 
+class UpdateStoreRequest(BaseModel):
+    status: str | None = None
+    plan: str | None = None
+    monthly_budget: float | None = None
+    enabled_features: dict[str, bool] | None = None
+_VALID_STATUSES = {"setup", "active", "suspended"}
+_VALID_FEATURE_KEYS = {f.key for f in FEATURE_CATALOG}
+
 @router.get("/stores")
 def list_stores(q: str | None = Query(default=None), status: str | None = Query(default=None), plan: str | None = Query(default=None), limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0), admin: PlatformAdmin = Depends(get_current_admin), db: Session = Depends(get_db)):
     query = db.query(Store)
-    if q:
-        like = f"%{q.strip()}%"; query = query.filter(or_(Store.name.ilike(like), Store.website_url.ilike(like)))
+    if q: query = query.filter(or_(Store.name.ilike(f"%{q.strip()}%"), Store.website_url.ilike(f"%{q.strip()}%")))
     if status: query = query.filter(Store.status == status)
     if plan: query = query.filter(Store.plan == plan)
     total = query.with_entities(func.count(Store.id)).scalar() or 0
@@ -86,15 +100,6 @@ def get_store_detail(store_id: str, admin: PlatformAdmin = Depends(get_current_a
     datasources = db.query(DataSource).filter(DataSource.store_id == store_id).all()
     recent_usage = db.query(UsageRecord).filter(UsageRecord.store_id == store_id).order_by(UsageRecord.created_at.desc()).limit(20).all()
     return {**_store_summary(db, store), "users": [{"id": u.id, "email": u.email, "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None} for u in users], "api_keys": [{"id": k.id, "name": k.name, "key_prefix": k.key_prefix, "revoked": k.revoked_at is not None, "created_at": k.created_at.isoformat()} for k in api_keys], "datasources": [{"id": d.id, "name": d.name, "connector_type": d.connector_type, "active": d.active, "last_sync_status": d.last_sync_status, "last_sync_at": d.last_sync_at.isoformat() if d.last_sync_at else None} for d in datasources], "recent_usage": [{"id": r.id, "route": r.route, "model": r.model, "estimated_cost": r.estimated_cost, "status": r.status, "created_at": r.created_at.isoformat()} for r in recent_usage]}
-
-class UpdateStoreRequest(BaseModel):
-    status: str | None = None
-    plan: str | None = None
-    monthly_budget: float | None = None
-    enabled_features: dict[str, bool] | None = None
-
-_VALID_STATUSES = {"setup", "active", "suspended"}
-_VALID_FEATURE_KEYS = {f.key for f in FEATURE_CATALOG}
 
 @router.patch("/stores/{store_id}")
 def update_store(store_id: str, payload: UpdateStoreRequest, admin: PlatformAdmin = Depends(get_current_admin), db: Session = Depends(get_db)):
@@ -113,7 +118,7 @@ def update_store(store_id: str, payload: UpdateStoreRequest, admin: PlatformAdmi
         store.monthly_budget = payload.monthly_budget
     if payload.enabled_features is not None:
         unknown = set(payload.enabled_features) - _VALID_FEATURE_KEYS
-        if unknown: raise HTTPException(status_code=400, detail=f"Unknown feature key(s): {', '.join(sorted(unknown))}. Valid keys: {', '.join(sorted(_VALID_FEATURE_KEYS))}.")
+        if unknown: raise HTTPException(status_code=400, detail=f"Unknown feature key(s): {', '.join(sorted(unknown))}.")
         merged = dict(store.enabled_features or {}); merged.update(payload.enabled_features); store.enabled_features = merged
     db.add(store)
     after = {"status": store.status, "plan": store.plan, "monthly_budget": float(store.monthly_budget), "enabled_features": normalized_features(store)}
@@ -137,7 +142,6 @@ async def system_health(admin: PlatformAdmin = Depends(get_current_admin)):
     except Exception: checks["database"] = "error"
     try:
         from app.core.redis import redis_client
-        await redis_client.ping()
-        checks["redis"] = "ok"
+        await redis_client.ping(); checks["redis"] = "ok"
     except Exception: checks["redis"] = "error"
     return {"status": "ok" if all(v == "ok" for v in checks.values()) else "degraded", "checks": checks}
