@@ -1,13 +1,9 @@
-"""
-Dashboard authentication: signup, login, and "who am I".
-"""
-
+"""Dashboard authentication: signup, login, logout, and who-am-I."""
 from __future__ import annotations
-
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
-
 from app.auth.dashboard_auth import get_current_user
 from app.auth.jwt_session import create_access_token
 from app.auth.password import WeakPasswordError, hash_password, verify_password
@@ -18,21 +14,15 @@ from app.db.database import get_db
 from app.db.models import APIKey, Store, User
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
-
-
 class SignupRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=72)
     store_name: str = Field(min_length=1, max_length=255)
     website_url: str | None = None
     plan: str = "starter"
-
-
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
-
-
 class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -40,24 +30,12 @@ class AuthResponse(BaseModel):
     store: dict
     api_key: str | None = None
 
-
 def _user_dict(user: User) -> dict:
     return {"id": user.id, "email": user.email, "created_at": user.created_at.isoformat()}
-
-
 def _store_dict(store: Store) -> dict:
-    return {
-        "id": store.id, "name": store.name, "website_url": store.website_url,
-        "plan": store.plan, "monthly_budget": float(store.monthly_budget), "status": store.status,
-    }
-
-
-def _client_ip(http_request: Request) -> str:
-    return resolve_client_ip(
-        peer_host=http_request.client.host if http_request.client else None,
-        forwarded_for=http_request.headers.get("x-forwarded-for"),
-    )
-
+    return {"id": store.id, "name": store.name, "website_url": store.website_url, "plan": store.plan, "monthly_budget": float(store.monthly_budget), "status": store.status}
+def _client_ip(request: Request) -> str:
+    return resolve_client_ip(peer_host=request.client.host if request.client else None, forwarded_for=request.headers.get("x-forwarded-for"))
 
 @router.post("/signup", response_model=AuthResponse, status_code=201)
 async def signup(payload: SignupRequest, http_request: Request, db: Session = Depends(get_db)):
@@ -71,7 +49,6 @@ async def signup(payload: SignupRequest, http_request: Request, db: Session = De
         password_hash = hash_password(payload.password)
     except WeakPasswordError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     store = Store(name=payload.store_name, website_url=payload.website_url, plan=plan_name, monthly_budget=PLAN_BUDGETS[plan_name])
     db.add(store); db.flush()
     user = User(store_id=store.id, email=payload.email.lower(), password_hash=password_hash)
@@ -81,7 +58,6 @@ async def signup(payload: SignupRequest, http_request: Request, db: Session = De
     db.commit(); db.refresh(user); db.refresh(store)
     token = create_access_token(user_id=user.id, store_id=store.id, session_version=user.session_version)
     return AuthResponse(access_token=token, user=_user_dict(user), store=_store_dict(store), api_key=raw_key)
-
 
 @router.post("/login", response_model=AuthResponse)
 async def login(payload: LoginRequest, http_request: Request, db: Session = Depends(get_db)):
@@ -96,12 +72,16 @@ async def login(payload: LoginRequest, http_request: Request, db: Session = Depe
     store = db.query(Store).filter(Store.id == user.store_id).first()
     if store is None:
         raise generic_error
-    from datetime import datetime
-    user.last_login_at = datetime.utcnow()
-    db.add(user); db.commit()
+    user.last_login_at = datetime.utcnow(); db.add(user); db.commit()
     token = create_access_token(user_id=user.id, store_id=store.id, session_version=user.session_version)
     return AuthResponse(access_token=token, user=_user_dict(user), store=_store_dict(store))
 
+@router.post("/logout")
+def logout(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Revoke all currently issued dashboard tokens for this user."""
+    user.session_version += 1
+    db.add(user); db.commit()
+    return {"ok": True}
 
 @router.get("/me")
 def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
