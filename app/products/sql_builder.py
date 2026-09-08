@@ -1,279 +1,89 @@
-﻿from app.products.mapping_validator import (
-    MappingValidator,
-)
-
-from app.products.query_models import (
-    ProductSearchRequest,
-)
+from app.products.mapping_validator import MappingValidator
+from app.products.query_models import ProductSearchRequest
 
 
 class ProductSQLBuilder:
-
-    def __init__(
-        self,
-        mapping: dict,
-        dialect,
-    ):
-
+    def __init__(self, mapping: dict, dialect):
         self.mapping = mapping
         self.dialect = dialect
+        MappingValidator().validate(mapping)
 
-        MappingValidator().validate(
-            mapping
-        )
+    def build(self, request: ProductSearchRequest):
+        table = self.dialect.quote(self.mapping["table"])
 
-    def build(
-        self,
-        request: ProductSearchRequest,
-    ):
+        # Select every mapped canonical field so datasource mapping is not merely
+        # cosmetic; unmapped source columns remain available through raw_data.
+        columns = []
+        for field, column in self.mapping.items():
+            if field != "table" and column and column not in columns:
+                columns.append(column)
 
-        table = self.dialect.quote(
-            self.mapping["table"]
-        )
-
-        columns = [
-            self.mapping["id"],
-            self.mapping["name"],
-        ]
-
-        optional_fields = [
-            "price",
-            "stock",
-            "sku",
-            "description",
-            "image",
-            "url",
-            "brand",
-            "category",
-        ]
-
-        for field in optional_fields:
-
-            if self.mapping.get(field):
-
-                columns.append(
-                    self.mapping[field]
-                )
-
-        # Remove duplicates
-        columns = list(
-            dict.fromkeys(columns)
-        )
-
-        select_sql = ", ".join(
-            self.dialect.quote(column)
-            for column in columns
-        )
-
-        sql = (
-            f'SELECT {select_sql} '
-            f'FROM {table}'
-        )
-
+        select_sql = ", ".join(self.dialect.quote(column) for column in columns)
+        sql = f"SELECT {select_sql} FROM {table}"
         conditions = []
-
         params = {}
 
-        self._add_equal_filter(
-            conditions,
-            params,
-            request.brand,
-            "brand",
-        )
+        self._add_equal_filter(conditions, params, request.brand, "brand")
+        self._add_equal_filter(conditions, params, request.category, "category")
+        self._add_equal_filter(conditions, params, request.sku, "sku")
+        self._add_price_filter(conditions, params, request.min_price, request.max_price)
 
-        self._add_equal_filter(
-            conditions,
-            params,
-            request.category,
-            "category",
-        )
-
-        self._add_equal_filter(
-            conditions,
-            params,
-            request.sku,
-            "sku",
-        )
-
-        self._add_price_filter(
-            conditions,
-            params,
-            request.min_price,
-            request.max_price,
-        )
-
-        if request.in_stock_only:
-
-            stock_column = self.mapping.get(
-                "stock"
-            )
-
-            if stock_column:
-
-                conditions.append(
-                    f'{self.dialect.quote(stock_column)} > :stock_min'
-                )
-
-                params["stock_min"] = 0
+        if request.in_stock_only and self.mapping.get("stock"):
+            conditions.append(f'{self.dialect.quote(self.mapping["stock"])} > :stock_min')
+            params["stock_min"] = 0
 
         if request.product_name:
+            name_column = self.mapping["name"]
+            conditions.append(self.dialect.contains(name_column, "product_name"))
+            params["product_name"] = f"%{request.product_name}%"
 
-            name_column = self.mapping[
-                "name"
-            ]
-
-            conditions.append(
-                self.dialect.contains(
-                    name_column,
-                    "product_name",
-                )
-            )
-
-            params["product_name"] = (
-                f"%{request.product_name}%"
-            )
-
-        self._add_free_text_conditions(
-            conditions,
-            params,
-            request.query,
-        )
+        # Only use the generic query when product_name is not already carrying
+        # the same text; this prevents accidental double filtering.
+        if request.query and request.query != request.product_name:
+            self._add_free_text_conditions(conditions, params, request.query)
 
         if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
 
-            sql += (
-                " WHERE "
-                + " AND ".join(
-                    conditions
-                )
-            )
+        return sql + f" LIMIT {request.limit}", params
 
-        sql += (
-            f' LIMIT {request.limit}'
-        )
-
-        return sql, params
-
-    def _add_free_text_conditions(
-        self,
-        conditions,
-        params,
-        query_text,
-    ):
-        """
-        Free-text search: EVERY term must match in AT LEAST ONE
-        searchable mapped column (name/description/category/brand/
-        sku) — the classic "all terms, any field" ecommerce behavior.
-
-        All values travel as bound parameters (`search_term_N`); only
-        validated identifiers are interpolated (see MappingValidator
-        and app.products.sql_identifier).
-        """
-
+    def _add_free_text_conditions(self, conditions, params, query_text):
         if not query_text:
             return
 
         searchable = [
             self.mapping.get(field)
             for field in (
-                "name",
-                "description",
-                "category",
-                "brand",
-                "sku",
+                "name", "description", "brand", "category", "subcategory",
+                "tags", "color", "size", "material", "variant", "sku", "barcode",
             )
         ]
-
-        searchable = [
-            column
-            for column in searchable
-            if column
-        ]
-
+        searchable = list(dict.fromkeys(column for column in searchable if column))
         if not searchable:
             return
 
-        terms = [
-            term
-            for term in str(query_text).split()
-            if term
-        ]
-
+        terms = [term.strip() for term in str(query_text).split() if term.strip()]
         for index, term in enumerate(terms):
+            parameter = f"search_term_{index}"
+            per_column = [self.dialect.contains(column, parameter) for column in searchable]
+            conditions.append("(" + " OR ".join(per_column) + ")")
+            params[parameter] = f"%{term}%"
 
-            param_name = f"search_term_{index}"
-
-            per_column = [
-                self.dialect.contains(
-                    column,
-                    param_name,
-                )
-                for column in searchable
-            ]
-
-            conditions.append(
-                "(" + " OR ".join(per_column) + ")"
-            )
-
-            params[param_name] = f"%{term}%"
-
-    def _add_equal_filter(
-        self,
-        conditions,
-        params,
-        value,
-        field,
-    ):
-
-        if value is None:
+    def _add_equal_filter(self, conditions, params, value, field):
+        if value is None or not self.mapping.get(field):
             return
-
-        column = self.mapping.get(
-            field
-        )
-
-        if not column:
-            return
-
         parameter = f"{field}_value"
-
-        conditions.append(
-            f'{self.dialect.quote(column)} = :{parameter}'
-        )
-
+        conditions.append(f'{self.dialect.quote(self.mapping[field])} = :{parameter}')
         params[parameter] = value
 
-    def _add_price_filter(
-        self,
-        conditions,
-        params,
-        minimum,
-        maximum,
-    ):
-
-        column = self.mapping.get(
-            "price"
-        )
-
+    def _add_price_filter(self, conditions, params, minimum, maximum):
+        column = self.mapping.get("price")
         if not column:
             return
-
-        quoted = self.dialect.quote(
-            column
-        )
-
+        quoted = self.dialect.quote(column)
         if minimum is not None:
-
-            conditions.append(
-                f'{quoted} >= :min_price'
-            )
-
+            conditions.append(f"{quoted} >= :min_price")
             params["min_price"] = minimum
-
         if maximum is not None:
-
-            conditions.append(
-                f'{quoted} <= :max_price'
-            )
-
+            conditions.append(f"{quoted} <= :max_price")
             params["max_price"] = maximum
