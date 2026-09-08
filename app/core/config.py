@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     crawler_timeout_seconds: float = 15.0
     reservation_ttl_seconds: int = 300
     auto_create_tables: bool = True
+    run_sync_inline: bool = True
     image_storage_path: str = "./data/chat-images"
     storage_backend: str = "local"
     s3_bucket: str | None = None

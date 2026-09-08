@@ -101,7 +101,39 @@ async def lifespan(app: FastAPI):
     else:
         _ensure_alembic_baseline()
         logger.info("auto_create_tables=false: schema creation skipped; Alembic state verified")
+
+    background_tasks: list[asyncio.Task] = []
+    if settings.run_sync_inline:
+        # Run the datasource sync worker + scheduler as background tasks inside
+        # this same process, instead of requiring separate (paid) Render worker
+        # services. Redis Streams consumer groups make this safe to run
+        # alongside dedicated `app.sync.worker` / `app.sync.scheduler`
+        # processes too, if those are ever added later — jobs are only ever
+        # claimed by one consumer at a time.
+        try:
+            from app.sync.worker import run_worker
+            from app.sync.scheduler import scheduler as run_scheduler
+
+            background_tasks.append(asyncio.create_task(run_worker(), name="inline-sync-worker"))
+            background_tasks.append(
+                asyncio.create_task(run_scheduler(settings.redis_url), name="inline-sync-scheduler")
+            )
+            logger.info("RUN_SYNC_INLINE=true: datasource sync worker + scheduler started in-process")
+        except Exception:
+            logger.exception(
+                "Failed to start inline sync worker/scheduler; datasource syncing will not run "
+                "unless a separate app.sync.worker process is deployed"
+            )
+
     yield
+
+    for task in background_tasks:
+        task.cancel()
+    for task in background_tasks:
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 app = FastAPI(title="Universal Commerce AI API", version="1.0.0", lifespan=lifespan)
 from app.core.security import get_cors_allow_origins
