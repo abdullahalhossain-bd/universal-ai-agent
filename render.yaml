@@ -5,10 +5,11 @@ services:
   - type: web
     name: universal-ai-agent-1
     runtime: python
-    # The web service loads the sentence-transformers embedding model
-    # (torch) in-process for knowledge/vision features. The free plan's
-    # 512 MB is not enough — use at least 1 GB.
-    plan: 0.5c-1gb
+
+    # 1 CPU / 2 GB RAM
+    # Needed because sentence-transformers + torch run in-process.
+    plan: 1c-2g
+
     region: oregon
 
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
@@ -23,52 +24,66 @@ services:
     envVars:
       - key: APP_ENV
         value: production
+
       - key: ENVIRONMENT
         value: production
+
       - key: AUTO_CREATE_TABLES
         value: "false"
+
       - key: LOG_JSON
         value: "true"
+
       - key: STORAGE_BACKEND
         value: local
+
       - key: DATABASE_URL
         fromDatabase:
           name: universal-ai-agent-db
           property: connectionString
+
       - key: REDIS_URL
         fromService:
           name: universal-ai-agent-redis
           type: keyvalue
           property: connectionString
+
       - key: CREDENTIAL_ENCRYPTION_KEY
         generateValue: true
+
       - key: JWT_SECRET_KEY
         generateValue: true
+
       - key: API_BASE_URL
         value: https://universal-ai-agent-1-2jyk.onrender.com
+
       - key: CORS_ALLOW_ORIGINS
-        # `*` is intentional and safe here: the embeddable chat widget
-        # runs on ARBITRARY merchant storefront domains and calls the
-        # API cross-origin. The API uses allow_credentials=False and
-        # header-based auth (x-api-key / Bearer) — no cookies — so no
-        # CSRF surface exists. Do NOT add credentials to CORS later.
         value: "*"
+
       - key: GROQ_API_KEY_1
         sync: false
+
       - key: GROQ_API_KEY_2
         sync: false
+
       - key: GROQ_API_KEY_3
         sync: false
+
       - key: STRIPE_SECRET_KEY
         sync: false
+
       - key: STRIPE_WEBHOOK_SECRET
         sync: false
+
       - key: STRIPE_PRICE_STARTER
         sync: false
+
       - key: STRIPE_PRICE_GROWTH
         sync: false
+
       - key: STRIPE_PRICE_PRO
         sync: false
+
 
   # ============================================================
   # DURABLE DATASOURCE SYNC WORKER
@@ -76,7 +91,10 @@ services:
   - type: worker
     name: universal-ai-agent-sync-worker
     runtime: python
+
+    # 0.5 CPU / 512 MB RAM
     plan: 0.5c-512mb
+
     region: oregon
 
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
@@ -84,58 +102,68 @@ services:
 
     buildCommand: pip install -r requirements.txt
     startCommand: bash docker/entrypoint.sh python -m app.sync.worker
+
     maxShutdownDelaySeconds: 300
     autoDeployTrigger: checksPass
 
     envVars:
       - key: APP_ENV
         value: production
+
       - key: ENVIRONMENT
         value: production
+
       - key: AUTO_CREATE_TABLES
         value: "false"
+
       - key: LOG_JSON
         value: "true"
+
       - key: DATABASE_URL
         fromDatabase:
           name: universal-ai-agent-db
           property: connectionString
+
       - key: REDIS_URL
         fromService:
           name: universal-ai-agent-redis
           type: keyvalue
           property: connectionString
+
       - key: CREDENTIAL_ENCRYPTION_KEY
         fromService:
           name: universal-ai-agent-1
           type: web
           envVarKey: CREDENTIAL_ENCRYPTION_KEY
+
       - key: JWT_SECRET_KEY
         fromService:
           name: universal-ai-agent-1
           type: web
           envVarKey: JWT_SECRET_KEY
-      # The web service's entrypoint runs `alembic upgrade head` on
-      # boot; the worker must not race it on cold start.
+
+      # Web service handles migrations.
+      # Worker must not race the migration process.
       - key: SKIP_MIGRATIONS
         value: "1"
+
 
   # ============================================================
   # REDIS / KEY VALUE — DURABLE JOB BROKER
   # ============================================================
   - type: keyvalue
     name: universal-ai-agent-redis
+
     plan: 256mb
     region: oregon
 
-    # Queue data must never be evicted. LRU is unsafe for jobs.
+    # Queue data must not be evicted.
     maxmemoryPolicy: noeviction
 
-    # No ipAllowList: the instance stays private to Render's network
-    # (reachable only by this blueprint's web/worker services via the
-    # internal connection string). A 0.0.0.0/0 allow-list would expose
-    # the job queue (and its datasource payloads) to the whole
-    # internet behind a single password.
+    # Empty allow-list = no public internet access.
+    # Render services can still use the internal connection.
+    ipAllowList: []
+
 
   # ============================================================
   # FRONTEND DASHBOARD
@@ -152,9 +180,6 @@ services:
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
 
-    # SPA fallback: the dashboard uses BrowserRouter, so deep links
-    # like /login or /admin/login must serve index.html instead of
-    # Render's 404 page.
     routes:
       - type: rewrite
         source: /*
@@ -169,16 +194,19 @@ services:
           type: web
           envVarKey: API_BASE_URL
 
+
 # ==============================================================
 # POSTGRESQL DATABASE
 # ==============================================================
 databases:
   - name: universal-ai-agent-db
-    # Render's free Postgres is DELETED after 30 days — unacceptable
-    # for a production launch (merchant data loss). The smallest
-    # persistent tier is basic-256mb.
+
     plan: basic-256mb
+
     region: oregon
+
     postgresMajorVersion: "18"
+
     databaseName: universal_ai_agent_db
+
     user: universal_ai_agent_db_user
