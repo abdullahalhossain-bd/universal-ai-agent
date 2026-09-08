@@ -11,17 +11,16 @@ class ProductSearchProvider(SearchProvider):
         return await self.product_service.search(request)
 
     def _build_request(self, query, limit):
-        """Convert either raw text or planner filters into a DB request."""
+        """Convert planner output to a tolerant structured product query."""
         if isinstance(query, ProductSearchRequest):
             return query.model_copy(update={"limit": limit})
 
-        # Pydantic planner models expose model_dump(); keeping this duck-typed
-        # avoids coupling the search layer to one planner implementation.
         if hasattr(query, "model_dump"):
             data = query.model_dump()
+            natural_text = data.get("query") or data.get("product_name")
             return ProductSearchRequest(
-                query=data.get("query"),
-                product_name=data.get("product_name"),
+                query=natural_text or None,
+                product_name=None,
                 brand=data.get("brand"),
                 category=data.get("category"),
                 min_price=data.get("min_price"),
@@ -32,8 +31,4 @@ class ProductSearchProvider(SearchProvider):
             )
 
         text = str(query or "").strip()
-        return ProductSearchRequest(
-            query=text or None,
-            product_name=text or None,
-            limit=limit,
-        )
+        return ProductSearchRequest(query=text or None, limit=limit)
