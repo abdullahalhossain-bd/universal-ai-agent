@@ -1,34 +1,51 @@
 from app.search.base import SearchProvider
 from app.products.query_models import ProductSearchRequest
+from app.search.query_intent import extract_product_intent
 
 
 class ProductSearchProvider(SearchProvider):
     def __init__(self, product_service):
         self.product_service = product_service
 
-    async def search(self, query, limit: int = 10):
-        request = self._build_request(query, limit)
+    async def search(self, query, limit: int = 10, **filters):
+        request = self._build_request(query, limit, filters)
         return await self.product_service.search(request)
 
-    def _build_request(self, query, limit):
-        """Convert planner output to a tolerant structured product query."""
+    def _build_request(self, query, limit, extra_filters=None):
+        """Convert planner or natural language input into structured search."""
+        extra_filters = extra_filters or {}
+
         if isinstance(query, ProductSearchRequest):
-            return query.model_copy(update={"limit": limit})
+            data = query.model_dump(exclude_none=True)
+            data.update({k: v for k, v in extra_filters.items() if v is not None})
+            data["limit"] = limit
+            return ProductSearchRequest(**data)
 
         if hasattr(query, "model_dump"):
-            data = query.model_dump()
-            natural_text = data.get("query") or data.get("product_name")
+            data = query.model_dump(exclude_none=True)
+            # LLMAction stores structured filters under ``filters``. Merge that
+            # nested payload instead of accidentally discarding it.
+            nested = data.pop("filters", {}) or {}
+            merged = {**nested, **data, **extra_filters}
+            natural_text = merged.get("query") or merged.get("product_name")
             return ProductSearchRequest(
                 query=natural_text or None,
                 product_name=None,
-                brand=data.get("brand"),
-                category=data.get("category"),
-                min_price=data.get("min_price"),
-                max_price=data.get("max_price"),
-                in_stock_only=bool(data.get("in_stock", data.get("in_stock_only", False))),
-                sku=data.get("sku"),
-                limit=min(limit, int(data.get("limit", limit) or limit)),
+                brand=merged.get("brand"),
+                category=merged.get("category"),
+                subcategory=merged.get("subcategory"),
+                color=merged.get("color"),
+                size=merged.get("size"),
+                material=merged.get("material"),
+                min_price=merged.get("min_price"),
+                max_price=merged.get("max_price"),
+                in_stock_only=bool(merged.get("in_stock", merged.get("in_stock_only", False))),
+                sku=merged.get("sku"),
+                limit=min(limit, int(merged.get("limit", limit) or limit)),
             )
 
         text = str(query or "").strip()
-        return ProductSearchRequest(query=text or None, limit=limit)
+        intent = extract_product_intent(text)
+        intent.update({k: v for k, v in extra_filters.items() if v is not None})
+        intent["limit"] = limit
+        return ProductSearchRequest(**intent)
