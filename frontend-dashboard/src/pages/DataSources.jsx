@@ -10,6 +10,69 @@ const EMPTY_FORM = {
   table_name: '',
 }
 
+const PRODUCT_FIELDS = [
+  'id',
+  'name',
+  'price',
+  'stock',
+  'image_url',
+  'category',
+  'description',
+  'brand',
+  'sku',
+  'updated_at',
+  'created_at',
+]
+
+const FIELD_LABELS = {
+  id: 'Product ID',
+  name: 'Product Name',
+  price: 'Price',
+  stock: 'Stock',
+  image_url: 'Image URL',
+  category: 'Category',
+  description: 'Description',
+  brand: 'Brand',
+  sku: 'SKU',
+  updated_at: 'Updated At',
+  created_at: 'Created At',
+}
+
+const extractMappingEntries = (result) => {
+  const entries = []
+  const add = (field, data) => {
+    if (!field) return
+    if (typeof data === 'string') {
+      entries.push({ field, suggested_column: data, confidence: 1, status: 'auto_accepted', reason: '' })
+      return
+    }
+    if (data && typeof data === 'object') {
+      entries.push({
+        field,
+        suggested_column: data.suggested_column || data.column || null,
+        confidence: Number(data.confidence || 0),
+        status: data.status || '',
+        reason: data.reason || '',
+        candidates: data.candidates || [],
+      })
+    }
+  }
+
+  Object.entries(result?.auto_accepted || {}).forEach(([field, column]) => add(field, column))
+  ;(result?.needs_confirmation || []).forEach((item) => add(item?.field, item))
+  ;(result?.manual_required || []).forEach((item) => add(item?.field, item))
+  Object.entries(result?.ask || {}).forEach(([field, data]) => add(field, data))
+  Object.entries(result?.manual || {}).forEach(([field, data]) => add(field, data))
+
+  const byField = new Map()
+  entries.forEach((entry) => {
+    if (!byField.has(entry.field) || entry.confidence > byField.get(entry.field).confidence) {
+      byField.set(entry.field, entry)
+    }
+  })
+  return byField
+}
+
 export default function DataSources() {
   const [datasources, setDatasources] = useState(null)
   const [error, setError] = useState('')
@@ -72,8 +135,6 @@ export default function DataSources() {
     setForm({
       name: ds.name || '',
       connector_type: ds.connector_type || 'postgresql',
-      // IMPORTANT: the API intentionally redacts credentials in list/get
-      // responses. Never put that redacted URL into the edit form.
       connection_url: '',
       table_name: ds.table_name || '',
     })
@@ -105,7 +166,6 @@ export default function DataSources() {
     try {
       let result
       if (editingId && !form.connection_url) {
-        // Uses the encrypted credential already stored by the server.
         result = await api.post(`/v1/datasources/${editingId}/discover`, {})
       } else {
         if (!form.connection_url) throw new ApiError(400, 'Enter a connection URL first.')
@@ -128,13 +188,7 @@ export default function DataSources() {
     setError('')
     try {
       if (editingId) {
-        // Leave connection_url out when the merchant does not want to
-        // replace the stored secret. This prevents the redacted URL from
-        // ever being written back to the database.
-        const payload = {
-          name: form.name,
-          table_name: form.table_name || null,
-        }
+        const payload = { name: form.name, table_name: form.table_name || null }
         if (form.connection_url.trim()) payload.connection_url = form.connection_url.trim()
         await api.patch(`/v1/datasources/${editingId}`, payload)
       } else {
@@ -191,7 +245,15 @@ export default function DataSources() {
         columns,
       })
       setMappingResult(result)
-      setMappingChoices({})
+
+      // Seed the editable mapping with the best server suggestion for every
+      // field. The merchant can change any suggestion before saving.
+      const suggestions = {}
+      const entries = extractMappingEntries(result)
+      entries.forEach((entry, field) => {
+        if (entry.suggested_column) suggestions[field] = entry.suggested_column
+      })
+      setMappingChoices(suggestions)
     } catch (err) {
       setMappingError(err instanceof ApiError ? err.detail : 'Could not analyze that table.')
     } finally {
@@ -247,13 +309,11 @@ export default function DataSources() {
 
   const reviewTables = reviewSchema?.tables || []
   const selectedColumns = reviewTables.find((item) => item.table === reviewTable)?.columns || []
+  const mappingEntries = useMemo(() => extractMappingEntries(mappingResult), [mappingResult])
   const mappingFields = useMemo(() => {
-    const result = mappingResult || {}
-    const auto = result.auto_accepted || {}
-    const ask = result.needs_confirmation || result.ask || {}
-    const manual = result.manual || {}
-    return Array.from(new Set([...Object.keys(auto), ...Object.keys(ask), ...Object.keys(manual)]))
-  }, [mappingResult])
+    const dynamic = Array.from(mappingEntries.keys())
+    return Array.from(new Set([...PRODUCT_FIELDS, ...dynamic]))
+  }, [mappingEntries])
 
   return (
     <div>
@@ -372,7 +432,7 @@ export default function DataSources() {
               {reviewingId === ds.id && (
                 <div className="mt-5 rounded-lg border border-line bg-paper p-4">
                   <h4 className="font-display text-sm font-semibold text-text">Column ↔ Product field mapping</h4>
-                  <p className="mt-1 mb-4 text-xs text-muted">ডাটাবেজের column কোন product field হিসেবে ব্যবহার হবে, তা এখানে ঠিক করুন।</p>
+                  <p className="mt-1 mb-4 text-xs text-muted">ডাটাবেজের column কোন product field হিসেবে ব্যবহার হবে, তা এখানে ঠিক করুন। Product ID ও Product Name অবশ্যই থাকবে; বাকি field যতটা সম্ভব automatically suggest করা হবে, এবং আপনি চাইলে সব পরিবর্তন করতে পারবেন।</p>
 
                   {mappingError && <div className="mb-3"><Alert tone="warn">{mappingError}</Alert></div>}
 
@@ -396,21 +456,31 @@ export default function DataSources() {
                         <div className="space-y-3">
                           {mappingFields.map((field) => {
                             const auto = mappingResult.auto_accepted || {}
-                            const current = mappingChoices[field] ?? auto[field] ?? ''
+                            const entry = mappingEntries.get(field)
+                            const current = mappingChoices[field] ?? auto[field] ?? entry?.suggested_column ?? ''
+                            const required = field === 'id' || field === 'name'
+                            const confidence = entry?.confidence
+                            const confidenceText = confidence ? ` · ${Math.round(confidence * 100)}%` : ''
                             return (
                               <div key={field} className="grid gap-2 md:grid-cols-[180px_1fr] md:items-center">
-                                <span className="text-sm font-medium text-text">{field}</span>
-                                <select
-                                  value={current}
-                                  onChange={(e) => setMappingChoices((prev) => ({ ...prev, [field]: e.target.value }))}
-                                  className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-text"
-                                >
-                                  <option value="">Select column</option>
-                                  {selectedColumns.map((column) => {
-                                    const name = typeof column === 'string' ? column : column.name
-                                    return <option key={name} value={name}>{name}</option>
-                                  })}
-                                </select>
+                                <span className="text-sm font-medium text-text">
+                                  {FIELD_LABELS[field] || field}
+                                  {required && <span className="ml-1 text-warn">*</span>}
+                                </span>
+                                <div>
+                                  <select
+                                    value={current}
+                                    onChange={(e) => setMappingChoices((prev) => ({ ...prev, [field]: e.target.value }))}
+                                    className={`w-full rounded-lg border bg-white px-3 py-2 text-sm text-text ${required && !current ? 'border-warn' : 'border-line'}`}
+                                  >
+                                    <option value="">Select column{required ? ' (required)' : ''}</option>
+                                    {selectedColumns.map((column) => {
+                                      const name = typeof column === 'string' ? column : column.name
+                                      return <option key={name} value={name}>{name}</option>
+                                    })}
+                                  </select>
+                                  {entry?.reason && <div className="mt-1 text-xs text-muted">{entry.reason}{confidenceText}</div>}
+                                </div>
                               </div>
                             )
                           })}
