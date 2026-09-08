@@ -1,0 +1,27 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	# Caddy automatically requests and renews a Let's Encrypt
+	# certificate for this domain the first time it starts, as long
+	# as DNS already points here and ports 80/443 are reachable from
+	# the internet — nothing else to configure for HTTPS.
+
+	reverse_proxy api:8000 {
+		# The api container trusts X-Forwarded-For only from
+		# TRUSTED_PROXIES in .env — set that once you know Caddy's
+		# address on the compose network, or leave client-IP rate
+		# limiting keyed on the proxy's own IP if you don't need
+		# per-visitor granularity behind this proxy.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	encode gzip zstd
+
+	log {
+		output stdout
+		format json
+	}
+}
