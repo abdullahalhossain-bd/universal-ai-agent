@@ -52,13 +52,28 @@ def test_mapping_engine_uses_same_resolver_and_prevents_duplicate_columns():
     assert len({item.column for item in suggestions}) == len(suggestions)
 
 
-def test_score_is_high_enough_for_obvious_exact_fields():
-    assert score_column("name", "name") >= 0.90
-    assert score_column("brand", "brand") >= 0.90
-    assert score_column("category", "category") >= 0.90
+def test_global_assignment_beats_greedy_field_order():
+    # A greedy resolver would give ``shared`` to price (0.95) and leave sku
+    # unmatched. The global optimum is price->fallback and sku->shared.
+    candidates = {
+        "price": [
+            {"column": "shared", "score": 0.95},
+            {"column": "fallback", "score": 0.90},
+        ],
+        "sku": [
+            {"column": "shared", "score": 0.94},
+        ],
+    }
+
+    result = resolve_mapping(candidates)
+    resolved = result["resolved"]
+
+    assert resolved["price"]["column"] == "fallback"
+    assert resolved["sku"]["column"] == "shared"
+    assert len({item["column"] for item in resolved.values()}) == len(resolved)
 
 
-def test_ambiguous_alias_does_not_silently_map_below_threshold():
+def test_overlapping_alias_has_one_owner_and_primary_field_wins_tie():
     candidates = {
         "price": [
             {"column": "regular_price", "score": 0.90},
@@ -69,7 +84,31 @@ def test_ambiguous_alias_does_not_silently_map_below_threshold():
     }
 
     result = resolve_mapping(candidates)
-    resolved_columns = [item["column"] for item in result["resolved"].values()]
+    resolved = result["resolved"]
 
-    assert len(resolved_columns) == 1
-    assert len(set(resolved_columns)) == 1
+    assert resolved["price"]["column"] == "regular_price"
+    assert "compare_at_price" not in resolved
+    assert len({item["column"] for item in resolved.values()}) == len(resolved)
+
+
+def test_score_is_high_enough_for_obvious_exact_fields():
+    assert score_column("name", "name") >= 0.90
+    assert score_column("brand", "brand") >= 0.90
+    assert score_column("category", "category") >= 0.90
+
+
+def test_ambiguous_alias_does_not_silently_map_below_threshold():
+    candidates = {
+        "price": [
+            {"column": "regular_price", "score": 0.70},
+        ],
+        "compare_at_price": [
+            {"column": "regular_price", "score": 0.70},
+        ],
+    }
+
+    result = resolve_mapping(candidates)
+
+    assert result["resolved"] == {}
+    assert "price" in result["needs_confirmation"]
+    assert "compare_at_price" in result["needs_confirmation"]
