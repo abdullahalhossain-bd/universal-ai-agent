@@ -1,84 +1,17 @@
-﻿FIELD_ALIASES = {
-
-    "external_id": {
-        "id",
-        "product_id",
-        "product_uuid",
-        "uuid",
-    },
-
-    "sku": {
-        "sku",
-        "product_code",
-        "item_code",
-    },
-
-    "name": {
-        "name",
-        "title",
-        "product_name",
-        "product_title",
-    },
-
-    "price": {
-        "price",
-        "selling_price",
-        "sale_price",
-        "current_price",
-        "selling",
-    },
-
-    "stock_quantity": {
-        "stock",
-        "quantity",
-        "qty",
-        "inventory",
-        "available_quantity",
-    },
-
-    "image_url": {
-        "image",
-        "image_url",
-        "thumbnail",
-        "photo",
-    },
-
-    "description": {
-        "description",
-        "details",
-        "product_description",
-    },
-
-    "category": {
-        "category",
-        "category_name",
-        "product_category",
-    },
-
-    "brand": {
-        "brand",
-        "brand_name",
-        "manufacturer",
-    },
-}
+from app.connectors.field_hints import FIELD_HINTS
+from app.connectors.field_scoring import normalize
 
 
-def classify_field(
-    column_name: str,
-):
+def classify_field(column_name: str):
+    """Return the canonical product field for an obvious source-column alias."""
+    normalized = normalize(column_name)
 
-    normalized = (
-        column_name
-        .strip()
-        .lower()
-    )
+    matches = [
+        field
+        for field, aliases in FIELD_HINTS.items()
+        if normalized in {normalize(alias) for alias in aliases}
+    ]
 
-    for target, aliases in (
-        FIELD_ALIASES.items()
-    ):
-
-        if normalized in aliases:
-
-            return target
-
-    return None
+    # A source column should have one canonical meaning. Ambiguous aliases
+    # (for example a generic 'type') are intentionally not auto-classified.
+    return matches[0] if len(matches) == 1 else None
