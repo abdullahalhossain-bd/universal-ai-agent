@@ -44,6 +44,8 @@ PATTERNS = {
         r"inventory",
         r"available",
         r"qty_available",
+        r"(^|_)left$",
+        r"remaining",
     ],
 
     "image": [
@@ -72,6 +74,7 @@ PATTERNS = {
         r"category",
         r"category_id",
         r"product_category",
+        r"catag",
     ],
 
     "brand": [

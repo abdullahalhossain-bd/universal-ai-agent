@@ -762,8 +762,16 @@ class ChatService:
 
             if filters.in_stock:
 
+                # NULL stock means the merchant hasn't set up
+                # inventory tracking for this product yet — treat
+                # that as "unknown", not "out of stock". Only an
+                # explicit stock of 0 should hide the product from
+                # an in-stock-filtered search (e.g. "laptop ase").
                 query = query.filter(
-                    Product.stock > 0
+                    or_(
+                        Product.stock.is_(None),
+                        Product.stock > 0,
+                    )
                 )
 
         # Planner-cleaned search text
@@ -850,6 +858,12 @@ class ChatService:
             "stoke",
         }
 
+        from app.search.learned_vocabulary import (
+            lookup as _lookup_learned_term,
+            remember_stopword as _remember_stopword,
+            remember_synonym as _remember_synonym,
+        )
+
         raw_terms = []
 
         for term in search_text.split():
@@ -871,6 +885,32 @@ class ChatService:
 
             if cleaned.isdigit():
                 continue
+
+            # ---------------------------------
+            # Learned vocabulary (cross-store)
+            # ---------------------------------
+            # A word previously classified by the LLM fallback below
+            # (e.g. "কয়ডা" -> filler, or a misspelling -> its correct
+            # keyword) is resolved here from cache, for free, before
+            # ever considering another LLM call.
+            learned = _lookup_learned_term(
+                self.db,
+                lowered,
+            )
+
+            if learned is not None:
+
+                if learned.kind == "stopword":
+                    continue
+
+                if (
+                    learned.kind == "synonym"
+                    and learned.resolved_value
+                ):
+                    raw_terms.append(
+                        learned.resolved_value
+                    )
+                    continue
 
             raw_terms.append(cleaned)
 
@@ -924,36 +964,32 @@ class ChatService:
         )
 
         # ---------------------------------
-        # Typo-tolerant LLM fallback
+        # Learn unknown words, then typo-tolerant LLM fallback
         # ---------------------------------
         #
         # If the raw terms produced zero name/description/category
-        # matches, the term is likely misspelled (e.g. "leptop"),
-        # a synonym we don't have in SEARCH_SYNONYMS, or a Banglish
-        # transliteration. Ask the LLM to normalize it to a plain
-        # product keyword and retry once with that. This never runs
-        # when raw_terms is empty (no product-ish text was typed at
-        # all) or when a Groq key isn't configured — see
-        # _llm_correct_search_term.
+        # matches, find which individual term(s) have zero hits on
+        # their own (store-wide, not AND-ed with the others) and ask
+        # the LLM to classify each one ONCE: is it a filler/quantity
+        # word (e.g. "কয়ডা" = "koyta" = "how many") that carries no
+        # product meaning, or a misspelled/dialectal product keyword?
+        # The classification is cached globally in learned_vocabulary
+        # (see app/search/learned_vocabulary.py) so no store's chatbot
+        # — including ones added later — ever has to ask an LLM about
+        # that exact word again. This never runs when raw_terms is
+        # empty or a Groq key isn't configured.
 
         if not results and raw_terms:
 
-            corrected = await self._llm_correct_search_term(
-                store_id,
-                " ".join(raw_terms),
-            )
+            zero_hit_terms = []
 
-            if (
-                corrected
-                and corrected.lower()
-                not in {t.lower() for t in raw_terms}
-            ):
+            for term in raw_terms:
 
-                retry_group = expand_terms(
-                    [corrected]
+                term_group = (
+                    expand_terms([term]) or [term]
                 )
 
-                retry_condition = or_(
+                single_condition = or_(
                     *[
                         or_(
                             Product.name.ilike(
@@ -966,17 +1002,95 @@ class ChatService:
                                 f"%{synonym}%"
                             ),
                         )
-                        for synonym in retry_group
+                        for synonym in term_group
                     ]
                 )
+
+                hit = (
+                    self.db.query(Product)
+                    .filter(Product.store_id == store_id)
+                    .filter(single_condition)
+                    .first()
+                )
+
+                if hit is None:
+                    zero_hit_terms.append(term)
+
+            survivors = []
+
+            for term in raw_terms:
+
+                if term not in zero_hit_terms:
+                    survivors.append(term)
+                    continue
+
+                classification = (
+                    await self._classify_unknown_term(
+                        store_id,
+                        term,
+                    )
+                )
+
+                if classification is None:
+                    # LLM unavailable/failed — keep the original
+                    # term rather than silently dropping it.
+                    survivors.append(term)
+                    continue
+
+                kind, value = classification
+
+                if kind == "stopword":
+                    _remember_stopword(self.db, term)
+                    continue
+
+                _remember_synonym(self.db, term, value)
+                survivors.append(value)
+
+            if survivors and {
+                s.lower() for s in survivors
+            } != {
+                t.lower() for t in raw_terms
+            }:
+
+                retry_group_conditions = []
+
+                for survivor in survivors:
+
+                    survivor_group = (
+                        expand_terms([survivor])
+                        or [survivor]
+                    )
+
+                    retry_group_conditions.append(
+                        or_(
+                            *[
+                                or_(
+                                    Product.name.ilike(
+                                        f"%{synonym}%"
+                                    ),
+                                    Product.description.ilike(
+                                        f"%{synonym}%"
+                                    ),
+                                    Product.category.ilike(
+                                        f"%{synonym}%"
+                                    ),
+                                )
+                                for synonym in survivor_group
+                            ]
+                        )
+                    )
 
                 retry_query = (
                     self.db.query(Product)
                     .filter(
                         Product.store_id == store_id
                     )
-                    .filter(retry_condition)
                 )
+
+                if retry_group_conditions:
+                    retry_query = retry_query.filter(
+                        and_(*retry_group_conditions)
+                    )
 
                 if filters:
 
@@ -992,7 +1106,10 @@ class ChatService:
 
                     if filters.in_stock:
                         retry_query = retry_query.filter(
-                            Product.stock > 0
+                            or_(
+                                Product.stock.is_(None),
+                                Product.stock > 0,
+                            )
                         )
 
                 results = (
@@ -1001,6 +1118,83 @@ class ChatService:
                     .limit(10)
                     .all()
                 )
+
+            # ---------------------------------
+            # Last-resort whole-phrase correction
+            # ---------------------------------
+            # Covers the case where every term looked plausible on
+            # its own (so nothing was classified as a filler/synonym
+            # above) but the phrase as a whole still didn't match —
+            # e.g. a single badly-misspelled product word.
+
+            if not results:
+
+                corrected = await self._llm_correct_search_term(
+                    store_id,
+                    " ".join(survivors or raw_terms),
+                )
+
+                if (
+                    corrected
+                    and corrected.lower()
+                    not in {t.lower() for t in raw_terms}
+                ):
+
+                    retry_group = expand_terms(
+                        [corrected]
+                    )
+
+                    retry_condition = or_(
+                        *[
+                            or_(
+                                Product.name.ilike(
+                                    f"%{synonym}%"
+                                ),
+                                Product.description.ilike(
+                                    f"%{synonym}%"
+                                ),
+                                Product.category.ilike(
+                                    f"%{synonym}%"
+                                ),
+                            )
+                            for synonym in retry_group
+                        ]
+                    )
+
+                    retry_query = (
+                        self.db.query(Product)
+                        .filter(
+                            Product.store_id == store_id
+                        )
+                        .filter(retry_condition)
+                    )
+
+                    if filters:
+
+                        if filters.min_price is not None:
+                            retry_query = retry_query.filter(
+                                Product.price >= filters.min_price
+                            )
+
+                        if filters.max_price is not None:
+                            retry_query = retry_query.filter(
+                                Product.price <= filters.max_price
+                            )
+
+                        if filters.in_stock:
+                            retry_query = retry_query.filter(
+                                or_(
+                                    Product.stock.is_(None),
+                                    Product.stock > 0,
+                                )
+                            )
+
+                    results = (
+                        retry_query
+                        .order_by(Product.name.asc())
+                        .limit(10)
+                        .all()
+                    )
 
         return results
 
@@ -1045,6 +1239,105 @@ class ChatService:
                 exc_info=True,
             )
             return True
+
+    async def _classify_unknown_term(
+        self,
+        store_id: str,
+        term: str,
+    ) -> tuple[str, str | None] | None:
+        """
+        Classify a single word that matched nothing in the catalog,
+        so the result can be cached globally (see
+        app/search/learned_vocabulary.py) and never re-asked of the
+        LLM again, by any store's chatbot.
+
+        Returns:
+            ("stopword", None)   — the word is filler/grammar/quantity
+                                    vocabulary with no product meaning
+                                    (e.g. "কয়ডা" = "how many").
+            ("synonym", keyword) — the word IS product-related but
+                                    misspelled/dialectal; `keyword` is
+                                    the corrected search term.
+            None                 — no Groq key configured, no budget
+                                    headroom, or the call failed;
+                                    callers should fall back to their
+                                    prior (non-classifying) behavior.
+        """
+
+        if not self._has_budget_headroom(store_id):
+            return None
+
+        try:
+            response_service = self._shared_llm_stack()
+        except RuntimeError:
+            return None
+
+        generator = getattr(
+            response_service,
+            "llm",
+            None,
+        )
+
+        if generator is None:
+            return None
+
+        try:
+            result = await generator.provider_router.generate(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "A user typed this single word into an "
+                            "ecommerce chatbot (Bangla, Banglish, or "
+                            "English) and it matched no product name, "
+                            "description, or category. Decide which "
+                            "of these it is:\n"
+                            "1) A FILLER word — a question, quantity, "
+                            "or grammar word with no product meaning "
+                            "(e.g. \"koyta\"/\"কয়ডা\" meaning \"how "
+                            "many\", or \"ase\" meaning \"is there\").\n"
+                            "2) A PRODUCT keyword — a misspelled or "
+                            "dialectal product/category name (e.g. "
+                            "\"leptop\" for \"laptop\").\n\n"
+                            "Reply with EXACTLY one line and nothing "
+                            "else: the single word FILLER if case (1), "
+                            "or the corrected product keyword (one "
+                            "word or short phrase, no punctuation, no "
+                            "explanation) if case (2)."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": term,
+                    },
+                ],
+            )
+        except Exception:
+            logger.warning(
+                "LLM term-classification fallback failed",
+                exc_info=True,
+            )
+            return None
+
+        reply = (result or {}).get("text")
+
+        if not reply:
+            return None
+
+        candidate = reply.strip().strip(
+            ".,!?;:()[]{}\"'"
+        )
+
+        if not candidate:
+            return None
+
+        if candidate.strip().upper() == "FILLER":
+            return ("stopword", None)
+
+        if len(candidate.split()) > 4:
+            return None
+
+        return ("synonym", candidate)
 
     async def _llm_correct_search_term(
         self,

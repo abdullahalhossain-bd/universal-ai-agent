@@ -35,6 +35,9 @@ FIELD_HINTS = {
     "stock": {
         "stock", "stock_quantity", "quantity", "qty", "inventory", "available",
         "available_qty", "available_quantity", "qty_available", "inventory_quantity",
+        "left", "qty_left", "left_qty", "stock_left", "remaining", "remaining_qty",
+        "quantity_left", "quantity_remaining", "in_stock_qty", "stock_count",
+        "product_left", "items_left",
     },
     "availability": {
         "availability", "available_status", "stock_status", "availability_status",
@@ -60,6 +63,7 @@ FIELD_HINTS = {
     },
     "category": {
         "category", "category_name", "product_category", "product_type", "type",
+        "catag", "catagory", "product_catag", "cat",
     },
     "subcategory": {
         "subcategory", "sub_category", "sub_category_name", "category_level_2",
