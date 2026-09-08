@@ -5,85 +5,70 @@ services:
   - type: web
     name: universal-ai-agent-1
     runtime: python
-
-    # 1 CPU / 2 GB RAM
-    # Needed because sentence-transformers + torch run in-process.
     plan: 1c-2g
-
     region: oregon
-
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
     branch: main
-
     buildCommand: pip install -r requirements.txt
     startCommand: bash docker/entrypoint.sh python -m app.run
-
     healthCheckPath: /ready
     autoDeployTrigger: checksPass
+
+    # Local uploads are persisted on Render's SSD. This keeps the
+    # current local-storage implementation durable without requiring
+    # merchant S3 credentials. The disk also makes the single-instance
+    # constraint explicit; migrate to S3/R2 before horizontal scaling.
+    disk:
+      name: universal-ai-agent-media
+      mountPath: /opt/render/project/src/data/chat-images
+      sizeGB: 10
 
     envVars:
       - key: APP_ENV
         value: production
-
       - key: ENVIRONMENT
         value: production
-
       - key: AUTO_CREATE_TABLES
         value: "false"
-
       - key: LOG_JSON
         value: "true"
-
       - key: STORAGE_BACKEND
         value: local
-
       - key: DATABASE_URL
         fromDatabase:
           name: universal-ai-agent-db
           property: connectionString
-
       - key: REDIS_URL
         fromService:
           name: universal-ai-agent-redis
           type: keyvalue
           property: connectionString
-
       - key: CREDENTIAL_ENCRYPTION_KEY
         generateValue: true
-
       - key: JWT_SECRET_KEY
         generateValue: true
-
+      - key: JWT_ACCESS_TOKEN_MINUTES
+        value: "60"
       - key: API_BASE_URL
         value: https://universal-ai-agent-1-2jyk.onrender.com
-
       - key: CORS_ALLOW_ORIGINS
         value: "*"
-
       - key: GROQ_API_KEY_1
         sync: false
-
       - key: GROQ_API_KEY_2
         sync: false
-
       - key: GROQ_API_KEY_3
         sync: false
-
       - key: STRIPE_SECRET_KEY
         sync: false
-
       - key: STRIPE_WEBHOOK_SECRET
         sync: false
-
       - key: STRIPE_PRICE_STARTER
         sync: false
-
       - key: STRIPE_PRICE_GROWTH
         sync: false
-
       - key: STRIPE_PRICE_PRO
         sync: false
-
 
   # ============================================================
   # DURABLE DATASOURCE SYNC WORKER
@@ -91,79 +76,99 @@ services:
   - type: worker
     name: universal-ai-agent-sync-worker
     runtime: python
-
-    # 0.5 CPU / 512 MB RAM
     plan: 0.5c-512mb
-
     region: oregon
-
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
     branch: main
-
     buildCommand: pip install -r requirements.txt
     startCommand: bash docker/entrypoint.sh python -m app.sync.worker
-
     maxShutdownDelaySeconds: 300
     autoDeployTrigger: checksPass
-
     envVars:
       - key: APP_ENV
         value: production
-
       - key: ENVIRONMENT
         value: production
-
       - key: AUTO_CREATE_TABLES
         value: "false"
-
       - key: LOG_JSON
         value: "true"
-
       - key: DATABASE_URL
         fromDatabase:
           name: universal-ai-agent-db
           property: connectionString
-
       - key: REDIS_URL
         fromService:
           name: universal-ai-agent-redis
           type: keyvalue
           property: connectionString
-
       - key: CREDENTIAL_ENCRYPTION_KEY
         fromService:
           name: universal-ai-agent-1
           type: web
           envVarKey: CREDENTIAL_ENCRYPTION_KEY
-
       - key: JWT_SECRET_KEY
         fromService:
           name: universal-ai-agent-1
           type: web
           envVarKey: JWT_SECRET_KEY
-
-      # Web service handles migrations.
-      # Worker must not race the migration process.
       - key: SKIP_MIGRATIONS
         value: "1"
 
+  # ============================================================
+  # PERIODIC DATASOURCE SYNC SCHEDULER
+  # ============================================================
+  - type: worker
+    name: universal-ai-agent-sync-scheduler
+    runtime: python
+    plan: 0.5c-512mb
+    region: oregon
+    repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash docker/entrypoint.sh python -m app.sync.scheduler
+    maxShutdownDelaySeconds: 300
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: ENVIRONMENT
+        value: production
+      - key: AUTO_CREATE_TABLES
+        value: "false"
+      - key: LOG_JSON
+        value: "true"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: universal-ai-agent-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: universal-ai-agent-redis
+          type: keyvalue
+          property: connectionString
+      - key: CREDENTIAL_ENCRYPTION_KEY
+        fromService:
+          name: universal-ai-agent-1
+          type: web
+          envVarKey: CREDENTIAL_ENCRYPTION_KEY
+      - key: JWT_SECRET_KEY
+        fromService:
+          name: universal-ai-agent-1
+          type: web
+          envVarKey: JWT_SECRET_KEY
+      - key: SKIP_MIGRATIONS
+        value: "1"
 
   # ============================================================
   # REDIS / KEY VALUE — DURABLE JOB BROKER
   # ============================================================
   - type: keyvalue
     name: universal-ai-agent-redis
-
     plan: 256mb
     region: oregon
-
-    # Queue data must not be evicted.
     maxmemoryPolicy: noeviction
-
-    # Empty allow-list = no public internet access.
-    # Render services can still use the internal connection.
     ipAllowList: []
-
 
   # ============================================================
   # FRONTEND DASHBOARD
@@ -171,22 +176,16 @@ services:
   - type: web
     name: universal-ai-agent-dashboard
     runtime: static
-
     repo: https://github.com/abdullahalhossain-bd/universal-ai-agent
     branch: main
-
     rootDir: frontend-dashboard
-
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
-
     routes:
       - type: rewrite
         source: /*
         destination: /index.html
-
     autoDeployTrigger: checksPass
-
     envVars:
       - key: VITE_API_BASE_URL
         fromService:
@@ -194,19 +193,13 @@ services:
           type: web
           envVarKey: API_BASE_URL
 
-
 # ==============================================================
 # POSTGRESQL DATABASE
 # ==============================================================
 databases:
   - name: universal-ai-agent-db
-
     plan: basic-256mb
-
     region: oregon
-
-    postgresMajorVersion: "18"
-
+    postgresMajorVersion: "16"
     databaseName: universal_ai_agent_db
-
     user: universal_ai_agent_db_user
