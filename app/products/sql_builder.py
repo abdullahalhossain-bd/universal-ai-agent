@@ -23,6 +23,7 @@ class ProductSQLBuilder:
 
         self._add_exact_filter(conditions, params, request.brand, "brand")
         self._add_synonym_filter(conditions, params, request.category, "category", "category_value")
+        self._add_synonym_filter(conditions, params, request.subcategory, "subcategory", "subcategory_value")
         self._add_exact_filter(conditions, params, request.sku, "sku")
         self._add_synonym_filter(conditions, params, request.color, "color", "color_value")
         self._add_exact_filter(conditions, params, request.size, "size")
