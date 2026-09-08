@@ -68,11 +68,9 @@ def build_candidate_mapping(columns: list[dict]):
 def _eligible_candidates(candidate_mapping: dict, auto_threshold: float):
     """Return candidates that are strong enough for automatic assignment.
 
-    Exact canonical names/aliases are eligible at the strong alias threshold.
-    Lower-confidence candidates need both the configured threshold and a clear
-    margin over the next candidate for that field. This keeps weak fuzzy matches
-    out of automatic mapping while allowing the global allocator to resolve
-    genuine column contention.
+    Strong canonical names/aliases remain eligible even when another field also
+    wants the same column. The global allocator resolves that contention. Weak
+    fuzzy candidates still require the configured threshold and a clear margin.
     """
     eligible = {}
 
@@ -101,12 +99,11 @@ def _eligible_candidates(candidate_mapping: dict, auto_threshold: float):
 
 
 def _maximum_weight_matching(eligible: dict):
-    """Find a deterministic maximum-weight field -> source-column assignment.
+    """Find an exact maximum-weight one-to-one field/column assignment.
 
-    This is a dependency-free weighted bipartite matcher. For normal ecommerce
-    schemas the contested candidate graph is small, so an exact bitmask dynamic
-    program finds the global optimum rather than making a greedy local choice.
-    A deterministic edge-order fallback protects against pathological graphs.
+    Hungarian matching is implemented locally to avoid adding a dependency just
+    for datasource mapping. Dummy columns represent an intentionally unresolved
+    field, so the optimizer can choose fewer mappings when that is safer.
     """
     fields = [field for field, candidates in eligible.items() if candidates]
     columns = sorted({candidate["column"] for candidates in eligible.values() for candidate in candidates})
@@ -114,89 +111,93 @@ def _maximum_weight_matching(eligible: dict):
     if not fields or not columns:
         return {}
 
-    if len(columns) <= 22:
-        column_index = {column: index for index, column in enumerate(columns)}
-        options = {}
-        for field in fields:
-            options[field] = [
-                (column_index[candidate["column"]], candidate["score"])
-                for candidate in eligible[field]
-            ]
+    # We need at least one dummy column per field so every field can remain
+    # unresolved when no real source column is worth assigning to it.
+    real_column_count = len(columns)
+    dummy_count = len(fields)
+    matrix_columns = columns + [f"__unmatched_{index}" for index in range(dummy_count)]
+    column_index = {column: index for index, column in enumerate(matrix_columns)}
 
-        memo = {}
-        unmatched_token = len(columns) + 1
+    # Hungarian algorithm solves a minimum-cost assignment for n <= m. Ineligible
+    # real edges receive a very large cost; dummy edges have zero cost.
+    n = len(fields)
+    m = len(matrix_columns)
+    inf = 10**9
+    costs = [[0.0] * (m + 1) for _ in range(n + 1)]
+    score_lookup = {}
 
-        def better(left, right):
-            if right is None:
-                return True
-            left_score, left_count, left_key = left
-            right_score, right_count, right_key = right
-            if left_score != right_score:
-                return left_score > right_score
-            if left_count != right_count:
-                return left_count > right_count
-            return left_key < right_key
+    for row, field in enumerate(fields, start=1):
+        candidates_by_column = {candidate["column"]: candidate["score"] for candidate in eligible[field]}
+        for column, index in column_index.items():
+            col = index + 1
+            if column.startswith("__unmatched_"):
+                costs[row][col] = 0.0
+                continue
+            score = candidates_by_column.get(column)
+            if score is None:
+                costs[row][col] = inf
+                continue
+            # Scores are rounded to 4 decimals, so this tiny priority bonus only
+            # breaks genuine score ties in favor of primary product fields.
+            weight = score + FIELD_PRIORITY.get(field, 0) * 1e-7
+            costs[row][col] = -weight
+            score_lookup[(field, column)] = score
 
-        def solve(index, used_mask):
-            key = (index, used_mask)
-            if key in memo:
-                return memo[key]
-            if index == len(fields):
-                result = (0.0, 0, ())
-                memo[key] = result
-                return result
+    # Standard 1-indexed Hungarian implementation.
+    u = [0.0] * (n + 1)
+    v = [0.0] * (m + 1)
+    p = [0] * (m + 1)
+    way = [0] * (m + 1)
 
-            field = fields[index]
-            best_tail = solve(index + 1, used_mask)
-            best = (
-                best_tail[0],
-                best_tail[1],
-                (unmatched_token,) + best_tail[2],
-            )
-
-            for column_idx, score in options[field]:
-                bit = 1 << column_idx
-                if used_mask & bit:
+    for i in range(1, n + 1):
+        p[0] = i
+        j0 = 0
+        minv = [inf] * (m + 1)
+        used = [False] * (m + 1)
+        while True:
+            used[j0] = True
+            i0 = p[j0]
+            delta = inf
+            j1 = 0
+            for j in range(1, m + 1):
+                if used[j]:
                     continue
-                tail = solve(index + 1, used_mask | bit)
-                priority_bonus = FIELD_PRIORITY.get(field, 0) * 1e-7
-                candidate = (
-                    score + tail[0] + priority_bonus,
-                    1 + tail[1],
-                    (column_idx,) + tail[2],
-                )
-                if better(candidate, best):
-                    best = candidate
+                cur = costs[i0][j] - u[i0] - v[j]
+                if cur < minv[j]:
+                    minv[j] = cur
+                    way[j] = j0
+                if minv[j] < delta:
+                    delta = minv[j]
+                    j1 = j
+            for j in range(m + 1):
+                if used[j]:
+                    u[p[j]] += delta
+                    v[j] -= delta
+                else:
+                    minv[j] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while True:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+            if j0 == 0:
+                break
 
-            memo[key] = best
-            return best
-
-        assignment = solve(0, 0)[2]
-        return {
-            field: columns[column_idx]
-            for field, column_idx in zip(fields, assignment)
-            if column_idx != unmatched_token
-        }
-
-    # Defensive fallback for very large candidate graphs. It still guarantees
-    # one-to-one ownership and is deterministic, while normal ecommerce schemas
-    # use the exact path above.
-    edges = []
-    for field in fields:
-        for candidate in eligible[field]:
-            edges.append((candidate["score"], FIELD_PRIORITY.get(field, 0), field, candidate["column"]))
-    edges.sort(key=lambda item: (item[0], item[1], item[2], item[3]), reverse=True)
-
-    resolved = {}
-    used_columns = set()
-    used_fields = set()
-    for score, _priority, field, column in edges:
-        if field in used_fields or column in used_columns:
+    assignment = {}
+    for j in range(1, m + 1):
+        row = p[j]
+        if row == 0 or row > n:
             continue
-        resolved[field] = column
-        used_fields.add(field)
-        used_columns.add(column)
-    return resolved
+        field = fields[row - 1]
+        column = matrix_columns[j - 1]
+        if column in score_lookup and score_lookup[(field, column)] >= 0:
+            assignment[field] = column
+
+    # The optimizer can choose a dummy column for every field; only real source
+    # columns are returned, guaranteeing global one-to-one ownership.
+    return assignment
 
 
 def resolve_mapping(
