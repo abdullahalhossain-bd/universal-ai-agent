@@ -17,18 +17,12 @@ os.environ.setdefault(
 )
 os.environ.setdefault("GROQ_API_KEY", "test-key")
 os.environ.setdefault("AUTO_CREATE_TABLES", "false")
-# Datasource tests deliberately point connectors at the local test
-# database; production keeps this OFF so the SSRF guard still refuses
-# private hosts there.
 os.environ.setdefault("ALLOW_LOCAL_DATASOURCE_HOSTS", "true")
-# Fixed 32-byte url-safe-base64 Fernet key, test-only — never reuse a
-# committed key like this for a real environment.
 os.environ.setdefault(
     "CREDENTIAL_ENCRYPTION_KEY",
     "1Q5CMAJ3S3iemRmjauMWsPLeJmpY-VPO0J_9jHijTxs=",
 )
 
-# Avoid IPv6 (::1) resolving to a different Postgres than Docker on 127.0.0.1
 if "DATABASE_URL" in os.environ:
     os.environ["DATABASE_URL"] = (
         os.environ["DATABASE_URL"]
@@ -45,7 +39,7 @@ if "REDIS_URL" in os.environ:
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.markers import (  # noqa: E402
+from tests.markers import (
     POSTGRES_AVAILABLE,
     REDIS_AVAILABLE,
     requires_postgres,
@@ -72,6 +66,26 @@ def _no_signup_rate_limit(monkeypatch):
     monkeypatch.setattr(
         auth_routes, "enforce_signup_rate_limit", _allow
     )
+
+
+@pytest.fixture(autouse=True)
+def _schema_isolated_migration_harness(monkeypatch):
+    """Run migration tests in throwaway schemas, not throwaway databases."""
+    try:
+        import tests.test_migrations as migration_tests
+    except ImportError:
+        return
+
+    from tests.migration_harness import create_scratch_schema, drop_scratch_schema
+
+    monkeypatch.setattr(
+        migration_tests, "_create_scratch_db", create_scratch_schema
+    )
+    monkeypatch.setattr(
+        migration_tests, "_drop_scratch_db",
+        lambda _base_url, scratch_url: drop_scratch_schema(scratch_url),
+    )
+
 
 __all__ = [
     "POSTGRES_AVAILABLE",
