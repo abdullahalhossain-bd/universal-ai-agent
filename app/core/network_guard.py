@@ -5,14 +5,7 @@ This module validates SQLAlchemy database connection URLs
 (postgresql://..., mysql://...) and prevents connections to
 private/internal/loopback/link-local addresses.
 
-For local development only, set:
-
-    ALLOW_LOCAL_DATASOURCE_HOSTS=true
-
-This allows localhost/private addresses so a locally running
-merchant database can be used during development.
-
-In production, do NOT enable ALLOW_LOCAL_DATASOURCE_HOSTS.
+For local development only, set ALLOW_LOCAL_DATASOURCE_HOSTS=true.
 """
 
 from __future__ import annotations
@@ -35,10 +28,6 @@ _LOCAL_NAMES = frozenset(
 
 
 def _is_dangerous_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    """
-    Return True when an IP belongs to a private/internal or otherwise
-    unsafe address range.
-    """
     return (
         ip.is_private
         or ip.is_loopback
@@ -51,53 +40,40 @@ def _is_dangerous_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
 
 def _looks_dangerous_literal(host: str) -> bool:
     """
-    Fast-path check for hosts that Python's ipaddress module can parse
-    directly as IPv4/IPv6 literals.
+    Recognize normal IP literals plus legacy integer/hex IPv4 forms.
 
-    Numeric hostname encodings that ipaddress does not understand are
-    intentionally handled later by socket.getaddrinfo().
+    Some URL/network parsers accept 127.0.0.1 as 2130706433 or
+    0x7f000001. Python's ipaddress module intentionally does not treat
+    those strings as IPv4 literals, so normalize them explicitly before
+    falling through to DNS resolution.
     """
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return False
+    candidates: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
 
-    return _is_dangerous_ip(ip)
+    try:
+        candidates.append(ipaddress.ip_address(host))
+    except ValueError:
+        normalized = host.lower()
+        try:
+            if host.isdigit():
+                value = int(host, 10)
+                if 0 <= value <= 0xFFFFFFFF:
+                    candidates.append(ipaddress.IPv4Address(value))
+            elif normalized.startswith("0x"):
+                value = int(normalized, 16)
+                if 0 <= value <= 0xFFFFFFFF:
+                    candidates.append(ipaddress.IPv4Address(value))
+        except ValueError:
+            pass
+
+    return any(_is_dangerous_ip(ip) for ip in candidates)
 
 
 def local_hosts_allowed() -> bool:
-    """
-    Public alias of the development-only escape hatch so other
-    modules (e.g. the knowledge website crawler) enforce the SAME
-    toggle instead of growing a second, divergent implementation.
-
-    Truthy values:
-        1
-        true
-        yes
-        on
-
-    Production should leave this unset/false.
-    """
     return _local_hosts_allowed()
 
 
 def _local_hosts_allowed() -> bool:
-    """
-    Development-only escape hatch.
-
-    Truthy values:
-        1
-        true
-        yes
-        on
-
-    Production should leave this unset/false.
-    """
-    return os.getenv(
-        "ALLOW_LOCAL_DATASOURCE_HOSTS",
-        "",
-    ).strip().lower() in {
+    return os.getenv("ALLOW_LOCAL_DATASOURCE_HOSTS", "").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -106,139 +82,54 @@ def _local_hosts_allowed() -> bool:
 
 
 def assert_safe_connection_host(connection_url: str) -> None:
-    """
-    Validate a merchant-supplied database connection URL.
-
-    By default, the function rejects:
-
-    - localhost
-    - .localhost domains
-    - loopback addresses
-    - private addresses
-    - link-local addresses
-    - reserved addresses
-    - multicast addresses
-    - unspecified addresses
-    - public-looking hostnames resolving to private/internal IPs
-
-    This protects the application from SSRF-style attacks through
-    merchant-supplied database connection URLs.
-
-    For local development only:
-
-        ALLOW_LOCAL_DATASOURCE_HOSTS=true
-
-    skips the private/local address rejection.
-
-    DNS resolution is still performed before the local-development
-    shortcut so malformed/unresolvable hosts are still rejected.
-    """
-
+    """Reject merchant-supplied database URLs targeting unsafe hosts."""
     if not connection_url:
         raise ValueError("connection_url is required")
 
     parsed = urlparse(connection_url)
     host = parsed.hostname
-
     if not host:
-        raise ValueError(
-            "connection_url has no parseable host"
-        )
+        raise ValueError("connection_url has no parseable host")
 
     host = host.rstrip(".").lower()
-
     allow_local = _local_hosts_allowed()
 
-    # ---------------------------------------------------------------
-    # Explicit localhost hostname protection
-    # ---------------------------------------------------------------
-
-    if (
-        not allow_local
-        and (
-            host in _LOCAL_NAMES
-            or host.endswith(".localhost")
-        )
+    if not allow_local and (
+        host in _LOCAL_NAMES or host.endswith(".localhost")
     ):
-        raise ValueError(
-            f"Refusing to connect to local host: {host}"
-        )
-
-    # ---------------------------------------------------------------
-    # Literal IP protection
-    # ---------------------------------------------------------------
+        raise ValueError(f"Refusing to connect to local host: {host}")
 
     if not allow_local and _looks_dangerous_literal(host):
         raise ValueError(
             f"Refusing to connect to private/internal address: {host}"
         )
 
-    # ---------------------------------------------------------------
-    # DNS resolution
-    #
-    # This is important because a hostname such as:
-    #
-    #     database.example.com
-    #
-    # could resolve to:
-    #
-    #     127.0.0.1
-    #     10.x.x.x
-    #     172.16.x.x
-    #     192.168.x.x
-    #     169.254.x.x
-    #
-    # and bypass a simple hostname string check.
-    # ---------------------------------------------------------------
-
     try:
-        infos = socket.getaddrinfo(
-            host,
-            None,
-            type=socket.SOCK_STREAM,
-        )
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
-        raise ValueError(
-            f"Cannot resolve host {host!r}: {exc}"
-        ) from exc
-
-    # ---------------------------------------------------------------
-    # Local-development mode
-    #
-    # We already successfully parsed and resolved the hostname.
-    # In development mode we intentionally allow local/private
-    # addresses.
-    # ---------------------------------------------------------------
+        raise ValueError(f"Cannot resolve host {host!r}: {exc}") from exc
 
     if allow_local:
         return
 
-    # ---------------------------------------------------------------
-    # Production/default protection
-    # ---------------------------------------------------------------
-
     for info in infos:
         ip_text = info[4][0]
-
         try:
             ip = ipaddress.ip_address(ip_text)
         except ValueError as exc:
             raise ValueError(
-                f"Unparseable resolved address "
-                f"{ip_text!r} for host {host!r}"
+                f"Unparseable resolved address {ip_text!r} for host {host!r}"
             ) from exc
 
         if _is_dangerous_ip(ip):
             raise ValueError(
-                f"Host {host!r} resolves to a "
-                f"private/internal address ({ip}); "
+                f"Host {host!r} resolves to a private/internal address ({ip}); "
                 "refusing to connect"
             )
 
 
 def assert_safe_http_url(url: str) -> None:
     """Reject unsafe merchant REST URLs before an outbound request."""
-
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("REST URL must use http or https")
