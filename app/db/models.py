@@ -52,6 +52,24 @@ class Product(Base):
     image_url: Mapped[str | None] = mapped_column("main_image", Text, nullable=True)
     product_url: Mapped[str | None] = mapped_column("product_url", Text, nullable=True)
 
+class SearchLearning(Base):
+    __tablename__ = "search_learnings"
+    __table_args__ = (
+        Index("uq_search_learnings_store_kind_query", "store_id", "kind", "source_query", unique=True),
+        Index("ix_search_learnings_store", "store_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(50), nullable=False, default="product_correction", server_default="product_correction")
+    source_query: Mapped[str] = mapped_column(String(255), nullable=False)
+    corrected_term: Mapped[str] = mapped_column(String(255), nullable=False)
+    source: Mapped[str] = mapped_column(String(30), nullable=False, default="groq", server_default="groq")
+    hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now())
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
 class DataSource(Base):
     __tablename__ = "datasources"
     __table_args__ = (Index("ix_datasources_store_active", "store_id", "active"),)
@@ -78,17 +96,3 @@ class ChatImage(Base):
     store_id: Mapped[str] = mapped_column(String(36), ForeignKey("stores.id"), nullable=False, index=True)
     conversation_id: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
     user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    storage_key: Mapped[str] = mapped_column(Text, nullable=False)
-    mime_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    size: Mapped[int] = mapped_column(Integer, nullable=False)
-    image_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, server_default=func.now())
-
-class PlatformAdmin(Base):
-    __tablename__ = "platform_admins"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    session_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, server_default=func.now())
-    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
