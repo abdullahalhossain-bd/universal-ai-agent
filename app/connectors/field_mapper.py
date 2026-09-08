@@ -103,12 +103,10 @@ def _eligible_candidates(candidate_mapping: dict, auto_threshold: float):
 def _maximum_weight_matching(eligible: dict):
     """Find a deterministic maximum-weight field -> source-column assignment.
 
-    This is a small, dependency-free weighted bipartite matcher. The search is
-    performed over the sparse candidate graph using dynamic programming over
-    source-column bitmasks. Ecommerce schemas normally expose far fewer mapped
-    columns than the total canonical vocabulary, so this gives an exact global
-    optimum without adding a runtime dependency. For unusually wide graphs,
-    the algorithm falls back to deterministic global edge ordering.
+    This is a dependency-free weighted bipartite matcher. For normal ecommerce
+    schemas the contested candidate graph is small, so an exact bitmask dynamic
+    program finds the global optimum rather than making a greedy local choice.
+    A deterministic edge-order fallback protects against pathological graphs.
     """
     fields = [field for field, candidates in eligible.items() if candidates]
     columns = sorted({candidate["column"] for candidates in eligible.values() for candidate in candidates})
@@ -116,8 +114,6 @@ def _maximum_weight_matching(eligible: dict):
     if not fields or not columns:
         return {}
 
-    # Bitmask DP is exact while the contested mapping graph is small. Cap it to
-    # avoid pathological memory growth for a datasource with many fuzzy edges.
     if len(columns) <= 22:
         column_index = {column: index for index, column in enumerate(columns)}
         options = {}
@@ -128,6 +124,7 @@ def _maximum_weight_matching(eligible: dict):
             ]
 
         memo = {}
+        unmatched_token = len(columns) + 1
 
         def better(left, right):
             if right is None:
@@ -150,16 +147,21 @@ def _maximum_weight_matching(eligible: dict):
                 return result
 
             field = fields[index]
-            best = solve(index + 1, used_mask)
-            best = (best[0], best[1], (None,) + best[2])
+            best_tail = solve(index + 1, used_mask)
+            best = (
+                best_tail[0],
+                best_tail[1],
+                (unmatched_token,) + best_tail[2],
+            )
 
             for column_idx, score in options[field]:
                 bit = 1 << column_idx
                 if used_mask & bit:
                     continue
                 tail = solve(index + 1, used_mask | bit)
+                priority_bonus = FIELD_PRIORITY.get(field, 0) * 1e-7
                 candidate = (
-                    score + tail[0],
+                    score + tail[0] + priority_bonus,
                     1 + tail[1],
                     (column_idx,) + tail[2],
                 )
@@ -173,7 +175,7 @@ def _maximum_weight_matching(eligible: dict):
         return {
             field: columns[column_idx]
             for field, column_idx in zip(fields, assignment)
-            if column_idx is not None
+            if column_idx != unmatched_token
         }
 
     # Defensive fallback for very large candidate graphs. It still guarantees
