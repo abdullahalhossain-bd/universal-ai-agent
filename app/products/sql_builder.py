@@ -11,7 +11,6 @@ class ProductSQLBuilder:
 
     def build(self, request: ProductSearchRequest):
         table = self.dialect.quote(self.mapping["table"])
-
         columns = []
         for field, column in self.mapping.items():
             if field != "table" and column and column not in columns:
@@ -22,12 +21,12 @@ class ProductSQLBuilder:
         conditions = []
         params = {}
 
-        self._add_text_filter(conditions, params, request.brand, "brand", "brand_value")
+        self._add_exact_filter(conditions, params, request.brand, "brand")
         self._add_synonym_filter(conditions, params, request.category, "category", "category_value")
-        self._add_equal_filter(conditions, params, request.sku, "sku")
+        self._add_exact_filter(conditions, params, request.sku, "sku")
         self._add_synonym_filter(conditions, params, request.color, "color", "color_value")
-        self._add_equal_filter(conditions, params, request.size, "size")
-        self._add_equal_filter(conditions, params, request.material, "material")
+        self._add_exact_filter(conditions, params, request.size, "size")
+        self._add_exact_filter(conditions, params, request.material, "material")
         self._add_price_filter(conditions, params, request.min_price, request.max_price)
 
         if request.in_stock_only and self.mapping.get("stock"):
@@ -43,8 +42,15 @@ class ProductSQLBuilder:
 
         if conditions:
             sql += " WHERE " + " AND ".join(conditions)
-
         return sql + f" LIMIT {request.limit}", params
+
+    def _add_exact_filter(self, conditions, params, value, field):
+        column = self.mapping.get(field)
+        if value is None or not column:
+            return
+        parameter = f"{field}_value"
+        conditions.append(self.dialect.equals(column, parameter))
+        params[parameter] = str(value).strip()
 
     def _add_synonym_filter(self, conditions, params, value, field, prefix):
         column = self.mapping.get(field)
@@ -58,21 +64,6 @@ class ProductSQLBuilder:
             params[parameter] = f"%{term}%"
         if clauses:
             conditions.append("(" + " OR ".join(clauses) + ")")
-
-    def _add_text_filter(self, conditions, params, value, field, prefix):
-        column = self.mapping.get(field)
-        if value is None or not column:
-            return
-        parameter = prefix
-        conditions.append(self.dialect.contains(column, parameter))
-        params[parameter] = f"%{str(value).strip()}%"
-
-    def _add_equal_filter(self, conditions, params, value, field):
-        if value is None or not self.mapping.get(field):
-            return
-        parameter = f"{field}_value"
-        conditions.append(self.dialect.contains(self.mapping[field], parameter))
-        params[parameter] = f"%{str(value).strip()}%"
 
     def _add_price_filter(self, conditions, params, minimum, maximum):
         column = self.mapping.get("price")
@@ -89,7 +80,6 @@ class ProductSQLBuilder:
     def _add_free_text_conditions(self, conditions, params, query_text):
         if not query_text:
             return
-
         searchable = [
             self.mapping.get(field)
             for field in (
@@ -106,7 +96,11 @@ class ProductSQLBuilder:
             expanded = expand_terms([term])
             parameter_clauses = []
             for synonym_index, synonym in enumerate(expanded):
-                parameter = f"search_term_{index}_{synonym_index}"
+                parameter = (
+                    f"search_term_{index}"
+                    if synonym_index == 0
+                    else f"search_term_{index}_{synonym_index}"
+                )
                 per_column = [self.dialect.contains(column, parameter) for column in searchable]
                 parameter_clauses.append("(" + " OR ".join(per_column) + ")")
                 params[parameter] = f"%{synonym}%"
