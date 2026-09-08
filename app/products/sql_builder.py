@@ -45,6 +45,21 @@ class ProductSQLBuilder:
             sql += " WHERE " + " AND ".join(conditions)
         return sql + f" LIMIT {request.limit}", params
 
+    @staticmethod
+    def _ordered_expansion(value: str):
+        original = str(value).strip()
+        if not original:
+            return []
+        terms = [original]
+        seen = {original.casefold()}
+        for term in expand_terms([original]):
+            normalized = str(term).strip()
+            key = normalized.casefold()
+            if normalized and key not in seen:
+                terms.append(normalized)
+                seen.add(key)
+        return terms
+
     def _add_exact_filter(self, conditions, params, value, field):
         column = self.mapping.get(field)
         if value is None or not column:
@@ -57,10 +72,10 @@ class ProductSQLBuilder:
         column = self.mapping.get(field)
         if value is None or not column:
             return
-        terms = expand_terms([str(value)])
+        terms = self._ordered_expansion(str(value))
         clauses = []
         for index, term in enumerate(terms):
-            parameter = f"{prefix}_{index}"
+            parameter = prefix if index == 0 else f"{prefix}_{index}"
             clauses.append(self.dialect.contains(column, parameter))
             params[parameter] = f"%{term}%"
         if clauses:
@@ -94,7 +109,7 @@ class ProductSQLBuilder:
 
         terms = [term.strip() for term in str(query_text).split() if term.strip()]
         for index, term in enumerate(terms):
-            expanded = expand_terms([term])
+            expanded = self._ordered_expansion(term)
             parameter_clauses = []
             for synonym_index, synonym in enumerate(expanded):
                 parameter = (
