@@ -36,11 +36,10 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _alembic_config(database_url: str) -> Config:
     cfg = Config(os.path.join(REPO_ROOT, "alembic.ini"))
     cfg.set_main_option("script_location", os.path.join(REPO_ROOT, "alembic"))
-    # Alembic's Config uses ConfigParser interpolation. A database URL can
-    # legitimately contain percent-encoded credentials/query parameters
-    # (for example `%40`, `%23`, `%2F`). Escape percent signs before passing
-    # the URL to ConfigParser so production-style URLs never break migration
-    # tests with `invalid interpolation syntax`.
+    # Alembic's Config uses ConfigParser interpolation. Database URLs may
+    # legitimately contain percent-encoded credentials/query values such as
+    # %40, %23 or %2F. Escape percent signs before handing the URL to
+    # ConfigParser; ConfigParser will decode %% back to % when Alembic reads it.
     cfg.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     return cfg
 
@@ -69,12 +68,13 @@ def _create_scratch_db(base_url: str) -> str:
     url = make_url(base_url)
     scratch_name = f"migration_check_{uuid.uuid4().hex[:10]}"
 
-    admin_engine = create_engine(url, isolation_level="AUTOCOMMIT", pool_pre_ping=True)
-    try:
-        with admin_engine.connect() as conn:
-            conn.exec_driver_sql(f'CREATE DATABASE "{scratch_name}"')
-    finally:
-        admin_engine.dispose()
+    admin_engine = create_engine(url.set(database=scratch_name), pool_pre_ping=True)
+    admin_engine.dispose()
+
+    admin = create_engine(url, isolation_level="AUTOCOMMIT")
+    with admin.connect() as conn:
+        conn.exec_driver_sql(f'CREATE DATABASE "{scratch_name}"')
+    admin.dispose()
 
     return str(url.set(database=scratch_name))
 
@@ -82,17 +82,13 @@ def _create_scratch_db(base_url: str) -> str:
 def _drop_scratch_db(base_url: str, scratch_url: str) -> None:
     url = make_url(scratch_url)
     scratch_name = url.database
-    admin_url = make_url(base_url).set(database=make_url(base_url).database or "postgres")
-    admin = create_engine(admin_url, isolation_level="AUTOCOMMIT", pool_pre_ping=True)
+    admin = create_engine(base_url, isolation_level="AUTOCOMMIT")
     try:
         with admin.connect() as conn:
             conn.exec_driver_sql(
                 f'DROP DATABASE IF EXISTS "{scratch_name}" WITH (FORCE)'
             )
     except Exception:
-        # Cleanup must never hide the migration assertion itself. The scratch
-        # database is disposable; a failed DROP is reported by the test run
-        # only through the original migration failure.
         pass
     finally:
         admin.dispose()
@@ -385,8 +381,10 @@ def test_0007_reconciles_real_production_drift():
         engine = create_engine(scratch_url)
         inspector = sa.inspect(engine)
 
+        # 1) obsolete `tenants` table is gone.
         assert "tenants" not in inspector.get_table_names()
 
+        # 2) api_keys.key_hash has a uniqueness guarantee.
         has_unique_key_hash = any(
             uc["column_names"] == ["key_hash"]
             for uc in inspector.get_unique_constraints("api_keys")
@@ -396,27 +394,86 @@ def test_0007_reconciles_real_production_drift():
         )
         assert has_unique_key_hash
 
+        # 3) products.quantity is Numeric, not Integer.
         quantity_col = next(
             c for c in inspector.get_columns("products") if c["name"] == "quantity"
         )
         assert isinstance(quantity_col["type"], sa.Numeric)
 
+        # 4) ix_products_store_id exists.
         assert "ix_products_store_id" in {
             idx["name"] for idx in inspector.get_indexes("products")
         }
 
+        # 6) usage_records.request_id: no more duplicate index, and the
+        #    canonical index is unique.
         usage_indexes = {
             idx["name"]: idx for idx in inspector.get_indexes("usage_records")
         }
         assert "ux_usage_records_request_id" not in usage_indexes
         assert usage_indexes["ix_usage_records_request_id"]["unique"]
+
+        # 7) ix_usage_records_created_at exists.
         assert "ix_usage_records_created_at" in usage_indexes
 
+        # Finally: the same check `alembic check` runs — a clean diff
+        # against the live models.
         with engine.connect() as conn:
             migration_ctx = MigrationContext.configure(conn)
             diff = compare_metadata(migration_ctx, Base.metadata)
-        engine.dispose()
     finally:
         _drop_scratch_db(base_url, scratch_url)
 
-    assert diff == [], f"post-reconciliation schema drift remains: {diff}"
+    assert diff == [], f"drifted database not fully reconciled: {diff}"
+
+
+def test_no_migration_creates_a_table_owned_by_an_earlier_migration(tmp_path):
+    """
+    Regression guard for the `datasources` duplicate-table bug found
+    while auditing the chain: `0001_baseline_schema.py` and
+    `0005_datasources.py` both had `op.create_table("datasources",
+    ...)`. Because 0005's copy is guarded with "if not exists", it
+    silently never ran in any real environment — 0001 always runs
+    first — so 0005's `server_default=` values for
+    name/active/full_sync/created_at/updated_at were dead code (see
+    0007_reconcile_schema_drift.py's docstring for the full story and
+    fix). This test parses every migration file's `upgrade()` source
+    for `op.create_table("<name>", ...)` calls and fails if any table
+    name is claimed by more than one migration, so this class of bug
+    can't silently reappear.
+    """
+    import ast
+
+    versions_dir = os.path.join(REPO_ROOT, "alembic", "versions")
+    owners: dict[str, list[str]] = {}
+
+    for filename in sorted(os.listdir(versions_dir)):
+        if not filename.endswith(".py"):
+            continue
+        path = os.path.join(versions_dir, filename)
+        tree = ast.parse(
+            open(path, encoding="utf-8-sig").read(), filename=path
+        )
+
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "create_table"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "op"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                table_name = node.args[0].value
+                owners.setdefault(table_name, []).append(filename)
+
+    duplicates = {
+        table: files for table, files in owners.items() if len(files) > 1
+    }
+    assert duplicates == {}, (
+        f"table(s) created by more than one migration (the later "
+        f"create_table call is dead code in every real environment, "
+        f"since the earlier one already ran): {duplicates}"
+    )
