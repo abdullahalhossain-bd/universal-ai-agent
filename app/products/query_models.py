@@ -11,6 +11,14 @@ class ProductSearchRequest(BaseModel):
 
     category: str | None = None
 
+    subcategory: str | None = None
+
+    color: str | None = None
+
+    size: str | None = None
+
+    material: str | None = None
+
     min_price: float | None = None
 
     max_price: float | None = None
