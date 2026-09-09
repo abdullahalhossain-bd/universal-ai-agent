@@ -17,6 +17,15 @@ def test_phone_existence_resolves_to_iphone_product():
         assert action.product_filters.product_name == "iphone12"
 
 
+def test_product_existence_queries_set_in_stock():
+    for query in ("laptop ase", "laptop ache", "ল্যাপটপ আছে", "laptop available"):
+        action = plan(query, {"Laptop"})
+        assert action.intent == Intent.PRODUCT_SEARCH
+        assert action.product_filters is not None
+        assert action.product_filters.in_stock is True
+        assert action.product_filters.product_name == "laptop"
+
+
 def test_best_laptop_is_marked_as_recommendation_search():
     action = plan("best laptop konta", STORE_TERMS)
     assert action.intent == Intent.PRODUCT_SEARCH
@@ -34,8 +43,15 @@ def test_bare_best_keeps_recommendation_mode_without_fake_product():
 
 
 def test_catalog_browse_remains_catalog_browse():
-    action = plan("what do you have", STORE_TERMS)
-    assert action.intent == Intent.CATALOG_BROWSE
+    for query in ("what do you have", "what do you sell", "what's available", "কি কি আছে"):
+        action = plan(query, STORE_TERMS)
+        assert action.intent == Intent.CATALOG_BROWSE
+
+
+def test_knowledge_question_is_not_forced_into_product_search():
+    for query in ("What is your return policy?", "return policy", "shipping policy"):
+        action = plan(query, STORE_TERMS)
+        assert action.intent == Intent.KNOWLEDGE_SEARCH
 
 
 def test_bare_recommendation_detector_is_strict():
@@ -54,11 +70,13 @@ def test_product_follow_up_detectors_cover_bangla_banglish_and_english():
     assert DynamicAttributeChatService._is_recommendation_explanation("কেন সেরা?")
 
 
-def test_product_index_reference_supports_bengali_and_english_ordinals():
-    service = DynamicAttributeChatService.__new__(DynamicAttributeChatService)
+def test_professional_product_index_reference_supports_bengali_ordinals():
+    service = ProfessionalCommerceChatService.__new__(ProfessionalCommerceChatService)
     assert service._extract_product_index("২ নম্বরটার দাম কত?") == 2
     assert service._extract_product_index("second one er link dao") == 2
     assert service._extract_product_index("তৃতীয়টা দেখাও") == 3
+    assert service._extract_product_index("চতুর্থটার link dao") == 4
+    assert service._extract_product_index("পঞ্চমটার ছবি দাও") == 5
 
 
 def test_professional_recommendation_requires_real_support():
@@ -110,11 +128,3 @@ def test_dynamic_attribute_schema_supports_aliases():
     extracted = deterministic_extract("black colour 16GB RAM", schema)
     assert extracted["finish"] == "black"
     assert extracted["memory"] == "16gb"
-
-
-def test_in_stock_queries_keep_existence_semantics():
-    for query in ("laptop ase", "laptop ache", "ল্যাপটপ আছে", "laptop available"):
-        action = plan(query, {"Laptop"})
-        assert action.intent == Intent.PRODUCT_SEARCH
-        assert action.product_filters is not None
-        assert action.product_filters.in_stock is True
