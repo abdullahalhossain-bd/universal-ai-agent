@@ -12,6 +12,7 @@ except ImportError:
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
+from app.discovery.scanners.sql_scanner import SQLSchemaScanner
 from app.products.sql_identifier import validate_identifier
 
 
@@ -31,6 +32,17 @@ class MySQLConnector:
             host = host or parsed["host"]; port = port or parsed["port"]; username = username or parsed["user"]; password = password or parsed["password"]; database = database or parsed["db"]
         self.config = {"host": host, "port": port, "user": username, "password": password, "db": database}
         self._engine = create_engine(_build_sync_url(host=host, port=port, username=username, password=password, database=database), pool_pre_ping=True)
+
+    def discover(self):
+        """Return the live database schema so callers can auto-map arbitrary columns."""
+        url = _build_sync_url(
+            host=self.config.get("host"),
+            port=self.config.get("port"),
+            username=self.config.get("user"),
+            password=self.config.get("password"),
+            database=self.config.get("db"),
+        )
+        return SQLSchemaScanner(str(url)).scan()
 
     async def test_connection(self):
         if aiomysql is None:
