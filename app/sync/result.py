@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass,field
 from app.sync.quality import VALID_CURRENCIES,valid_http_url,normalize_name
 QUALITY_FIELDS=("name","price","image_url","product_url")
-
 @dataclass
 class SyncResult:
  store_id:str
@@ -15,7 +14,6 @@ class SyncResult:
  _seen_names:dict=field(default_factory=dict,repr=False);_seen_skus:set=field(default_factory=set,repr=False);_seen_ids:set=field(default_factory=set,repr=False)
  _duplicate_id_count:int=0;_duplicate_sku_count:int=0;_duplicate_name_count:int=0
  _price_increased:int=0;_price_decreased:int=0;_stock_out:int=0;_stock_back:int=0;_stock_other:int=0
-
  def __post_init__(self):
   if not self.data_quality:self.data_quality={"products":0,"source_rows":0,"skipped_rows":0,"fields":{f:{"present":0,"missing":0} for f in QUALITY_FIELDS},"issue_samples":{}}
  def _issue(self,field,item):
@@ -47,9 +45,7 @@ class SyncResult:
    if prior is not None:
     self._duplicate_name_count+=1
     if name not in self.duplicate_names and len(self.duplicate_names)<1000:self.duplicate_names.append(name)
-    same_price=p.get("price") is not None and prior.get("price")==p.get("price")
-    same_cat=bool(p.get("category")) and normalize_name(p.get("category"))==normalize_name(prior.get("category"))
-    confidence=95 if same_price and same_cat else (80 if same_price or same_cat else 60)
+    same_price=p.get("price") is not None and prior.get("price")==p.get("price");same_cat=bool(p.get("category")) and normalize_name(p.get("category"))==normalize_name(prior.get("category"));confidence=95 if same_price and same_cat else (80 if same_price or same_cat else 60)
     candidate={"id_a":prior.get("id"),"id_b":pid,"name":p.get("name"),"confidence_pct":confidence,"classification":"strong_candidate" if confidence>=90 else ("candidate" if confidence>=70 else "possible"),"signals":["same_name"]+(["same_price"] if same_price else [])+(["same_category"] if same_cat else [])}
     if len(self.duplicate_candidates)<1000:self.duplicate_candidates.append(candidate)
     self._issue("duplicate_name",candidate)
@@ -73,8 +69,7 @@ class SyncResult:
   elif new<old:self._price_decreased+=1
   if len(self.price_changes)<1000:self.price_changes.append({"id":str(pid),"name":name,"old":old,"new":new,"direction":"increased" if new>old else "decreased"})
  def record_stock_change(self,pid,name,old,new):
-  o=float(old or 0);n=float(new or 0)
-  state="became_out_of_stock" if o>0 and n<=0 else ("came_back_in_stock" if o<=0 and n>0 else "changed")
+  o=float(old or 0);n=float(new or 0);state="became_out_of_stock" if o>0 and n<=0 else ("came_back_in_stock" if o<=0 and n>0 else "changed")
   if state=="became_out_of_stock":self._stock_out+=1
   elif state=="came_back_in_stock":self._stock_back+=1
   else:self._stock_other+=1
@@ -86,15 +81,12 @@ class SyncResult:
   d={"duplicate_id_count":self._duplicate_id_count,"duplicate_sku_count":self._duplicate_sku_count,"possible_duplicate_name_count":self._duplicate_name_count,"possible_duplicate_count":self._duplicate_name_count,"sample_ids":self.duplicate_ids[:20],"sample_skus":self.duplicate_skus[:20],"sample_names":self.duplicate_names[:20],"candidates":self.duplicate_candidates[:20]}
   return {"products":self.data_quality["products"],"source_rows":self.data_quality["source_rows"],"skipped_rows":self.data_quality["skipped_rows"],"fields":fields,"duplicates":d,"invalid_data":self.invalid_data,"invalid_counts":self.invalid_counts,"broken_media":self.data_quality.get("broken_media",0),"issue_samples":self.data_quality.get("issue_samples",{})}
  def calculate_health_score(self):
-  r=self.data_quality_report();f=r["fields"];base=f["name"]["coverage_pct"]*.30+f["price"]["coverage_pct"]*.25+f["image_url"]["coverage_pct"]*.20+f["product_url"]["coverage_pct"]*.25
-  total=max(1,int(r["products"]));invalid_rate=sum(self.invalid_counts.values())/total;dup_rate=(self._duplicate_id_count+self._duplicate_sku_count)/total;broken_rate=float(r.get("broken_media",0))/total
-  penalty=min(12,invalid_rate*100*0.20)+min(10,dup_rate*100*0.10)+min(5,self.skipped/max(1,int(r["source_rows"]))*5)+min(10,broken_rate*100*0.10)
-  rec=self.reconciliation or {}
+  r=self.data_quality_report();f=r["fields"];base=f["name"]["coverage_pct"]*.30+f["price"]["coverage_pct"]*.25+f["image_url"]["coverage_pct"]*.20+f["product_url"]["coverage_pct"]*.25;total=max(1,int(r["products"]));invalid_rate=sum(self.invalid_counts.values())/total;dup_rate=(self._duplicate_id_count+self._duplicate_sku_count)/total;broken_rate=float(r.get("broken_media",0))/total;penalty=min(12,invalid_rate*100*.20)+min(10,dup_rate*100*.10)+min(5,self.skipped/max(1,int(r["source_rows"]))*5)+min(10,broken_rate*100*.10);rec=self.reconciliation or {}
   if rec and not rec.get("reconciled",False):penalty+=min(10,float(rec.get("unexplained",0) or 0)/total*10)
   return max(0,min(100,round(base-penalty)))
- def set_reconciliation(self,*,source_count,db_count,rejected=0,duplicates=0,known_stale=0):
-  expected=max(0,source_count-rejected-duplicates);delta=db_count-expected;unexplained=max(0,abs(delta)-known_stale)
-  self.reconciliation={"source_count":source_count,"unique_source_ids":max(0,source_count-duplicates),"accepted_products":expected,"db_count":db_count,"expected_db_count":expected,"difference":db_count-expected,"missing_in_db":max(0,-delta),"stale_in_db":max(0,delta),"known_stale":known_stale,"rejected":rejected,"duplicates":duplicates,"unexplained":unexplained,"reconciled":unexplained==0}
+ def set_reconciliation(self,*,source_rows,accepted_products,db_count,rejected=0,duplicates=0,known_stale=0):
+  expected=max(0,int(accepted_products));delta=db_count-expected;unexplained=max(0,abs(delta)-known_stale)
+  self.reconciliation={"source_rows":int(source_rows),"unique_source_ids":expected+int(duplicates),"accepted_products":expected,"db_count":int(db_count),"expected_db_count":expected,"difference":int(delta),"missing_in_db":max(0,-delta),"stale_in_db":max(0,delta),"known_stale":int(known_stale),"rejected":int(rejected),"duplicates":int(duplicates),"unexplained":int(unexplained),"reconciled":unexplained==0}
  @property
  def seen_ids(self):return set(self._seen_ids)
  @property
