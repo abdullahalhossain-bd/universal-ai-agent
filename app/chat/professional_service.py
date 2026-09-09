@@ -7,6 +7,7 @@ from urllib.parse import urljoin
 
 from app.chat.dynamic_service import DynamicAttributeChatService
 from app.chat.intent_semantics import classify_product_link_request, parse_llm_link_intent
+from app.images.url_verifier import verify_image_urls
 from app.products.recommendation import is_recommendation_query
 
 
@@ -133,6 +134,28 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
         return enriched
 
     @staticmethod
+    async def _verify_product_images(products: list[dict]) -> list[dict]:
+        """Keep only exact-product image URLs that are safe and actually serve images."""
+        urls = [product.get("image_url") for product in products]
+        verification = await verify_image_urls(urls)
+        verified = []
+        for product in products:
+            payload = dict(product)
+            url = payload.get("image_url")
+            ok = bool(url and verification.get(url, False))
+            payload["image_verified"] = ok
+            if not ok:
+                payload["image_url"] = None
+            verified.append(payload)
+        return verified
+
+    @staticmethod
+    async def _prepare_products(store_id: str, db, products: list[dict]) -> list[dict]:
+        """Resolve exact DB media first, then verify image reachability before API output."""
+        enriched = ProfessionalCommerceChatService._enrich_product_payload(store_id, db, products)
+        return await ProfessionalCommerceChatService._verify_product_images(enriched)
+
+    @staticmethod
     def _professional_result_message(products: list[dict]) -> str:
         names = [str(p.get("name") or p.get("title") or "product") for p in products[:3]]
         if len(products) == 1:
@@ -224,10 +247,12 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
                 self._save_message(session_id=session.id, role="user", content=message)
                 response_message = self._catalog_attribute_message(products)
                 self._save_message(session_id=session.id, role="assistant", content=response_message)
-                return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": self._enrich_product_payload(store_id, self.db, self._serialize_products(products)), "sources": []}
+                prepared = await self._prepare_products(store_id, self.db, self._serialize_products(products))
+                return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": prepared, "sources": []}
             referenced_product = self._get_referenced_product(store_id=store_id, session_id=session.id, message=message)
 
-        is_link = await self._detect_product_link_request(message, bool(conversation_id and (referenced_product or self._load_product_context(session.id).get("product_ids"))))
+        has_context = bool(conversation_id and (referenced_product or self._load_product_context(session.id).get("product_ids")))
+        is_link = await self._detect_product_link_request(message, has_context)
         is_image = self._is_image_request(message)
         is_explanation = self._is_recommendation_explanation(message)
 
@@ -250,12 +275,13 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
                 context_products = self._context_products(store_id, session.id)
                 response_message = self._recommendation_explanation(referenced_product, context_products or [referenced_product])
             self._save_message(session_id=session.id, role="assistant", content=response_message)
-            return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": self._enrich_product_payload(store_id, self.db, self._serialize_products([referenced_product])), "sources": []}
+            prepared = await self._prepare_products(store_id, self.db, self._serialize_products([referenced_product]))
+            return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": prepared, "sources": []}
 
         result = await super().handle(store_id=store_id, request=request)
         if not isinstance(result, dict):
             return result
-        products = self._enrich_product_payload(store_id, self.db, result.get("products") or [])
+        products = await self._prepare_products(store_id, self.db, result.get("products") or [])
         result["products"] = products
         is_recommendation = is_recommendation_query(message)
         is_followup = is_link or is_image or is_explanation
