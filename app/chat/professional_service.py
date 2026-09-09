@@ -41,15 +41,13 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
 
     @staticmethod
     def _professional_result_message(products: list[dict]) -> str:
-        count = len(products)
-        if count == 1:
+        """Return natural customer-facing copy instead of search-engine language."""
+        if len(products) == 1:
             product = products[0]
-            name = product.get("name") or product.get("title") or "Product"
-            return f"{name}-এর details নিচে দেখুন। Price, stock, image এবং available product page link card-এ দেখানো হবে।"
-        return (
-            f"আপনার query অনুযায়ী {count}টি matching product পাওয়া গেছে। "
-            "নিচে প্রতিটি product-এর price, stock, image এবং available product page link দেখুন।"
-        )
+            name = product.get("name") or product.get("title") or "এই product"
+            return f"জি, {name} পাওয়া যাচ্ছে 😊 বিস্তারিত নিচে দেখুন।"
+
+        return "জি, আছে 😊 আপনার জন্য available optionগুলো নিচে দিলাম। পছন্দেরটা দেখুন।"
 
     async def handle(self, store_id: str, request):
         message = getattr(request, "message", "").strip()
