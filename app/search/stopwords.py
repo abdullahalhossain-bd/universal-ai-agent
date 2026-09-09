@@ -1,69 +1,78 @@
-"""
-Filler / stopword terms to strip out of natural-language chat queries
-before they're used as product-search keywords.
+"""Lightweight fallback stopwords for natural-language search.
 
-The list intentionally covers common Bengali, Banglish and English
-question/commerce vocabulary while preserving merchant-specific
-product and category terms.
+IMPORTANT:
+    Stopwords are an optimization/fallback only. They are NOT the source of
+    truth for query semantics. Merchant catalog vocabulary and semantic
+    understanding should decide which words represent products, categories,
+    brands, attributes, or user intent.
+
+    In particular, Bengali/Banglish existence, quantity, pronoun and other
+    conversational variations must not require an ever-growing dictionary.
 """
 
+# Keep this deliberately small. These are high-confidence language/function
+# tokens that are very unlikely to be merchant entities. Domain-specific
+# vocabulary must come from the merchant catalog, not from this set.
 STOPWORDS: set[str] = {
-    # Banglish - existence / availability questions
-    "ase", "achi", "ache", "asbe", "royeche", "royece", "naki",
-    # Banglish - question / quantity words
-    "ki", "koto", "kotoy", "koy", "kemon", "kironkom", "koirokom",
-    "kon", "konta", "konti", "kono", "sob", "shob",
-    # Banglish - grammar / possessive particles
-    "er", "r", "eta", "ei", "eita", "oita", "ota", "oi", "egula", "ogula",
-    "tar", "ta", "ti", "gula", "gulo", "gulor",
-    # Banglish - want / need / search
-    "chai", "lagbe", "lagbo", "dorkar", "khujchi", "khujtesi", "khujtechi",
-    "dekhte", "dekhao", "dekhan", "den", "dao", "daw", "bolen", "bolo",
-    # Banglish - price
-    "dam", "damer", "damta", "price", "prices", "cost", "costs", "damkoto",
-    # Banglish - politeness / filler
-    "please", "plz", "pls", "vai", "bhai", "apu", "amar", "amake", "ache naki",
-    "stoke", "stock",
+    # English articles / conjunctions / basic prepositions
+    "a", "an", "the", "and", "or", "but", "of", "for", "to", "with", "on",
+    "at", "from", "by", "in", "as", "than", "between", "around",
 
-    # Bengali script
-    "আছে", "আছে কি", "কি", "কত", "কতো", "কেমন", "চাই", "লাগবে", "দাম", "দামের",
-    "টা", "টি", "নাকি", "আমার", "আমাকে", "দিন", "দাও", "দেখাও", "দেখান",
-    "স্টকে", "স্টক", "এর", "র", "মধ্যে", "টাকার", "টাকা", "জন্য", "ও", "আর",
-    "এটা", "এইটা", "ওটা", "ওইটা", "কোন", "কোনটা", "কোনটি", "কোনো", "কতগুলো",
+    # English auxiliary / question words (fallback only)
+    "do", "does", "did", "is", "are", "am", "was", "were", "be", "been",
+    "being", "will", "would", "can", "could", "should", "shall", "may",
+    "might", "must", "what", "which", "where", "when", "how", "who", "whom",
+    "why", "this", "that", "these", "those", "there", "here",
 
-    # English - auxiliary / question verbs
-    "do", "does", "did", "have", "has", "had", "is", "are", "am", "was", "were",
-    "be", "been", "being", "will", "would", "can", "could", "should", "shall",
-    "may", "might", "must", "let",
-    # English - pronouns / demonstratives
-    "i", "me", "my", "we", "us", "our", "you", "your", "he", "she", "it", "its",
-    "they", "them", "their", "this", "that", "these", "those", "there", "here",
-    # English - question / quantity words
-    "what", "which", "where", "when", "how", "who", "whom", "why", "any", "some",
-    "much", "many", "all", "everything", "anything", "one", "ones",
-    # English - commerce filler
-    "want", "wanted", "need", "needed", "looking", "look", "got", "get", "getting",
-    "give", "giving", "tell", "show", "find", "search", "searching", "buy", "order",
-    "available", "availability", "instock", "in", "stock",
-    # English - articles / prepositions / conjunctions / price units
-    "the", "a", "an", "of", "for", "to", "with", "on", "at", "from", "by", "about",
-    "and", "or", "under", "below", "less", "than", "within", "over", "above", "around",
-    "between", "taka", "tk", "bdt",
-    # English - greetings / politeness
-    "hello", "hi", "hey", "thanks", "thank",
+    # Common English conversational fillers
+    "please", "plz", "pls", "hello", "hi", "hey", "thanks", "thank",
+
+    # Bengali function words / particles with high confidence
+    "এর", "র", "টা", "টি", "ও", "আর", "মধ্যে", "জন্য", "এটা", "এইটা",
+    "ওটা", "ওইটা", "কোন", "কোনটা", "কোনটি", "কোনো",
+
+    # Very common Banglish function words
+    "er", "r", "ta", "ti", "gula", "gulo", "gulor", "eta", "eita", "ota",
+    "oita", "ei", "oi", "egula", "ogula", "tar",
 }
 
 _PUNCTUATION = ".,!?;:()[]{}\"'“”‘’—–…"
 
 
-def strip_stopwords(terms: list[str]) -> list[str]:
-    """Filter filler words while preserving meaningful search terms."""
-    filtered = []
+def _normalize_token(value: str) -> str:
+    return value.strip(_PUNCTUATION).lower()
+
+
+def strip_stopwords(
+    terms: list[str],
+    store_terms: set[str] | None = None,
+) -> list[str]:
+    """Remove only fallback filler while preserving merchant entities.
+
+    `store_terms` is checked FIRST. This is important for arbitrary merchant
+    catalogs where a token that looks like a conversational word may actually
+    be a product/brand/category name.
+    """
+    normalized_store_terms = {
+        _normalize_token(str(term))
+        for term in (store_terms or set())
+        if str(term).strip()
+    }
+
+    filtered: list[str] = []
     for term in terms:
         cleaned = term.strip(_PUNCTUATION)
         if not cleaned:
             continue
-        if cleaned.lower() in STOPWORDS:
+
+        normalized = _normalize_token(cleaned)
+        if normalized in normalized_store_terms:
+            filtered.append(cleaned)
             continue
+
+        if normalized in STOPWORDS:
+            continue
+
         filtered.append(cleaned)
+
     return filtered
