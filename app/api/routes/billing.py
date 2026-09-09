@@ -21,6 +21,7 @@ from app.core.tenant import get_current_store
 from app.db.database import get_db
 from app.db.models import Store
 from app.usage.repository import UsageRepository
+from app.usage.models import UsageRecord
 
 router = APIRouter(prefix="/v1/billing", tags=["billing"])
 
@@ -54,6 +55,43 @@ def billing_summary(
         "spent_this_month": float(spent_this_month),
         "subscription_status": store.stripe_subscription_status,
         "has_payment_method": store.stripe_customer_id is not None,
+    }
+
+
+@router.get("/usage")
+def billing_usage(
+    limit: int = 10,
+    store: Store = Depends(get_current_store),
+    db: Session = Depends(get_db),
+):
+    """Recent usage records for the merchant's own store.
+
+    This is the store-scoped counterpart to GET /v1/admin/usage — that
+    route requires PlatformAdmin auth, so the merchant dashboard cannot
+    call it with a store session/API key. This one is filtered to the
+    caller's own store_id and needs no elevated auth.
+    """
+    limit = max(1, min(limit, 50))
+    records = (
+        db.query(UsageRecord)
+        .filter(UsageRecord.store_id == store.id, UsageRecord.status == "completed")
+        .order_by(UsageRecord.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        "usage": [
+            {
+                "id": r.id,
+                "route": r.route,
+                "model": r.model,
+                "input_tokens": r.input_tokens,
+                "output_tokens": r.output_tokens,
+                "estimated_cost": r.estimated_cost,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in records
+        ]
     }
 
 
