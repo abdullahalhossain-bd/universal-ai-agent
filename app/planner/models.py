@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class Intent(str, Enum):
     PRODUCT_SEARCH = "product_search"
+    RECOMMENDATION = "recommendation"
     KNOWLEDGE_SEARCH = "knowledge_search"
     MIXED = "mixed"
     CATALOG_BROWSE = "catalog_browse"
@@ -18,6 +19,7 @@ class ProductFilters(BaseModel):
     min_price: float | None = None
     max_price: float | None = None
     in_stock: bool = False
+    recommendation: bool = False
     attributes: dict = Field(default_factory=dict)
 
 
@@ -34,6 +36,7 @@ class SearchIntent(str, Enum):
     MOST_EXPENSIVE = "most_expensive"
     IN_STOCK = "in_stock"
     SIMILAR = "similar"
+    RECOMMENDATION = "recommendation"
 
 
 class QueryPlan(BaseModel):
