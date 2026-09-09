@@ -183,11 +183,22 @@
     return div.innerHTML;
   }
 
-  function formatPrice(price) {
+  // Common ISO 4217 codes rendered with their conventional symbol; any
+  // other code (e.g. BDT, AED) falls back to showing the code itself
+  // rather than guessing a symbol, since a wrong symbol is worse than
+  // a plain code.
+  var CURRENCY_SYMBOLS = {
+    USD: "$", EUR: "\u20ac", GBP: "\u00a3", JPY: "\u00a5", INR: "\u20b9",
+    BDT: "\u09f3", AUD: "A$", CAD: "C$", CNY: "\u00a5",
+  };
+
+  function formatPrice(price, currency) {
     if (price === null || price === undefined) return null;
     var num = Number(price);
     if (Number.isNaN(num)) return null;
-    return "$" + num.toFixed(2);
+    var code = (currency || "USD").toUpperCase();
+    var symbol = CURRENCY_SYMBOLS[code];
+    return symbol ? symbol + num.toFixed(2) : num.toFixed(2) + " " + code;
   }
 
   function resolveMediaUrl(url) {
@@ -221,7 +232,7 @@
     }
 
     if (opts.products && opts.products.length) {
-      wrap.appendChild(renderProducts(opts.products));
+      wrap.appendChild(renderProducts(opts.products, opts.interactionId, opts.query));
     }
 
     if (opts.sources && opts.sources.length) {
@@ -233,24 +244,19 @@
     return wrap;
   }
 
-  function renderProducts(products) {
+  function renderProducts(products, interactionId, query) {
     var list = document.createElement("div");
     list.className = "products";
 
     products.forEach(function (p) {
-      var card = document.createElement(p.product_url ? "a" : "div");
+      var card = document.createElement("div");
       card.className = "product-tag";
-      if (p.product_url) {
-        card.href = isSafeWebUrl(p.product_url) ? p.product_url.trim() : "#";
-        card.target = "_blank";
-        card.rel = "noopener noreferrer";
-      }
 
       var thumbHtml = p.image_url
         ? '<img class="product-thumb" src="' + escapeHtml(resolveMediaUrl(p.image_url)) + '" alt="" loading="lazy" />'
         : '<div class="product-thumb"></div>';
 
-      var priceLabel = formatPrice(p.price);
+      var priceLabel = formatPrice(p.price, p.currency);
 
       card.innerHTML =
         thumbHtml +
@@ -264,10 +270,87 @@
         "</div>" +
         (priceLabel ? '<span class="product-price">' + escapeHtml(priceLabel) + "</span>" : "");
 
+      card.appendChild(renderProductActions(p, interactionId, query));
       list.appendChild(card);
     });
 
     return list;
+  }
+
+  // Three actions per card, matching what a shopper actually wants to
+  // do with a result: open the real listing, get more written detail
+  // in-chat, or ask their own follow-up about it. "View product" only
+  // renders when there's a real, safe URL to send them to. Each
+  // interaction also reports a behavior event (see trackBehaviorEvent)
+  // so "popular products" / conversion numbers on the merchant's
+  // analytics dashboard reflect what customers actually do, not just
+  // what was shown to them.
+  function renderProductActions(product, interactionId, query) {
+    var actions = document.createElement("div");
+    actions.className = "product-actions";
+
+    if (product.product_url && isSafeWebUrl(product.product_url)) {
+      var viewLink = document.createElement("a");
+      viewLink.className = "product-action";
+      viewLink.href = product.product_url.trim();
+      viewLink.target = "_blank";
+      viewLink.rel = "noopener noreferrer";
+      viewLink.textContent = "View product";
+      viewLink.addEventListener("click", function () {
+        trackBehaviorEvent(product.id, "click", interactionId, query);
+      });
+      actions.appendChild(viewLink);
+    }
+
+    var detailsBtn = document.createElement("button");
+    detailsBtn.type = "button";
+    detailsBtn.className = "product-action";
+    detailsBtn.textContent = "Details";
+    detailsBtn.addEventListener("click", function () {
+      trackBehaviorEvent(product.id, "detail_view", interactionId, query);
+      askAboutProduct(product, true);
+    });
+    actions.appendChild(detailsBtn);
+
+    var askBtn = document.createElement("button");
+    askBtn.type = "button";
+    askBtn.className = "product-action product-action-ghost";
+    askBtn.textContent = "Ask about it";
+    askBtn.addEventListener("click", function () {
+      askAboutProduct(product, false);
+    });
+    actions.appendChild(askBtn);
+
+    return actions;
+  }
+
+  // "Details" sends a ready-made question immediately, so the customer
+  // gets more info with one tap. "Ask about it" only pre-fills and
+  // focuses the composer so the customer can finish their own question
+  // before sending. Either way this becomes the newest turn naming the
+  // product, so the conversation-context resolver on the backend (see
+  // app/chat/intelligent_service.py) treats it as "the product being
+  // discussed" for any follow-up references.
+  function askAboutProduct(product, sendImmediately) {
+    var name = (product && product.name) || "this product";
+    var prompt = "Tell me more about " + name;
+
+    if (sendImmediately) {
+      if (sending) return;
+      appendMessage("user", { text: prompt });
+      sendTextMessage(prompt);
+      return;
+    }
+
+    messageInput.value = prompt + " ";
+    messageInput.focus();
+    messageInput.style.height = "auto";
+    messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + "px";
+    sendBtn.disabled = sending || !messageInput.value.trim();
+    var len = messageInput.value.length;
+    try {
+      messageInput.setSelectionRange(len, len);
+    } catch (e) {}
   }
 
   function renderSources(sources) {
@@ -317,6 +400,33 @@
     return headers;
   }
 
+  // ---------------------------------
+  // Behavior tracking (clicks / detail views on product cards)
+  // ---------------------------------
+  // Fire-and-forget: never blocks the UI and never surfaces an error to
+  // the customer if it fails. Feeds app/search/behavior_learning.py,
+  // which is what powers "popular products" / conversion numbers on
+  // the merchant's analytics dashboard (see /v1/analytics/*).
+  function randomId() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    return "id-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+  }
+
+  function trackBehaviorEvent(productId, eventType, interactionId, query) {
+    if (!productId || !apiKey) return;
+    fetch(API_BASE + "/v1/behavior/events", {
+      method: "POST",
+      headers: apiHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        interaction_id: interactionId || randomId(),
+        event_type: eventType,
+        product_id: productId,
+        conversation_id: conversationId,
+        query: query || null,
+      }),
+    }).catch(function () {});
+  }
+
   function persistConversationId(id) {
     conversationId = id;
     try {
@@ -344,6 +454,8 @@
           text: data.message,
           products: data.products,
           sources: data.sources,
+          interactionId: data.interaction_id || randomId(),
+          query: text,
         });
       })
       .catch(function (err) {
@@ -386,6 +498,8 @@
           text: data.message,
           products: data.products,
           sources: data.sources,
+          interactionId: data.interaction_id || randomId(),
+          query: question || null,
         });
       })
       .catch(function (err) {
