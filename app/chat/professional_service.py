@@ -18,7 +18,6 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
         """Extract an index only when the user explicitly references a list position."""
         text = re.sub(r"\s+", " ", message.casefold().strip())
         text = text.translate(str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789"))
-
         explicit_patterns = (
             r"(?:product\s*)?#\s*(\d+)\b",
             r"(?:product\s*)?(\d+)\s*(?:number|no\.?|নম্বর|নং)",
@@ -32,7 +31,6 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
                 value = int(match.group(1))
                 if 1 <= value <= 100:
                     return value
-
         aliases = {
             "প্রথম": 1, "প্রথমটা": 1, "প্রথমটির": 1, "প্রথমটার": 1,
             "দ্বিতীয়": 2, "দ্বিতীয়টা": 2, "দ্বিতীয়টির": 2, "দ্বিতীয়টার": 2,
@@ -65,15 +63,7 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
             if router is None:
                 return False
             result = await router.generate(messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Classify whether the user is asking for the purchase/product page, "
-                        "buying location, ordering destination, or product URL of a product. "
-                        "Return only TRUE or FALSE. Do not classify store office/location, shipping, "
-                        "delivery, return, refund, or generic knowledge questions as TRUE."
-                    ),
-                },
+                {"role": "system", "content": "Classify whether the user is asking for the purchase/product page, buying location, ordering destination, or product URL of a product. Return only TRUE or FALSE. Do not classify store office/location, shipping, delivery, return, refund, or generic knowledge questions as TRUE."},
                 {"role": "user", "content": message[:1000]},
             ])
             return parse_llm_link_intent(str(result.get("text", ""))) is True
@@ -98,16 +88,13 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
     def _enrich_product_payload(store_id: str, db, products: list[dict]) -> list[dict]:
         """Enrich payloads from the DB row with the exact same product ID."""
         from app.db.models import Product, Store
-
         ids = [str(item.get("id")) for item in products if item.get("id")]
         if not ids:
             return products
-
         store = db.query(Store).filter(Store.id == store_id).first()
         base_url = getattr(store, "website_url", None) if store is not None else None
         objects = db.query(Product).filter(Product.store_id == store_id, Product.id.in_(ids)).all()
         by_id = {str(product.id): product for product in objects}
-
         enriched = []
         for item in products:
             product_id = str(item.get("id")) if item.get("id") is not None else None
@@ -136,8 +123,7 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
     @staticmethod
     async def _verify_product_images(products: list[dict]) -> list[dict]:
         """Keep only exact-product image URLs that are safe and actually serve images."""
-        urls = [product.get("image_url") for product in products]
-        verification = await verify_image_urls(urls)
+        verification = await verify_image_urls([product.get("image_url") for product in products])
         verified = []
         for product in products:
             payload = dict(product)
@@ -152,8 +138,9 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
     @staticmethod
     async def _prepare_products(store_id: str, db, products: list[dict]) -> list[dict]:
         """Resolve exact DB media first, then verify image reachability before API output."""
-        enriched = ProfessionalCommerceChatService._enrich_product_payload(store_id, db, products)
-        return await ProfessionalCommerceChatService._verify_product_images(enriched)
+        return await ProfessionalCommerceChatService._verify_product_images(
+            ProfessionalCommerceChatService._enrich_product_payload(store_id, db, products)
+        )
 
     @staticmethod
     def _professional_result_message(products: list[dict]) -> str:
@@ -266,16 +253,17 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
 
         if session is not None and referenced_product is not None and (is_link or is_image or is_explanation):
             self._save_message(session_id=session.id, role="user", content=message)
+            prepared = await self._prepare_products(store_id, self.db, self._serialize_products([referenced_product]))
+            prepared_product = prepared[0] if prepared else {}
             name = self._format_product_name(referenced_product)
             if is_image:
-                response_message = f"অবশ্যই 😊 {name}-এর image নিচে দিলাম।" if getattr(referenced_product, "image_url", None) else f"দুঃখিত, {name}-এর image এখন available নেই।"
+                response_message = f"অবশ্যই 😊 {name}-এর image নিচে দিলাম।" if prepared_product.get("image_url") else f"দুঃখিত, {name}-এর verified image এখন available নেই।"
             elif is_link:
-                response_message = f"অবশ্যই 😊 {name}-এর product page-এর link নিচের card-এ দিলাম।" if getattr(referenced_product, "product_url", None) else f"দুঃখিত, {name}-এর product link এখন available নেই।"
+                response_message = f"অবশ্যই 😊 {name}-এর product page-এর link নিচের card-এ দিলাম।" if prepared_product.get("product_url") else f"দুঃখিত, {name}-এর product link এখন available নেই।"
             else:
                 context_products = self._context_products(store_id, session.id)
                 response_message = self._recommendation_explanation(referenced_product, context_products or [referenced_product])
             self._save_message(session_id=session.id, role="assistant", content=response_message)
-            prepared = await self._prepare_products(store_id, self.db, self._serialize_products([referenced_product]))
             return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": prepared, "sources": []}
 
         result = await super().handle(store_id=store_id, request=request)
