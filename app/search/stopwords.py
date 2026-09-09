@@ -29,11 +29,11 @@ STOPWORDS: set[str] = {
 
     # Bengali function words / particles with high confidence
     "এর", "র", "টা", "টি", "ও", "আর", "মধ্যে", "জন্য", "এটা", "এইটা",
-    "ওটা", "ওইটা", "কোন", "কোনটা", "কোনটি", "কোনো",
+    "ওটা", "ওইটা", "কোন", "কোনটা", "কোনটি", "কোনো", "দেখাও", "চাই",
 
     # Very common Banglish function words
     "er", "r", "ta", "ti", "gula", "gulo", "gulor", "eta", "eita", "ota",
-    "oita", "ei", "oi", "egula", "ogula", "tar",
+    "oita", "ei", "oi", "egula", "ogula", "tar", "dekhao", "chai",
 }
 
 _PUNCTUATION = ".,!?;:()[]{}\"'“”‘’—–…"
