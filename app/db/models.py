@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, ForeignKey, Numeric, Boolean, Integer, Index, func, true
+from sqlalchemy import String, Text, DateTime, ForeignKey, Numeric, Boolean, Integer, Index, func, true, false
 from sqlalchemy.types import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.database import Base
@@ -109,6 +109,28 @@ class SearchLearning(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now())
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+class QueryEvent(Base):
+    """One row per customer-chat query, logged for merchant-facing analytics
+    (what are my customers actually asking? which products/categories are in
+    demand? which questions does the bot fail on?) — see app/analytics/.
+
+    Fire-and-forget: a failure to insert this must never break the chat
+    response itself (see ChatService._log_analytics_event).
+    """
+    __tablename__ = "query_events"
+    __table_args__ = (
+        Index("ix_query_events_store_created", "store_id", "created_at"),
+        Index("ix_query_events_store_intent", "store_id", "intent"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    message: Mapped[str] = mapped_column(String(500), nullable=False)
+    intent: Mapped[str] = mapped_column(String(30), nullable=False)
+    matched_term: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    result_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    had_results: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
 
 class LearnedVocabulary(Base):
     """Global (NOT store-scoped) cache of filler/quantity words the rule-based

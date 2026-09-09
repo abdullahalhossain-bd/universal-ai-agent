@@ -5,7 +5,7 @@ import uuid
 
 from fastapi import HTTPException
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,8 +16,8 @@ from app.chat.models import (
     ChatSession,
 )
 
-from app.db.models import Product
-from app.planner.rule_planner import plan
+from app.db.models import Product, QueryEvent
+from app.planner.rule_planner import plan, _looks_like_model_number
 from app.search.store_vocabulary import get_store_vocabulary
 from app.search.synonyms import expand_terms
 from app.core.config import settings
@@ -281,6 +281,59 @@ class ChatService:
         )
 
         self.db.commit()
+
+    # ---------------------------------
+    # Analytics logging (merchant-facing)
+    # ---------------------------------
+    #
+    # Fire-and-forget: one row per query so a merchant can later see
+    # what their customers ask, which categories/terms are in demand,
+    # and which questions the bot fails on ("knowledge gaps") — see
+    # app/analytics/service.py for the read side. A failure here
+    # must never break the actual chat response, hence the broad
+    # except + rollback.
+
+    def _log_analytics_event(
+        self,
+        store_id: str,
+        message: str,
+        intent: str,
+        matched_term: str | None = None,
+        result_count: int = 0,
+    ) -> None:
+
+        try:
+
+            self.db.add(
+                QueryEvent(
+                    id=str(uuid.uuid4()),
+                    store_id=store_id,
+                    message=message[:500],
+                    intent=intent,
+                    matched_term=(
+                        matched_term[:255]
+                        if matched_term
+                        else None
+                    ),
+                    result_count=result_count,
+                    had_results=result_count > 0,
+                )
+            )
+
+            self.db.commit()
+
+        except Exception:
+
+            self.db.rollback()
+
+            logger.warning(
+                "Failed to log analytics event for "
+                "store %s (intent=%s) — chat response "
+                "is unaffected.",
+                store_id,
+                intent,
+                exc_info=True,
+            )
 
     # ---------------------------------
     # Product context persistence
@@ -734,6 +787,7 @@ class ChatService:
         store_id: str,
         message: str,
         filters,
+        store_terms: set[str] | None = None,
     ) -> list[Product]:
 
         query = (
@@ -913,6 +967,41 @@ class ChatService:
                     continue
 
             raw_terms.append(cleaned)
+
+        # ---------------------------------
+        # Schema-aware dynamic filtering
+        # ---------------------------------
+        # This is the primary signal, not the static stopword list
+        # above (that's just a fast, cheap pre-filter for obvious
+        # junk). The real question for "is this token part of the
+        # search?" is: does it actually occur in *this store's own*
+        # category/product-name data (`store_terms`, harvested fresh
+        # from the DB by get_store_vocabulary — see
+        # app/search/store_vocabulary.py)? A pronoun/postposition
+        # that slipped past the stopword list (e.g. a Banglish word
+        # nobody's added yet) can never match a real category or
+        # product name anyway, so it's dropped here regardless of
+        # whether it's "known" as a stopword. This is what makes
+        # "tomar kase ki ki mobile ase?" resolve to just "mobile" —
+        # and it works the same way whether the merchant sells
+        # electronics, sarees, or refrigerators, with zero hardcoded
+        # category names.
+        #
+        # Falls back to the full stopword-filtered term list when
+        # nothing matches (empty/stale vocabulary, or a genuinely new
+        # product word the sync hasn't captured yet) so a legitimate
+        # search never gets silently zeroed out just because the
+        # vocabulary cache missed it.
+        if store_terms:
+
+            dynamic_terms = [
+                term for term in raw_terms
+                if term.lower() in store_terms
+                or _looks_like_model_number(term)
+            ]
+
+            if dynamic_terms:
+                raw_terms = dynamic_terms
 
         # ---------------------------------
         # Synonym groups
@@ -1885,6 +1974,79 @@ class ChatService:
         return result
 
     # ---------------------------------
+    # Catalog browse message
+    # ---------------------------------
+    #
+    # Builds a category menu from this store's own synced product
+    # data (grouped by Product.category, most-stocked category
+    # first) rather than a hardcoded list — a merchant selling
+    # clothes and one selling electronics get different menus for
+    # free, no per-store configuration needed.
+
+    _CATEGORY_EMOJI = {
+        "laptop": "💻", "notebook": "💻", "computer": "💻", "pc": "💻",
+        "mouse": "🖱️", "keyboard": "⌨️", "monitor": "🖥️",
+        "mobile": "📱", "phone": "📱", "smartphone": "📱", "iphone": "📱",
+        "camera": "📷", "webcam": "📷",
+        "headphone": "🎧", "headset": "🎧", "earphone": "🎧", "earbud": "🎧",
+        "speaker": "🔊",
+        "charger": "🔌", "adapter": "🔌", "cable": "🔌", "power bank": "🔋",
+        "watch": "⌚", "smartwatch": "⌚",
+        "bag": "👜", "shirt": "👕", "dress": "👗", "shoe": "👟", "shoes": "👟",
+        "tv": "📺", "television": "📺",
+        "printer": "🖨️", "router": "📡", "modem": "📡",
+    }
+
+    def _catalog_browse_message(
+        self,
+        store_id: str,
+    ) -> str:
+
+        rows = (
+            self.db.query(
+                Product.category,
+                func.count(Product.id),
+            )
+            .filter(
+                Product.store_id == store_id,
+                Product.category.isnot(None),
+                Product.category != "",
+            )
+            .group_by(Product.category)
+            .order_by(func.count(Product.id).desc())
+            .limit(10)
+            .all()
+        )
+
+        if not rows:
+
+            return (
+                "আমাদের product catalog "
+                "এখনো সেট আপ হচ্ছে। একটু পরে "
+                "আবার জিজ্ঞেস করুন, অথবা "
+                "একটা নির্দিষ্ট product-এর নাম "
+                "লিখে দেখতে পারেন।"
+            )
+
+        items = []
+
+        for category, _count in rows:
+
+            label = category.strip().title()
+
+            emoji = self._CATEGORY_EMOJI.get(
+                category.strip().lower(), "🛍️"
+            )
+
+            items.append(f"{emoji} {label}")
+
+        return (
+            "আমাদের কাছে আছে: "
+            + ", ".join(items)
+            + " — কোনটা দেখতে চান?"
+        )
+
+    # ---------------------------------
     # Product message
     # ---------------------------------
 
@@ -1923,10 +2085,37 @@ class ChatService:
 
             return text
 
-        return (
-            f"{len(products)}টি "
-            "matching product পাওয়া গেছে।"
-        )
+        # Multiple matches — list them instead of just a bare count,
+        # so "best laptop konta?" / "laptop ase?" actually surface
+        # names and prices the customer can act on, not a dead-end
+        # number. Capped at 5 lines to stay readable on mobile/chat
+        # widgets; the remainder are still returned in `products` for
+        # the frontend, and the existing pagination flow ("আরও দেখান")
+        # already covers seeing more of them.
+        SHOWN = 5
+
+        lines_out = [f"{len(products)}টি product পাওয়া গেছে:"]
+
+        for product in products[:SHOWN]:
+
+            line = f"• {product['name']}"
+
+            if product["price"] is not None:
+                line += f" — ৳{product['price']:,.0f}"
+
+            if product["stock"] is not None and product["stock"] <= 0:
+                line += " (stock নেই)"
+
+            lines_out.append(line)
+
+        remaining = len(products) - SHOWN
+
+        if remaining > 0:
+            lines_out.append(f"...এবং আরও {remaining}টি।")
+
+        lines_out.append("কোনটার details জানতে চাইলে নামটা লিখুন।")
+
+        return "\n".join(lines_out)
 
     # ---------------------------------
     # Live stock answer
@@ -2138,6 +2327,48 @@ class ChatService:
             }
 
         # ---------------------------------
+        # Catalog browse ("কি কি আছে?", "what do you have")
+        #
+        # No specific product word to search on, so answer with a
+        # category menu built from this store's actual synced data
+        # instead of falling through to a generic greeting reply.
+        # ---------------------------------
+
+        if planned.intent.value == "catalog_browse":
+
+            self._save_message(
+                session_id=session.id,
+                role="user",
+                content=message,
+            )
+
+            response_message = (
+                self._catalog_browse_message(
+                    store_id
+                )
+            )
+
+            self._save_message(
+                session_id=session.id,
+                role="assistant",
+                content=response_message,
+            )
+
+            self._log_analytics_event(
+                store_id=store_id,
+                message=message,
+                intent="catalog_browse",
+            )
+
+            return {
+                "conversation_id": conversation_id,
+                "type": "catalog_browse",
+                "message": response_message,
+                "products": [],
+                "sources": [],
+            }
+
+        # ---------------------------------
         # Pagination ("আরেকটা দেখাও")
         # ---------------------------------
 
@@ -2275,6 +2506,19 @@ class ChatService:
                 store_id=store_id,
                 message=message,
                 filters=planned.product_filters,
+                store_terms=store_terms,
+            )
+
+            self._log_analytics_event(
+                store_id=store_id,
+                message=message,
+                intent=planned.intent.value,
+                matched_term=(
+                    planned.product_filters.product_name
+                    if planned.product_filters
+                    else None
+                ),
+                result_count=len(products),
             )
 
         if planned.intent.value == "mixed":
@@ -2640,6 +2884,13 @@ class ChatService:
                 content=response_message,
             )
 
+            self._log_analytics_event(
+                store_id=store_id,
+                message=message,
+                intent="knowledge_search",
+                result_count=len(knowledge_results),
+            )
+
             return {
                 "conversation_id": conversation_id,
                 "type": "knowledge",
@@ -2651,11 +2902,84 @@ class ChatService:
         # ---------------------------------
         # General
         # ---------------------------------
+        #
+        # Dynamic knowledge fallback, before giving up: KNOWLEDGE_WORDS
+        # in rule_planner is a fixed keyword gate, so a real question
+        # like "warranty koto din?" or "installation charge koto?"
+        # never even reaches knowledge_search if "warranty"/
+        # "installation" aren't in that static list — even though the
+        # store's own indexed FAQ/about-page content (already chunked
+        # + embedded via pgvector at sync time, see app/knowledge/)
+        # might answer it perfectly well. Rather than hand-maintaining
+        # every possible topic word per merchant, try the *existing*
+        # semantic knowledge search on any otherwise-unmatched message
+        # first, and only fall back to the generic reply when nothing
+        # in this store's own knowledge base is a confident match.
+        # This makes topic detection dynamic per merchant using
+        # infrastructure that's already there — no new LLM call, no
+        # new dependency, and it can never surface a wrong store's
+        # content since the search is already store-scoped.
 
         if (
             planned.intent.value == "unknown"
             and not reference_product
         ):
+
+            # Tune from real score distributions in production logs
+            # (see the info log below) — hybrid_search.py currently
+            # blends 0.35*keyword + 0.65*vector relevance into this
+            # score; 0.5 is a conservative starting point that favors
+            # "say nothing" over "confidently answer the wrong thing".
+            _FALLBACK_CONFIDENCE_THRESHOLD = 0.5
+
+            fallback_results = self._search_knowledge(
+                store_id=store_id,
+                message=message,
+            )
+
+            logger.info(
+                "unknown-intent knowledge fallback: store=%s "
+                "top_score=%s",
+                store_id,
+                (
+                    fallback_results[0].score
+                    if fallback_results
+                    else None
+                ),
+            )
+
+            if (
+                fallback_results
+                and fallback_results[0].score
+                >= _FALLBACK_CONFIDENCE_THRESHOLD
+            ):
+
+                response_message = (
+                    fallback_results[0].content
+                )
+
+                sources = [
+                    {
+                        "type": "website",
+                        "title": result.title,
+                        "url": result.url,
+                    }
+                    for result in fallback_results
+                ]
+
+                self._save_message(
+                    session_id=session.id,
+                    role="assistant",
+                    content=response_message,
+                )
+
+                return {
+                    "conversation_id": conversation_id,
+                    "type": "knowledge",
+                    "message": response_message,
+                    "products": [],
+                    "sources": sources,
+                }
 
             response_message = (
                 "হ্যালো! কীভাবে সাহায্য "
