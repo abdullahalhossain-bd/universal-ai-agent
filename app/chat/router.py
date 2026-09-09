@@ -8,6 +8,7 @@ from app.core.rate_limit import enforce_rate_limit
 from app.core.tenant import get_current_store
 from app.chat.schemas import ChatRequest, ChatResponse
 from app.chat.dynamic_service import DynamicAttributeChatService
+from app.chat.professional_service import ProfessionalCommerceChatService
 
 router = APIRouter(prefix="/v1/chat", tags=["Chat"])
 
@@ -34,5 +35,5 @@ async def chat(http_request: Request, response: Response, request: ChatRequest, 
             "sources": [],
         }
 
-    service = DynamicAttributeChatService(db=db)
+    service = ProfessionalCommerceChatService(db=db)
     return await service.handle(store_id=store.id, request=request)
