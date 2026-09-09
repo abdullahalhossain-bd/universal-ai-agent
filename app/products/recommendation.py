@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from typing import Iterable, Mapping
 
 _BEST_CUES = {"best", "top", "recommend", "recommended", "suggest", "suggestion", "ভালো", "সেরা", "ভাল", "সর্বোত্তম", "সাজেস্ট", "রিকমেন্ড"}
 _PERFORMANCE_CUES = {"performance", "powerful", "fast", "speed", "পারফরম্যান্স", "শক্তিশালী", "দ্রুত"}
@@ -41,21 +41,7 @@ def _numeric_values(product) -> list[float]:
     return values
 
 
-def _normalized(value, maximum: float | None = None) -> float:
-    """Convert a finite non-negative signal to a stable 0..1 range."""
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    if number < 0:
-        return 0.0
-    if maximum is not None and maximum > 0:
-        return min(1.0, number / maximum)
-    return number
-
-
 def _relative_signal(items, attr_name: str) -> dict[int, float]:
-    """Normalize a dedicated numeric signal relative to the candidate pool."""
     values = {}
     for item in items:
         value = getattr(item, attr_name, None)
@@ -72,11 +58,11 @@ def _relative_signal(items, attr_name: str) -> dict[int, float]:
     return {key: value / maximum for key, value in values.items()}
 
 
-def rank_products(products: Iterable, query: str) -> list:
+def rank_products(products: Iterable, query: str, behavior_scores: Mapping[str, float] | None = None) -> list:
     """Rank already-filtered products using query intent + verified merchant data.
 
-    Dedicated rating/review/sales/bestseller fields are used only when populated.
-    No popularity or quality signal is fabricated when those fields are absent.
+    Behavioral evidence is an additional ranking signal only when observed.
+    It is store-scoped by the caller and never treated as a fabricated rating.
     """
     items = list(products)
     if len(items) <= 1:
@@ -95,11 +81,19 @@ def rank_products(products: Iterable, query: str) -> list:
     review_signal = _relative_signal(items, "review_count")
     sales_signal = _relative_signal(items, "sales_count")
     bestseller_signal = _relative_signal(items, "bestseller_score")
+    observed_behavior = behavior_scores or {}
+    behavior_values = [max(0.0, float(v)) for v in observed_behavior.values() if v is not None]
+    behavior_max = max(behavior_values, default=0.0)
 
     def price_value(p):
         if lo is None or hi is None or hi == lo or p.price is None:
             return 0.5
         return (hi - float(p.price)) / (hi - lo)
+
+    def behavior_signal(p):
+        if behavior_max <= 0:
+            return 0.0
+        return min(1.0, max(0.0, float(observed_behavior.get(str(p.id), 0.0))) / behavior_max)
 
     def score(p):
         name = str(getattr(p, "name", "") or "").casefold()
@@ -120,24 +114,21 @@ def rank_products(products: Iterable, query: str) -> list:
         popularity_evidence = max(dedicated_popularity, merchant_popularity)
         performance_signal = 1.0 if any(cue in searchable for cue in _PERFORMANCE_CUES) else 0.0
         premium_signal = 1.0 if any(cue in searchable for cue in _PREMIUM_CUES) else 0.0
+        behavior = behavior_signal(p)
 
         if popular:
-            # Prefer explicit popularity signals; fall back to ordinary relevance/stock
-            # only when the merchant has not supplied popularity data.
-            return relevance * .45 + popularity_evidence * .40 + stock_signal * .15
+            return relevance * .40 + popularity_evidence * .35 + behavior * .20 + stock_signal * .05
         if premium:
-            return relevance * .45 + premium_signal * .25 + price_value(p) * .20 + rating_signal.get(id(p), 0.0) * .10
+            return relevance * .42 + premium_signal * .23 + price_value(p) * .15 + rating_signal.get(id(p), 0.0) * .10 + behavior * .10
         if performance:
             nums = _numeric_values(p)
             numeric = min(1.0, max(nums) / 1000.0) if nums else 0.0
-            return relevance * .50 + performance_signal * .25 + numeric * .10 + rating_signal.get(id(p), 0.0) * .15
+            return relevance * .48 + performance_signal * .22 + numeric * .10 + rating_signal.get(id(p), 0.0) * .10 + behavior * .10
         if value:
-            return relevance * .50 + price_value(p) * .25 + rating_signal.get(id(p), 0.0) * .15 + completeness * .10
+            return relevance * .46 + price_value(p) * .24 + rating_signal.get(id(p), 0.0) * .12 + behavior * .10 + completeness * .08
 
-        # Generic "best": quality/popularity signals first when they exist,
-        # otherwise use catalog evidence, price/value, completeness and stock.
         quality_signal = rating_signal.get(id(p), 0.0)
         evidence_signal = max(quality_signal, popularity_evidence)
-        return relevance * .45 + evidence_signal * .25 + price_value(p) * .15 + completeness * .10 + stock_signal * .05
+        return relevance * .42 + evidence_signal * .23 + behavior * .15 + price_value(p) * .12 + completeness * .06 + stock_signal * .02
 
     return sorted(items, key=lambda p: (-score(p), str(getattr(p, "name", "")).casefold()))
