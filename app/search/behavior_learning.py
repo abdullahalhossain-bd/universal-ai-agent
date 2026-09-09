@@ -38,6 +38,23 @@ def record_event(
 ) -> BehavioralEvent:
     if event_type not in ALLOWED_EVENTS:
         raise ValueError(f"Unsupported behavioral event: {event_type}")
+
+    # A client may retry a tracking request or fire twice because of a double
+    # click. Treat the interaction/event/product tuple as idempotent. This is
+    # intentionally store-scoped so one tenant can never deduplicate another.
+    existing_query = db.query(BehavioralEvent).filter(
+        BehavioralEvent.store_id == store_id,
+        BehavioralEvent.interaction_id == interaction_id,
+        BehavioralEvent.event_type == event_type,
+    )
+    if product_id is None:
+        existing_query = existing_query.filter(BehavioralEvent.product_id.is_(None))
+    else:
+        existing_query = existing_query.filter(BehavioralEvent.product_id == product_id)
+    existing = existing_query.first()
+    if existing is not None:
+        return existing
+
     event = BehavioralEvent(
         id=str(uuid.uuid4()),
         interaction_id=interaction_id,
