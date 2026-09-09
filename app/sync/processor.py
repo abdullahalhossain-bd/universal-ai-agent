@@ -1,5 +1,6 @@
 """Sync job processor with datasource-scoped incremental cursors."""
 from __future__ import annotations
+import inspect
 import logging
 from datetime import datetime
 from typing import Any
@@ -7,6 +8,7 @@ from app.connectors.config import ConnectorConfig
 from app.connectors.credential_store import get_credential_store
 from app.connectors.factory import ConnectorFactory
 from app.db.database import SessionLocal
+from app.sync.normalize import discover_mapping
 from app.sync.result import SyncResult
 from app.sync.service import ProductSyncService
 logger=logging.getLogger("app.sync.processor")
@@ -36,6 +38,33 @@ def _persist_watermark(db,datasource_id,mapping,connector,table_name,*,upper_bou
     if watermark.get("watermark_id") is not None:state["watermark_id"]=str(watermark["watermark_id"])
     state["strategy"]="updated_at+id" if _mapping_column(mapping,"updated_at") else ("created_at+id" if _mapping_column(mapping,"created_at") else "id")
     new_mapping=dict(ds.mapping or {}); new_mapping["_sync_state"]=state; ds.mapping=new_mapping; db.commit()
+async def _auto_discover_mapping(connector,table_name,mapping):
+    """Discover live source columns and fill only missing semantic mappings."""
+    effective=dict(mapping or {})
+    discover=getattr(connector,"discover",None)
+    if discover is None:return effective
+    schema=discover()
+    if inspect.isawaitable(schema):schema=await schema
+    tables=getattr(schema,"tables",None)
+    if tables is None and isinstance(schema,dict):tables=schema.get("tables",[])
+    target=None
+    for table in tables or []:
+        name=getattr(table,"name",None) if not isinstance(table,dict) else table.get("name")
+        if str(name)==str(table_name):target=table;break
+    if target is None:return effective
+    columns=getattr(target,"columns",None) if not isinstance(target,dict) else target.get("columns",[])
+    names=[]
+    for column in columns or []:
+        name=getattr(column,"name",None) if not isinstance(column,dict) else column.get("name")
+        if name:names.append(str(name))
+    if not names:return effective
+    sample={name:None for name in names}
+    inferred=discover_mapping(sample,effective)
+    for field,column in inferred.items():
+        if field.startswith("_"):continue
+        if column and not effective.get(field):effective[field]=column
+    effective["_schema_discovery"]={"table":str(table_name),"columns":names}
+    return effective
 async def process_sync(job):
     store_id=job.get("store_id") or job.get("tenant_id")
     if not store_id:result=SyncResult(store_id="");result.errors.append("job missing store_id");return result
@@ -52,10 +81,14 @@ async def process_sync(job):
             if not connection_url:result=SyncResult(store_id=store_id);result.errors.append("job missing connection_url");return result
             connector=ConnectorFactory.create(connector_type,connection_url)
         if not table_name:result=SyncResult(store_id=store_id);result.errors.append("job missing table_name");return result
-        if not mapping:result=SyncResult(store_id=store_id);result.errors.append("job missing field mapping");return result
-        service=ProductSyncService(db)
+        mapping=await _auto_discover_mapping(connector,table_name,mapping)
+        if datasource_id and mapping != resolved["mapping"]:
+            from app.db.models import DataSource
+            ds=db.query(DataSource).filter(DataSource.id==datasource_id,DataSource.store_id==store_id).first()
+            if ds is not None:
+                ds.mapping=mapping;db.commit()
         if job_type=="stock_refresh":
-            columns=[(e.get("column") if isinstance(e,dict) else e) for f,e in mapping.items() if f!="_sync_state" and (e.get("column") if isinstance(e,dict) else e)]; rows=[];offset=0
+            columns=[(e.get("column") if isinstance(e,dict) else e) for f,e in mapping.items() if f not in {"_sync_state","_schema_discovery","_rest_options"} and (e.get("column") if isinstance(e,dict) else e)]; rows=[];offset=0
             while True:
                 page=connector.fetch_product_rows(table_name,columns,limit=200,offset=offset)
                 if not page:break
@@ -65,7 +98,7 @@ async def process_sync(job):
             result=service.refresh_stock(store_id,rows,mapping)
         else:
             state=mapping.get("_sync_state") or {}; sync_upper_bound=datetime.utcnow() if state.get("initialized") and (_mapping_column(mapping,"updated_at") or _mapping_column(mapping,"created_at")) else None
-            result=service.sync_from_connector(store_id,connector,table_name,mapping,full_sync=full_sync,sync_state=state,sync_upper_bound=sync_upper_bound,source_datasource_id=datasource_id)
+            result=ProductSyncService(db).sync_from_connector(store_id,connector,table_name,mapping,full_sync=full_sync,sync_state=state,sync_upper_bound=sync_upper_bound,source_datasource_id=datasource_id)
             if not result.errors:_persist_watermark(db,datasource_id,mapping,connector,table_name,upper_bound=sync_upper_bound)
         if datasource_id:
             from app.datasources.service import DataSourceService
