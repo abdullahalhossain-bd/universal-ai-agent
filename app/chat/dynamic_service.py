@@ -41,6 +41,25 @@ class DynamicAttributeChatService(ChatService):
             )
         return groups
 
+    def _save_product_context(self, session_id, products, query, filters=None, offset=0):
+        # Base ChatService persists filter metadata for pagination. Ensure
+        # dynamic attributes are included in that metadata as well.
+        if filters is not None and not isinstance(filters, dict):
+            filters = {
+                "min_price": getattr(filters, "min_price", None),
+                "max_price": getattr(filters, "max_price", None),
+                "in_stock": getattr(filters, "in_stock", False),
+                "product_name": getattr(filters, "product_name", None),
+                "attributes": getattr(filters, "attributes", {}) or {},
+            }
+        super()._save_product_context(
+            session_id=session_id,
+            products=products,
+            query=query,
+            filters=filters,
+            offset=offset,
+        )
+
     async def _search_products(self, store_id, message, filters, store_terms=None):
         attributes = getattr(filters, "attributes", {}) or {}
         if not attributes:
@@ -69,12 +88,9 @@ class DynamicAttributeChatService(ChatService):
         if groups:
             query = query.filter(and_(*groups))
 
-        results = query.order_by(Product.name.asc()).limit(10).all()
-
-        # Attribute constraints are authoritative. Do not fall back to a
-        # broader text-only query because that could violate the customer's
-        # requested attributes.
-        return results
+        # Attribute constraints are authoritative; never broaden to a
+        # text-only query that could violate a customer's requested specs.
+        return query.order_by(Product.name.asc()).limit(10).all()
 
     def _get_next_products(self, store_id, query_text, filters_data, previous_ids, batch_size=5):
         query = self.db.query(Product).filter(Product.store_id == store_id)
