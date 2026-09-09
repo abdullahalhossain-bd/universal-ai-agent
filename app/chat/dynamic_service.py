@@ -63,7 +63,6 @@ class DynamicAttributeChatService(ChatService):
 
     @staticmethod
     def _is_bare_recommendation(message: str) -> bool:
-        """True when the customer asks for 'best' without naming a product/category."""
         normalized = message.casefold().strip()
         normalized = re.sub(r"[?!.:,;]+", " ", normalized)
         tokens = [t for t in re.split(r"\s+", normalized) if t]
@@ -71,7 +70,7 @@ class DynamicAttributeChatService(ChatService):
             return False
         generic = {
             "best", "top", "recommend", "recommended", "suggest", "suggestion",
-            "konta", "konta?", "kon", "ta", "one", "which", "is", "the", "please",
+            "konta", "kon", "ta", "one", "which", "is", "the", "please",
             "কোনটা", "কোনটি", "কোন", "টা", "টি", "সেরা", "ভালো", "ভাল", "সর্বোত্তম",
         }
         return all(token in generic for token in tokens) and any(
@@ -98,8 +97,6 @@ class DynamicAttributeChatService(ChatService):
         if groups:
             query = query.filter(and_(*groups))
 
-        # Recommendation queries need a wider candidate pool so observed behavior
-        # can influence the result instead of merely reordering 10 alphabetic rows.
         limit = 100 if is_recommendation_query(message) else 10
         results = query.order_by(Product.name.asc()).limit(limit).all()
         if is_recommendation_query(message):
@@ -126,14 +123,12 @@ class DynamicAttributeChatService(ChatService):
             self.db.rollback()
 
     async def handle(self, store_id: str, request):
-        """Carry context into recommendations and emit a feedback-loop interaction."""
         context_token = _RECOMMENDATION_CONTEXT.set("")
         behavior_token = _BEHAVIOR_SCORES.set({})
         try:
             message = getattr(request, "message", "").strip()
             conversation_id = getattr(request, "conversation_id", None)
             session = None
-            history = []
 
             if conversation_id:
                 session = self._get_or_create_session(store_id, conversation_id)
@@ -142,8 +137,6 @@ class DynamicAttributeChatService(ChatService):
                 previous_context = self._load_product_context(session.id).get("query") or ""
                 _RECOMMENDATION_CONTEXT.set(" ".join(previous_user + [previous_context]))
 
-            # A context-free "best konta?" is ambiguous. Do not silently rank
-            # the entire merchant catalog; ask for the missing product/category.
             if is_recommendation_query(message) and self._is_bare_recommendation(message) and not _RECOMMENDATION_CONTEXT.get().strip():
                 if session is None:
                     conversation_id = conversation_id or __import__("uuid").uuid4().hex
@@ -172,14 +165,11 @@ class DynamicAttributeChatService(ChatService):
                 if len(result["products"]) > 1:
                     best_line += "\n\nআরও ভালো options নিচে দেখানো হয়েছে।"
                 result["message"] = best_line
-
-                # Base ChatService already persisted its deterministic message.
-                # Replace that message so future context sees the same recommendation
-                # the customer actually received.
                 try:
+                    target_session = self._get_or_create_session(store_id=store_id, conversation_id=result.get("conversation_id") or conversation_id)
                     latest = (
                         self.db.query(ChatMessage)
-                        .filter(ChatMessage.session_id == result.get("conversation_id", ""), ChatMessage.role == "assistant")
+                        .filter(ChatMessage.session_id == target_session.id, ChatMessage.role == "assistant")
                         .order_by(ChatMessage.created_at.desc())
                         .first()
                     )
