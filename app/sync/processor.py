@@ -3,7 +3,6 @@ from __future__ import annotations
 import inspect
 import logging
 from datetime import datetime
-from typing import Any
 from app.connectors.config import ConnectorConfig
 from app.connectors.credential_store import get_credential_store
 from app.connectors.factory import ConnectorFactory
@@ -43,8 +42,16 @@ async def _auto_discover_mapping(connector,table_name,mapping):
     effective=dict(mapping or {})
     discover=getattr(connector,"discover",None)
     if discover is None:return effective
-    schema=discover()
-    if inspect.isawaitable(schema):schema=await schema
+    try:
+        schema=discover()
+        if inspect.isawaitable(schema):schema=await schema
+    except Exception:
+        # A merchant REST API may not expose /schema. Keep an already usable
+        # explicit mapping working; required-field validation will still guard
+        # incomplete mappings downstream.
+        if _mapping_column(effective,"id") and _mapping_column(effective,"name"):
+            return effective
+        raise
     tables=getattr(schema,"tables",None)
     if tables is None and isinstance(schema,dict):tables=schema.get("tables",[])
     target=None
@@ -87,6 +94,7 @@ async def process_sync(job):
             ds=db.query(DataSource).filter(DataSource.id==datasource_id,DataSource.store_id==store_id).first()
             if ds is not None:
                 ds.mapping=mapping;db.commit()
+        service=ProductSyncService(db)
         if job_type=="stock_refresh":
             columns=[(e.get("column") if isinstance(e,dict) else e) for f,e in mapping.items() if f not in {"_sync_state","_schema_discovery","_rest_options"} and (e.get("column") if isinstance(e,dict) else e)]; rows=[];offset=0
             while True:
@@ -98,7 +106,7 @@ async def process_sync(job):
             result=service.refresh_stock(store_id,rows,mapping)
         else:
             state=mapping.get("_sync_state") or {}; sync_upper_bound=datetime.utcnow() if state.get("initialized") and (_mapping_column(mapping,"updated_at") or _mapping_column(mapping,"created_at")) else None
-            result=ProductSyncService(db).sync_from_connector(store_id,connector,table_name,mapping,full_sync=full_sync,sync_state=state,sync_upper_bound=sync_upper_bound,source_datasource_id=datasource_id)
+            result=service.sync_from_connector(store_id,connector,table_name,mapping,full_sync=full_sync,sync_state=state,sync_upper_bound=sync_upper_bound,source_datasource_id=datasource_id)
             if not result.errors:_persist_watermark(db,datasource_id,mapping,connector,table_name,upper_bound=sync_upper_bound)
         if datasource_id:
             from app.datasources.service import DataSourceService
