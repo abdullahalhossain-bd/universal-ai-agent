@@ -1,6 +1,7 @@
 """Professional commerce conversation layer on top of the dynamic chat service."""
 from __future__ import annotations
 
+import re
 import uuid
 
 from app.chat.dynamic_service import DynamicAttributeChatService
@@ -9,9 +10,41 @@ from app.chat.dynamic_service import DynamicAttributeChatService
 class ProfessionalCommerceChatService(DynamicAttributeChatService):
     """Keep commerce conversations grounded, useful and customer-facing."""
 
+    def _extract_product_index(self, message: str) -> int | None:
+        """Accept common Bengali/Banglish ordinal spellings used by customers."""
+        index = super()._extract_product_index(message)
+        if index is not None:
+            return index
+        normalized = message.casefold().strip()
+        normalized = re.sub(r"\s+", " ", normalized)
+        aliases = {
+            "তৃতীয়": 3,
+            "তৃতীয়টা": 3,
+            "তৃতীয়টির": 3,
+            "তৃতীয়টার": 3,
+            "তৃতিয়": 3,
+            "তৃতিয়টা": 3,
+            "তৃতিয়টির": 3,
+            "তৃতিয়টার": 3,
+            "তৃতীয়টি": 3,
+            "তৃতিয়টি": 3,
+            "চতুর্থ": 4,
+            "চতুর্থটা": 4,
+            "চতুর্থটির": 4,
+            "চতুর্থটার": 4,
+            "পঞ্চম": 5,
+            "পঞ্চমটা": 5,
+            "পঞ্চমটির": 5,
+            "পঞ্চমটার": 5,
+        }
+        for phrase, value in aliases.items():
+            if phrase in normalized:
+                return value
+        return None
+
     @staticmethod
     def _enrich_product_payload(store_id: str, db, products: list[dict]) -> list[dict]:
-        """Guarantee frontend-safe image/link fields for product cards."""
+        """Guarantee frontend-safe image/link and recommendation fields."""
         from app.db.models import Product
 
         ids = [str(item.get("id")) for item in products if item.get("id")]
@@ -36,6 +69,8 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
                 payload["stock"] = getattr(product, "stock", item.get("stock"))
                 payload["rating"] = getattr(product, "rating", item.get("rating"))
                 payload["review_count"] = getattr(product, "review_count", item.get("review_count"))
+                payload["sales_count"] = getattr(product, "sales_count", item.get("sales_count"))
+                payload["bestseller_score"] = getattr(product, "bestseller_score", item.get("bestseller_score"))
             enriched.append(payload)
         return enriched
 
@@ -117,8 +152,6 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
         is_image = self._is_image_request(message)
         is_explanation = self._is_recommendation_explanation(message)
 
-        # A follow-up that needs a product must never silently become a fresh
-        # search. Ask for the missing reference instead of showing unrelated items.
         if (is_link or is_image or is_explanation) and referenced_product is None:
             if session is not None:
                 self._save_message(session_id=session.id, role="user", content=message)
