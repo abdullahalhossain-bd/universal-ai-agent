@@ -15,9 +15,16 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # PostgreSQL requires a typed JSON/JSONB literal here; bare `{}` is
+    # parsed as SQL syntax instead of a JSON value.
     op.add_column(
         "products",
-        sa.Column("attributes", sa.JSON(), nullable=False, server_default=sa.text("{}")),
+        sa.Column(
+            "attributes",
+            sa.JSON(),
+            nullable=False,
+            server_default=sa.text("'{}'::json"),
+        ),
     )
 
 
