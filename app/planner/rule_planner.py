@@ -204,28 +204,22 @@ def _is_recommendation_query(text: str) -> bool:
 
 
 def _looks_like_product_search(query: str, search_terms: str, attributes: dict, max_price: float | None, min_price: float | None) -> bool:
-    """Conservatively classify natural catalog requests without store vocabulary.
-
-    Store vocabulary is optional: a merchant can legitimately receive a query
-    for a product/category that has not been preloaded into the vocabulary.
-    The old planner returned UNKNOWN for ordinary requests such as
-    "Nike shoes" and "কালো জুতা দেখাও চাই" when no store terms were available.
-    """
     if attributes or max_price is not None or min_price is not None:
         return True
     normalized = _normalize_entity_text(query)
-    if not normalized:
-        return False
-    if normalized in CONVERSATIONAL_ONLY:
+    if not normalized or normalized in CONVERSATIONAL_ONLY:
         return False
     tokens = [token for token in normalized.split() if token not in STOP_WORDS]
     if not tokens:
         return False
     if any(token in PRODUCT_ACTION_WORDS for token in tokens):
         return len(tokens) >= 2
-    # A short noun phrase is a typical product/category search. Avoid turning
-    # long prose/questions into catalog searches unless they contain a product
-    # action word or explicit catalog cue.
+    # When a product/category noun is combined with a knowledge cue
+    # (e.g. "shoes return policy"), keep the query mixed instead of
+    # downgrading it to knowledge-only.
+    non_knowledge = [token for token in tokens if token not in KNOWLEDGE_WORDS]
+    if non_knowledge and any(token in KNOWLEDGE_WORDS for token in tokens):
+        return True
     return 1 <= len(tokens) <= 4 and not any(token in KNOWLEDGE_WORDS for token in tokens)
 
 
@@ -236,12 +230,13 @@ def plan(query: str, store_terms: set[str] | None = None):
     schema = getattr(store_terms, "attribute_schema", None) or {}
     store_entities = [entity for entity in _resolve_store_entities(query, store_terms) if entity not in attribute_exclusions and not any(entity in aliases for aliases in schema.values())]
     recommendation = _is_recommendation_query(query)
-    product_score = min(1.0, 0.55 + 0.10 * len(store_entities)) if store_entities else (0.70 if attributes else (0.65 if recommendation else 0.0))
     knowledge_score = sum(word in text for word in KNOWLEDGE_WORDS)
     max_price = _extract_max_price(query)
     min_price = _extract_min_price(query)
     in_stock = _extract_in_stock(query)
     search_terms = _clean_search_terms(query, exclude_words=attribute_exclusions, store_terms=store_terms)
+    generic_product = _looks_like_product_search(query, search_terms, attributes, max_price, min_price)
+    product_score = min(1.0, 0.55 + 0.10 * len(store_entities)) if store_entities else (0.70 if attributes else (0.65 if recommendation else (0.55 if generic_product else 0.0)))
     entity_query = " ".join(store_entities) or search_terms
     if recommendation and not store_entities:
         entity_query = None
@@ -254,8 +249,6 @@ def plan(query: str, store_terms: set[str] | None = None):
         return PlannedAction(intent=Intent.PRODUCT_SEARCH, product_filters=ProductFilters(**common_filters), confidence=0.90)
     if max_price is not None and search_terms:
         return PlannedAction(intent=Intent.PRODUCT_SEARCH, product_filters=ProductFilters(product_name=search_terms, min_price=min_price, max_price=max_price, in_stock=in_stock, attributes=attributes), confidence=0.85)
-    if _looks_like_product_search(query, search_terms, attributes, max_price, min_price):
-        return PlannedAction(intent=Intent.PRODUCT_SEARCH, product_filters=ProductFilters(product_name=search_terms or None, min_price=min_price, max_price=max_price, in_stock=in_stock, attributes=attributes), confidence=0.78)
     if knowledge_score > 0:
         return PlannedAction(intent=Intent.KNOWLEDGE_SEARCH, knowledge_query=query, confidence=0.75)
     tokens = search_terms.split()
