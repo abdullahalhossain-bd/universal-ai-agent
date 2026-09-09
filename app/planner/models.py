@@ -7,6 +7,7 @@ class Intent(str, Enum):
     PRODUCT_SEARCH = "product_search"
     KNOWLEDGE_SEARCH = "knowledge_search"
     MIXED = "mixed"
+    CATALOG_BROWSE = "catalog_browse"
     UNKNOWN = "unknown"
 
 
@@ -58,4 +59,3 @@ class QueryPlan(BaseModel):
     intent: str = "unknown"
 
     confidence: float = 0.0
-
