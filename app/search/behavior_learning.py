@@ -47,7 +47,7 @@ def record_event(
         event_type=event_type,
         query=(query or "")[:500] or None,
         value=value,
-        metadata=metadata or {},
+        metadata_json=metadata or {},
     )
     db.add(event)
     db.commit()
