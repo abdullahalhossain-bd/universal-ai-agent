@@ -18,17 +18,18 @@ def _tokens(text: str) -> list[str]:
 
 
 def _fuzzy_cue_matches(tokens, cues: set[str]) -> set[str]:
-    """Match tokens against known cue words, tolerating small typos or
-    garbled mixed-script input (e.g. a stray Latin letter inside an
-    otherwise Bengali word from phonetic-keyboard input), not just exact
-    membership.
-    """
+    """Match genuine cue words while avoiding false positives from tiny tokens."""
     matched: set[str] = set()
     for token in tokens:
         if token in cues:
             matched.add(token)
             continue
-        close = difflib.get_close_matches(token, cues, n=1, cutoff=0.7)
+        # Two/three-character tokens are too ambiguous for fuzzy matching.
+        # This prevents product names such as ``laptop`` from being interpreted
+        # as recommendation cues merely because they contain/approach ``top``.
+        if len(token) < 4:
+            continue
+        close = difflib.get_close_matches(token, cues, n=1, cutoff=0.78)
         if close:
             matched.add(token)
     return matched
@@ -40,6 +41,7 @@ def is_recommendation_query(query: str) -> bool:
     if _fuzzy_cue_matches(tokens, _ALL_CUES):
         return True
     return any(x in q for x in ("best seller", "best-seller", "সবচেয়ে ভালো"))
+
 
 def _attribute_text(product) -> str:
     attrs = getattr(product, "attributes", None) or {}
@@ -79,11 +81,7 @@ def _relative_signal(items, attr_name: str) -> dict[int, float]:
 
 
 def rank_products(products: Iterable, query: str, behavior_scores: Mapping[str, float] | None = None) -> list:
-    """Rank already-filtered products using query intent + verified merchant data.
-
-    Behavioral evidence is an additional ranking signal only when observed.
-    It is store-scoped by the caller and never treated as a fabricated rating.
-    """
+    """Rank already-filtered products using query intent + verified merchant data."""
     items = list(products)
     if len(items) <= 1:
         return items
@@ -124,18 +122,12 @@ def rank_products(products: Iterable, query: str, behavior_scores: Mapping[str, 
         relevance = sum(1 for token in qtokens if token in searchable) / max(1, len(qtokens))
         stock_signal = 1.0 if getattr(p, "stock", None) is not None and float(p.stock) > 0 else 0.0
         completeness = min(1.0, len(getattr(p, "attributes", None) or {}) / 5.0)
-
-        dedicated_popularity = (
-            bestseller_signal.get(id(p), 0.0) * 0.45
-            + sales_signal.get(id(p), 0.0) * 0.35
-            + review_signal.get(id(p), 0.0) * 0.20
-        )
+        dedicated_popularity = (bestseller_signal.get(id(p), 0.0) * 0.45 + sales_signal.get(id(p), 0.0) * 0.35 + review_signal.get(id(p), 0.0) * 0.20)
         merchant_popularity = 1.0 if any(cue in attrs for cue in _POPULAR_CUES) else 0.0
         popularity_evidence = max(dedicated_popularity, merchant_popularity)
         performance_signal = 1.0 if any(cue in searchable for cue in _PERFORMANCE_CUES) else 0.0
         premium_signal = 1.0 if any(cue in searchable for cue in _PREMIUM_CUES) else 0.0
         behavior = behavior_signal(p)
-
         if popular:
             return relevance * .40 + popularity_evidence * .35 + behavior * .20 + stock_signal * .05
         if premium:
@@ -146,7 +138,6 @@ def rank_products(products: Iterable, query: str, behavior_scores: Mapping[str, 
             return relevance * .48 + performance_signal * .22 + numeric * .10 + rating_signal.get(id(p), 0.0) * .10 + behavior * .10
         if value:
             return relevance * .46 + price_value(p) * .24 + rating_signal.get(id(p), 0.0) * .12 + behavior * .10 + completeness * .08
-
         quality_signal = rating_signal.get(id(p), 0.0)
         evidence_signal = max(quality_signal, popularity_evidence)
         return relevance * .55 + evidence_signal * .20 + behavior * .12 + price_value(p) * .06 + completeness * .05 + stock_signal * .02
