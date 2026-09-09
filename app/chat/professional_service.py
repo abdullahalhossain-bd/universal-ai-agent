@@ -49,6 +49,7 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
                 payload["review_count"] = getattr(product, "review_count", item.get("review_count"))
                 payload["sales_count"] = getattr(product, "sales_count", item.get("sales_count"))
                 payload["bestseller_score"] = getattr(product, "bestseller_score", item.get("bestseller_score"))
+                payload["attributes"] = getattr(product, "attributes", item.get("attributes")) or {}
             enriched.append(payload)
         return enriched
 
@@ -86,6 +87,44 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
                 pass
         return False
 
+    @staticmethod
+    def _is_catalog_attribute_question(message: str) -> bool:
+        q = re.sub(r"\s+", " ", message.casefold().strip())
+        if not q:
+            return False
+        question = any(term in q for term in (
+            "ki ki", "what all", "what does", "which", "kon", "konta", "which one",
+            "কি কি", "কী কী", "কোন", "কোনটা", "কোনটায়", "কোনটাতে",
+        ))
+        availability = any(term in q for term in (
+            "ase", "ache", "available", "availability", "features", "feature", "spec", "specs",
+            "আছে", "অ্যাভেইলেবল", "ফিচার", "স্পেসিফিকেশন",
+        ))
+        return question and availability
+
+    @staticmethod
+    def _catalog_attribute_message(products: list) -> str:
+        if not products:
+            return "দুঃখিত 😊 এই মুহূর্তে দেখানোর মতো product option নেই।"
+        lines = ["অবশ্যই 😊 প্রতিটি option-এ কী কী আছে, সেটা নিচে দেখাচ্ছি। যেটা ভালো লাগবে সেটার card-এ click করলে আরও details দিতে পারব।"]
+        for index, product in enumerate(products, 1):
+            name = str(getattr(product, "name", None) or "Product")
+            attrs = getattr(product, "attributes", None) or {}
+            parts = []
+            if isinstance(attrs, dict):
+                for key, value in attrs.items():
+                    if value is None or value == "":
+                        continue
+                    label = str(key).replace("_", " ").strip()
+                    parts.append(f"{label}: {value}")
+                    if len(parts) >= 5:
+                        break
+            if parts:
+                lines.append(f"{index}. {name} — " + ", ".join(parts))
+            else:
+                lines.append(f"{index}. {name} — বিস্তারিত feature data নেই")
+        return "\n".join(lines)
+
     async def handle(self, store_id: str, request):
         message = getattr(request, "message", "").strip()
         conversation_id = getattr(request, "conversation_id", None)
@@ -114,6 +153,19 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
         referenced_product = None
         if conversation_id:
             session = self._get_or_create_session(store_id, conversation_id)
+            context = self._load_product_context(session.id)
+            if context.get("product_ids") and self._is_catalog_attribute_question(message):
+                products = self._context_products(store_id, session.id)
+                self._save_message(session_id=session.id, role="user", content=message)
+                response_message = self._catalog_attribute_message(products)
+                self._save_message(session_id=session.id, role="assistant", content=response_message)
+                return {
+                    "conversation_id": conversation_id,
+                    "type": "product_search",
+                    "message": response_message,
+                    "products": self._enrich_product_payload(store_id, self.db, self._serialize_products(products)),
+                    "sources": [],
+                }
             referenced_product = self._get_referenced_product(store_id=store_id, session_id=session.id, message=message)
 
         is_link = self._is_link_request(message)
