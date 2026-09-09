@@ -1,6 +1,6 @@
 """Sync job processor with incremental, hash fallback, retries, history and approval gates."""
 from __future__ import annotations
-import inspect,logging,time
+import hashlib,inspect,json,logging,time
 from datetime import datetime
 from app.connectors.config import ConnectorConfig
 from app.connectors.credential_store import get_credential_store
@@ -26,6 +26,7 @@ def _resolve_job(job,db):
 def _mapping_column(mapping,field):
  e=mapping.get(field);return e.get("column") if isinstance(e,dict) else(e or None)
 def _semantic_mapping(mapping):return {k:_mapping_column(mapping,k) for k in mapping if not k.startswith("_") and _mapping_column(mapping,k)}
+def _mapping_hash(mapping):return hashlib.sha256(json.dumps(_semantic_mapping(mapping),sort_keys=True,separators=(",",":")).encode()).hexdigest()
 async def _auto_discover_mapping(connector,table_name,mapping):
  effective=dict(mapping or {});discover=getattr(connector,"discover",None)
  if discover is None:return effective,{"columns":[]},False
@@ -69,14 +70,14 @@ async def _process_once(job):
   else:
    if not resolved.get("connection_url"):raise ValueError("job missing connection_url")
    connector=ConnectorFactory.create(connector_type,resolved["connection_url"])
-  previous_mapping=dict(mapping);candidate,schema_meta,mapping_changed=await _auto_discover_mapping(connector,table_name,mapping);initialized=bool(state.get("initialized"));approval=mapping.get("_schema_approval") or {}
-  if initialized and mapping_changed and approval.get("status")!="approved":
-   pending=dict(mapping);pending["_pending_mapping"]={k:v for k,v in candidate.items() if not k.startswith("_")};pending["_schema_approval"]={"status":"pending","detected_at":datetime.utcnow().isoformat(),"reason":"source schema mapping changed; explicit merchant approval required"}
+  previous_mapping=dict(mapping);candidate,schema_meta,mapping_changed=await _auto_discover_mapping(connector,table_name,mapping);initialized=bool(state.get("initialized"));approval=mapping.get("_schema_approval") or {};candidate_hash=_mapping_hash(candidate)
+  if initialized and mapping_changed and not (approval.get("status")=="approved" or(approval.get("status")=="rejected" and approval.get("candidate_hash")==candidate_hash)):
+   pending=dict(mapping);pending["_pending_mapping"]={k:v for k,v in candidate.items() if not k.startswith("_")};pending["_schema_approval"]={"status":"pending","detected_at":datetime.utcnow().isoformat(),"candidate_hash":candidate_hash,"reason":"source schema mapping changed; explicit merchant approval required"}
    if schema_meta.get("columns"):pending["_pending_schema"]=schema_meta
    if datasource_id:
     ds=db.query(DataSource).filter(DataSource.id==datasource_id,DataSource.store_id==store_id).first()
     if ds is not None:ds.mapping=pending;db.commit()
-   result=SyncResult(store_id=store_id);result.schema_drift={"status":"pending","current_mapping":_semantic_mapping(mapping),"proposed_mapping":_semantic_mapping(candidate),"columns":schema_meta.get("columns",[]),"approval_required":True};result.errors.append("schema drift detected; merchant approval required before applying the new mapping")
+   result=SyncResult(store_id=store_id);result.schema_drift={"status":"pending","current_mapping":_semantic_mapping(mapping),"proposed_mapping":_semantic_mapping(candidate),"columns":schema_meta.get("columns",[]),"approval_required":True,"candidate_hash":candidate_hash};result.errors.append("schema drift detected; merchant approval required before applying the new mapping")
    run=_start_run(db,store_id,datasource_id,"schema_review");_finish_run(db,run,result,"blocked",result.errors[0],started);return result
   mapping=candidate
   if datasource_id:
@@ -105,10 +106,12 @@ async def _process_once(job):
    columns=mapping.get("_schema_discovery",{}).get("columns",[]) or schema_meta.get("columns",[])
    if columns:
     analysis=schema_analysis({c:None for c in columns},previous_mapping);result.schema_drift=analysis.get("changes",[]) if not result.schema_drift else result.schema_drift;result.repair_suggestions=repair_suggestions({"current":analysis.get("current",{})},result.data_quality_report())
-   # Media checks are a quality signal, never a reason to roll back a valid product sync.
-   db.commit()
-   media=await verify_and_persist_media_health(db,store_id=store_id,datasource_id=datasource_id)
-   result.data_quality["media_health"]=media;result.data_quality["broken_media"]=int(media["url"]["broken"]+media["image"]["broken"]);result.data_quality["media_health_persisted"]=True
+   db.commit();media=await verify_and_persist_media_health(db,store_id=store_id,datasource_id=datasource_id);result.data_quality["media_health"]=media;result.data_quality["broken_media"]=int(media["url"]["broken"]+media["image"]["broken"]);result.data_quality["media_health_persisted"]=True
+   # A completed source scan establishes a durable hash baseline even when timestamps are unavailable.
+   if not state.get("initialized"):
+    ds=db.query(DataSource).filter(DataSource.id==datasource_id).first()
+    if ds is not None:
+     new_mapping=dict(ds.mapping or mapping);new_state=dict(new_mapping.get("_sync_state") or {});new_state["initialized"]=True;new_state["strategy"]="updated_at+id" if has_timestamp else "deterministic_fingerprint_scan";new_mapping["_sync_state"]=new_state;ds.mapping=new_mapping;db.commit()
    from app.datasources.service import DataSourceService
    DataSourceService(db).record_sync_result(store_id,datasource_id,status="success" if not result.errors else "error",error="; ".join(result.errors) if result.errors else None)
   _finish_run(db,run,result,"success" if not result.errors else "partial","; ".join(result.errors) if result.errors else None,started)
