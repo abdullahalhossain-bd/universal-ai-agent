@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from contextvars import ContextVar
+import re
 
 from sqlalchemy import and_, or_
 
 from app.chat.service import ChatService
+from app.chat.models import ChatMessage
 from app.db.models import Product
 from app.products.attribute_filters import apply_attribute_filters
 from app.products.recommendation import is_recommendation_query, rank_products
@@ -47,6 +49,7 @@ class DynamicAttributeChatService(ChatService):
                 "max_price": getattr(filters, "max_price", None),
                 "in_stock": getattr(filters, "in_stock", False),
                 "product_name": getattr(filters, "product_name", None),
+                "recommendation": getattr(filters, "recommendation", False),
                 "attributes": getattr(filters, "attributes", {}) or {},
             }
         super()._save_product_context(session_id=session_id, products=products, query=query, filters=filters, offset=offset)
@@ -57,6 +60,24 @@ class DynamicAttributeChatService(ChatService):
         scores = get_behavior_scores(self.db, store_id, [str(p.id) for p in products])
         _BEHAVIOR_SCORES.set(scores)
         return rank_products(products, query, behavior_scores=scores)
+
+    @staticmethod
+    def _is_bare_recommendation(message: str) -> bool:
+        """True when the customer asks for 'best' without naming a product/category."""
+        normalized = message.casefold().strip()
+        normalized = re.sub(r"[?!.:,;]+", " ", normalized)
+        tokens = [t for t in re.split(r"\s+", normalized) if t]
+        if not tokens or len(tokens) > 5:
+            return False
+        generic = {
+            "best", "top", "recommend", "recommended", "suggest", "suggestion",
+            "konta", "konta?", "kon", "ta", "one", "which", "is", "the", "please",
+            "কোনটা", "কোনটি", "কোন", "টা", "টি", "সেরা", "ভালো", "ভাল", "সর্বোত্তম",
+        }
+        return all(token in generic for token in tokens) and any(
+            token in {"best", "top", "recommend", "recommended", "suggest", "suggestion", "সেরা", "ভালো", "ভাল", "সর্বোত্তম"}
+            for token in tokens
+        )
 
     async def _search_products(self, store_id, message, filters, store_terms=None):
         attributes = getattr(filters, "attributes", {}) or {}
@@ -109,7 +130,11 @@ class DynamicAttributeChatService(ChatService):
         context_token = _RECOMMENDATION_CONTEXT.set("")
         behavior_token = _BEHAVIOR_SCORES.set({})
         try:
+            message = getattr(request, "message", "").strip()
             conversation_id = getattr(request, "conversation_id", None)
+            session = None
+            history = []
+
             if conversation_id:
                 session = self._get_or_create_session(store_id, conversation_id)
                 history = self._load_history(session.id)
@@ -117,9 +142,52 @@ class DynamicAttributeChatService(ChatService):
                 previous_context = self._load_product_context(session.id).get("query") or ""
                 _RECOMMENDATION_CONTEXT.set(" ".join(previous_user + [previous_context]))
 
+            # A context-free "best konta?" is ambiguous. Do not silently rank
+            # the entire merchant catalog; ask for the missing product/category.
+            if is_recommendation_query(message) and self._is_bare_recommendation(message) and not _RECOMMENDATION_CONTEXT.get().strip():
+                if session is None:
+                    conversation_id = conversation_id or __import__("uuid").uuid4().hex
+                    session = self._get_or_create_session(store_id, conversation_id)
+                self._save_message(session_id=session.id, role="user", content=message)
+                response_message = "কোন product/category-এর মধ্যে best জানতে চান? যেমন: laptop, phone, বা অন্য কোনো product।"
+                self._save_message(session_id=session.id, role="assistant", content=response_message)
+                self._log_analytics_event(store_id=store_id, message=message, intent="recommendation", result_count=0)
+                return {
+                    "conversation_id": conversation_id,
+                    "type": "product_search",
+                    "message": response_message,
+                    "products": [],
+                    "sources": [],
+                }
+
             result = await super().handle(store_id=store_id, request=request)
             if not isinstance(result, dict):
                 return result
+
+            if is_recommendation_query(message) and result.get("products"):
+                first = result["products"][0]
+                best_line = f"সেরা match: {first.get('name', 'Product')}"
+                if first.get("price") is not None:
+                    best_line += f" — ৳{first['price']:,.0f}"
+                if len(result["products"]) > 1:
+                    best_line += "\n\nআরও ভালো options নিচে দেখানো হয়েছে।"
+                result["message"] = best_line
+
+                # Base ChatService already persisted its deterministic message.
+                # Replace that message so future context sees the same recommendation
+                # the customer actually received.
+                try:
+                    latest = (
+                        self.db.query(ChatMessage)
+                        .filter(ChatMessage.session_id == result.get("conversation_id", ""), ChatMessage.role == "assistant")
+                        .order_by(ChatMessage.created_at.desc())
+                        .first()
+                    )
+                    if latest is not None:
+                        latest.content = best_line
+                        self.db.commit()
+                except Exception:
+                    self.db.rollback()
 
             interaction_id = __import__("uuid").uuid4().hex
             products = result.get("products") or []
@@ -130,7 +198,7 @@ class DynamicAttributeChatService(ChatService):
             self._record_impressions(
                 store_id=store_id,
                 conversation_id=result.get("conversation_id") or conversation_id or "",
-                query=getattr(request, "message", ""),
+                query=message,
                 products=product_objects,
                 interaction_id=interaction_id,
             )
