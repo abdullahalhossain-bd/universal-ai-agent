@@ -70,7 +70,6 @@ def _normalize_entity_text(value: str) -> str:
 
 
 def _compact_entity(value: str) -> str:
-    """Remove presentation spaces/punctuation for inputs such as 'I phone'."""
     return re.sub(r"[^a-z0-9\u0980-\u09ff]+", "", _normalize_entity_text(value))
 
 
@@ -110,27 +109,19 @@ def _resolve_store_entities(query: str, store_terms: set[str] | None) -> list[st
     candidates = sorted({_normalize_entity_text(str(term)) for term in store_terms if str(term).strip()}, key=lambda term: (len(term.split()), len(term)), reverse=True)
     exact = [term for term in candidates if term and term in query_norm]
     if exact: return exact[:8]
-
-    # Handle spacing/punctuation variants such as "I phone" -> "iphone"
-    # and natural category references such as "phone" -> stored "Iphone12".
     compact_query = _compact_entity(query_norm)
     compact_candidates = [(term, _compact_entity(term)) for term in candidates]
     compact_exact = [term for term, compact in compact_candidates if compact and compact in compact_query]
-    if compact_exact:
-        return compact_exact[:8]
-
+    if compact_exact: return compact_exact[:8]
     query_tokens = [t for t in query_norm.split() if len(t) >= 3 and t not in STOP_WORDS]
     substring_matches = []
     for token in query_tokens:
         compact_token = _compact_entity(token)
-        if len(compact_token) < 3:
-            continue
+        if len(compact_token) < 3: continue
         for term, compact in compact_candidates:
             if compact_token in compact or compact in compact_token:
                 substring_matches.append(term)
-    if substring_matches:
-        return list(dict.fromkeys(substring_matches))[:8]
-
+    if substring_matches: return list(dict.fromkeys(substring_matches))[:8]
     fuzzy = []
     for token in query_tokens:
         matches = difflib.get_close_matches(token, candidates, n=1, cutoff=0.82)
@@ -173,6 +164,7 @@ def plan(query: str, store_terms: set[str] | None = None):
     text = query.lower()
     attributes = _extract_attributes(query, store_terms)
     attribute_exclusions = _attribute_search_exclusions(attributes, store_terms)
+    schema = getattr(store_terms, "attribute_schema", None) or {}
     store_entities = [entity for entity in _resolve_store_entities(query, store_terms) if entity not in attribute_exclusions and not any(entity in aliases for aliases in schema.values())]
     recommendation = _is_recommendation_query(query)
     product_score = min(1.0, 0.55 + 0.10 * len(store_entities)) if store_entities else (0.70 if attributes else (0.65 if recommendation else 0.0))
