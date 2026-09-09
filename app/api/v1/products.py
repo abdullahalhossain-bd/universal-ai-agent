@@ -1,49 +1,83 @@
-﻿from fastapi import APIRouter
-
-from app.core.config import settings
-from app.services.query_engine import QueryEngine
-from app.services.query_models import (
-    ProductSearchRequest,
+from fastapi import (
+    APIRouter,
+    Depends,
+    Query,
 )
+
+from sqlalchemy.orm import Session
+
+from app.db.database import get_db
+from app.db.models import Store
+from app.core.tenant import get_current_store
+from app.search.ranking import search_and_rank
 
 
 router = APIRouter(
-    prefix="/products",
-    tags=["Products"],
+    prefix="/v1/products",
+    tags=["products"],
 )
 
 
-DEMO_MAPPING = {
-    "id": "id",
-    "name": "name",
-    "description": "description",
-    "price": "price",
-    "stock": "stock",
-    "image": "image_url",
-}
+@router.get("/search")
+def search(
+    q: str = Query(
+        min_length=1,
+        max_length=200,
+    ),
 
+    max_price: float | None = None,
 
-@router.post("/search")
-async def search_products(
-    request: ProductSearchRequest,
+    min_price: float | None = None,
+
+    in_stock: bool | None = None,
+
+    limit: int = Query(
+        default=20,
+        ge=1,
+        le=50,
+    ),
+
+    db: Session = Depends(get_db),
+
+    store: Store = Depends(
+        get_current_store
+    ),
 ):
 
-    engine = QueryEngine(
-        database_url=settings.database_url,
-        mapping=DEMO_MAPPING,
-        product_table="products",
-    )
+    terms = q.split()
 
-    products = engine.search_products(
-        request
+    products = search_and_rank(
+        db=db,
+        store_id=store.id,
+        search_terms=terms,
+        max_price=max_price,
+        min_price=min_price,
+        in_stock=in_stock,
+        limit=limit,
     )
 
     return {
         "count": len(products),
-        "products": [
-            product.model_dump(
-                mode="json"
-            )
+
+        "items": [
+            {
+                "id": product.id,
+                "name": product.name,
+                "price": (
+                    float(product.price)
+                    if product.price is not None
+                    else None
+                ),
+                "currency": product.currency or store.default_currency or "USD",
+                "stock": (
+                    float(product.stock)
+                    if product.stock is not None
+                    else None
+                ),
+                "image_url": product.image_url,
+                "product_url": product.product_url,
+            }
+
             for product in products
         ],
     }
