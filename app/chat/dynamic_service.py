@@ -11,6 +11,7 @@ from sqlalchemy import and_, or_
 
 from app.chat.service import ChatService
 from app.chat.models import ChatMessage
+from app.chat.intent_semantics import classify_product_link_request, parse_llm_link_intent
 from app.db.models import Product
 from app.products.attribute_filters import apply_attribute_filters
 from app.products.recommendation import is_recommendation_query, rank_products
@@ -125,7 +126,6 @@ class DynamicAttributeChatService(ChatService):
         ]
         if not tokens:
             return False
-        # Very generic conversational/action words are not useful product evidence.
         generic = {"the", "this", "that", "please", "show", "give", "want", "need", "dao", "den", "দাও", "দেন", "দেখাও", "দেখান"}
         tokens = [token for token in tokens if token not in generic]
         if not tokens:
@@ -160,8 +160,38 @@ class DynamicAttributeChatService(ChatService):
 
     @staticmethod
     def _is_link_request(message: str) -> bool:
-        q = message.casefold().strip()
-        return any(term in q for term in ("link", "url", "website", "product page", "লিংক", "লিঙ্ক", "ওয়েবসাইট", "ওয়েবসাইট"))
+        """Fast, deterministic link detection for explicit page/link wording."""
+        return classify_product_link_request(message) is True
+
+    async def _detect_product_link_request(self, message: str, has_product_context: bool) -> bool:
+        """Use local semantic composition first; call the LLM only on ambiguity."""
+        local = classify_product_link_request(message)
+        if local is not None:
+            return local
+        if not has_product_context:
+            return False
+        try:
+            response_service = self._shared_llm_stack()
+            generator = getattr(response_service, "llm_generator", None)
+            router = getattr(generator, "provider_router", None)
+            if router is None:
+                return False
+            result = await router.generate(messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Classify whether the user is asking for the purchase/product page, "
+                        "buying location, ordering destination, or product URL of a product. "
+                        "Return only TRUE or FALSE. Do not classify store office/location, shipping, "
+                        "delivery, return, refund, or generic knowledge questions as TRUE."
+                    ),
+                },
+                {"role": "user", "content": message[:1000]},
+            ])
+            return parse_llm_link_intent(str(result.get("text", ""))) is True
+        except Exception:
+            logger.debug("Semantic link-intent fallback failed", exc_info=True)
+            return False
 
     @staticmethod
     def _is_image_request(message: str) -> bool:
@@ -306,12 +336,15 @@ class DynamicAttributeChatService(ChatService):
                 self._log_analytics_event(store_id=store_id, message=message, intent="recommendation", result_count=0)
                 return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": [], "sources": []}
 
+            # Resolve the special product-link intent once for this turn. Explicit
+            # wording is handled locally; only ambiguous language with product
+            # context reaches the LLM fallback.
+            is_link = await self._detect_product_link_request(message, bool(context_products or session and self._load_product_context(session.id).get("product_ids")))
+
             # Conversation continuation is state-driven, not phrase-driven.
-            # If the previous assistant response offered an action and this turn
-            # does not independently identify a catalog request, consume that action.
             if session is not None and pending_action and context_products:
                 explicit_reference = self._get_referenced_product(store_id, session.id, message)
-                is_special_request = self._is_link_request(message) or self._is_image_request(message) or self._is_recommendation_explanation(message) or is_recommendation_query(message)
+                is_special_request = is_link or self._is_image_request(message) or self._is_recommendation_explanation(message) or is_recommendation_query(message)
                 has_new_product = self._message_has_product_match(store_id, message)
                 if explicit_reference is None and not is_special_request and not has_new_product:
                     action = pending_action.get("action")
@@ -328,9 +361,9 @@ class DynamicAttributeChatService(ChatService):
             if session is not None:
                 referenced_product = self._get_referenced_product(store_id, session.id, message)
 
-            if session is not None and referenced_product is not None and (self._is_link_request(message) or self._is_image_request(message)):
-                product = referenced_product
+            if session is not None and referenced_product is not None and (is_link or self._is_image_request(message)):
                 self._save_message(session_id=session.id, role="user", content=message)
+                product = referenced_product
                 if self._is_image_request(message):
                     response_message = f"{self._format_product_name(product)}-এর image নিচে দেখানো হলো।" if getattr(product, "image_url", None) else f"দুঃখিত, {self._format_product_name(product)}-এর image এখন available নেই।"
                 else:
