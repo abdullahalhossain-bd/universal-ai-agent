@@ -51,6 +51,7 @@ class Product(Base):
     stock: Mapped[float | None] = mapped_column("quantity", Numeric(14, 3), nullable=True)
     image_url: Mapped[str | None] = mapped_column("main_image", Text, nullable=True)
     product_url: Mapped[str | None] = mapped_column("product_url", Text, nullable=True)
+    attributes: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
 
 class DataSource(Base):
     __tablename__ = "datasources"
@@ -111,13 +112,6 @@ class SearchLearning(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 class QueryEvent(Base):
-    """One row per customer-chat query, logged for merchant-facing analytics
-    (what are my customers actually asking? which products/categories are in
-    demand? which questions does the bot fail on?) — see app/analytics/.
-
-    Fire-and-forget: a failure to insert this must never break the chat
-    response itself (see ChatService._log_analytics_event).
-    """
     __tablename__ = "query_events"
     __table_args__ = (
         Index("ix_query_events_store_created", "store_id", "created_at"),
@@ -133,13 +127,6 @@ class QueryEvent(Base):
     had_results: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
 
 class LearnedVocabulary(Base):
-    """Global (NOT store-scoped) cache of filler/quantity words the rule-based
-    search planner/matcher couldn't classify and had to ask the LLM about.
-
-    Deliberately not scoped by store_id: words like "কয়ডা" (how many) carry
-    no store-specific meaning, so once any store's chatbot asks the LLM about
-    such a word, no store ever needs to ask again. See app/search/learned_vocabulary.py.
-    """
     __tablename__ = "learned_vocabulary"
     term: Mapped[str] = mapped_column(String(120), primary_key=True)
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
