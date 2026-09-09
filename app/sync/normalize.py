@@ -20,7 +20,10 @@ def _resolve_column(mapping: dict, field: str) -> str | None:
             "image_src", "image_source", "image_url_1", "thumbnail",
             "thumbnail_url", "featured_image", "photo", "picture",
         ),
-        "product_url": ("product_url", "url", "link", "product_link", "permalink"),
+        "product_url": (
+            "product_url", "url", "link", "product_link", "permalink",
+            "product_page", "product_page_url", "web_url", "shop_url",
+        ),
     }
     for key in aliases.get(field, (field,)):
         entry = mapping.get(key)
@@ -96,6 +99,34 @@ def _first_image_url(value: Any) -> str | None:
     return text
 
 
+def _first_product_url(value: Any) -> str | None:
+    """Extract a product page URL from common scalar, list, dict, or JSON data."""
+    if value is None: return None
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            found = _first_product_url(item)
+            if found: return found
+        return None
+    if isinstance(value, dict):
+        for key in (
+            "url", "product_url", "link", "product_link", "permalink",
+            "product_page", "product_page_url", "web_url", "href",
+        ):
+            if key in value:
+                found = _first_product_url(value[key])
+                if found: return found
+        return None
+    text = _as_str(value)
+    if not text: return None
+    if text[:1] in "[{":
+        try: parsed = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError): parsed = None
+        if parsed is not None:
+            found = _first_product_url(parsed)
+            if found: return found
+    return text
+
+
 def _normalize_attribute_value(value: Any) -> Any:
     if value is None: return None
     if isinstance(value, str): return value.strip() or None
@@ -130,7 +161,7 @@ def normalize_row(raw: dict, mapping: dict) -> dict | None:
         "stock": _as_float(_get(raw, mapping, "stock")),
         "category": _as_str(_get(raw, mapping, "category")),
         "image_url": _first_image_url(_get(raw, mapping, "image_url")),
-        "product_url": _as_str(_get(raw, mapping, "product_url")),
+        "product_url": _first_product_url(_get(raw, mapping, "product_url")),
         "currency": _as_currency(_get(raw, mapping, "currency")),
         "attributes": _extract_attributes(raw, mapping),
     }
