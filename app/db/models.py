@@ -17,6 +17,10 @@ class Store(Base):
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     stripe_subscription_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     enabled_features: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
+    # ISO 4217 code (e.g. "USD", "BDT"). Fallback used when a synced product
+    # row has no currency of its own — see Product.currency below and
+    # ChatService._store_currency in app/chat/service.py.
+    default_currency: Mapped[str] = mapped_column(String(10), default="USD", server_default="USD", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 class User(Base):
@@ -48,6 +52,10 @@ class Product(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     category: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     price: Mapped[float | None] = mapped_column("selling_price", Numeric(12, 2), nullable=True)
+    # ISO 4217 code from the merchant's own data (e.g. "USD", "BDT", "EUR").
+    # Null when the source has no currency column — callers fall back to
+    # Store.default_currency in that case, never a hardcoded symbol.
+    currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
     stock: Mapped[float | None] = mapped_column("quantity", Numeric(14, 3), nullable=True)
     image_url: Mapped[str | None] = mapped_column("main_image", Text, nullable=True)
     product_url: Mapped[str | None] = mapped_column("product_url", Text, nullable=True)
