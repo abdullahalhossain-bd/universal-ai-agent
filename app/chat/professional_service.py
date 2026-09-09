@@ -41,12 +41,11 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
 
     @staticmethod
     def _professional_result_message(products: list[dict]) -> str:
-        """Return natural customer-facing copy instead of search-engine language."""
+        """Use natural sales-assistant language instead of search-engine terminology."""
         if len(products) == 1:
             product = products[0]
             name = product.get("name") or product.get("title") or "এই product"
             return f"জি, {name} পাওয়া যাচ্ছে 😊 বিস্তারিত নিচে দেখুন।"
-
         return "জি, আছে 😊 আপনার জন্য available optionগুলো নিচে দিলাম। পছন্দেরটা দেখুন।"
 
     async def handle(self, store_id: str, request):
@@ -91,6 +90,55 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
                 "sources": [],
             }
 
+        # Resolve explicit references ("2 নম্বরটা", "ওটার", "this one")
+        # before the generic planner. This keeps link/image/explanation
+        # follow-ups attached to the product the customer actually selected.
+        session = None
+        referenced_product = None
+        if conversation_id:
+            session = self._get_or_create_session(store_id, conversation_id)
+            referenced_product = self._get_referenced_product(
+                store_id=store_id,
+                session_id=session.id,
+                message=message,
+            )
+
+        is_link = self._is_link_request(message)
+        is_image = self._is_image_request(message)
+        is_explanation = self._is_recommendation_explanation(message)
+
+        if session is not None and referenced_product is not None and (is_link or is_image or is_explanation):
+            self._save_message(session_id=session.id, role="user", content=message)
+            name = self._format_product_name(referenced_product)
+
+            if is_image:
+                if getattr(referenced_product, "image_url", None):
+                    response_message = f"অবশ্যই 😊 {name}-এর image নিচে দেখুন।"
+                else:
+                    response_message = f"দুঃখিত, {name}-এর image এখন available নেই।"
+            elif is_link:
+                if getattr(referenced_product, "product_url", None):
+                    response_message = f"অবশ্যই 😊 {name}-এর product page-এর link নিচের card-এ দিলাম।"
+                else:
+                    response_message = f"দুঃখিত, {name}-এর product link এখন available নেই।"
+            else:
+                # Reuse the dynamic service's evidence-based explanation,
+                # but anchor it to the explicitly referenced product.
+                context_products = self._context_products(store_id, session.id)
+                response_message = self._recommendation_explanation(
+                    referenced_product,
+                    context_products or [referenced_product],
+                )
+
+            self._save_message(session_id=session.id, role="assistant", content=response_message)
+            return {
+                "conversation_id": conversation_id,
+                "type": "product_search",
+                "message": response_message,
+                "products": self._serialize_products([referenced_product]),
+                "sources": [],
+            }
+
         result = await super().handle(store_id=store_id, request=request)
         if not isinstance(result, dict):
             return result
@@ -98,12 +146,10 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
         products = self._enrich_product_payload(store_id, self.db, result.get("products") or [])
         result["products"] = products
 
-        # Dynamic service already creates the special recommendation,
-        # explanation, image and link responses. Do not overwrite them.
         is_recommendation = self._is_bare_recommendation(message) or any(
             token in message.casefold() for token in ("best", "top", "recommend", "সেরা", "ভালো")
         )
-        is_followup = self._is_link_request(message) or self._is_image_request(message) or self._is_recommendation_explanation(message)
+        is_followup = is_link or is_image or is_explanation
         if products and result.get("type") == "product_search" and not is_recommendation and not is_followup:
             result["message"] = self._professional_result_message(products)
 
