@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, Column, MetaData, Table, create_engine, insert, select
+from sqlalchemy import JSON, Column, Integer, MetaData, Table, create_engine, insert, select
 
 from app.products.attribute_filters import apply_attribute_filters
 
@@ -8,7 +8,7 @@ def test_structured_attribute_filter_matches_16gb_without_description_search():
     products = Table(
         "attribute_products",
         metadata,
-        Column("id", primary_key=True),
+        Column("id", Integer, primary_key=True),
         Column("attributes", JSON, nullable=False),
     )
     engine = create_engine("sqlite:///:memory:")
@@ -35,7 +35,7 @@ def test_multiple_dynamic_attributes_are_anded():
     products = Table(
         "attribute_products_multi",
         metadata,
-        Column("id", primary_key=True),
+        Column("id", Integer, primary_key=True),
         Column("attributes", JSON, nullable=False),
     )
     engine = create_engine("sqlite:///:memory:")
