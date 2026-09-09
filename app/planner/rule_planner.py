@@ -179,7 +179,7 @@ def plan(query: str, store_terms: set[str] | None = None):
     if product_score > 0 and knowledge_score > 0:
         return PlannedAction(intent=Intent.MIXED, product_filters=ProductFilters(**common_filters), knowledge_query=_clean_search_terms(query, exclude_words=set(store_entities) | attribute_exclusions) or query, confidence=0.90)
     if recommendation:
-        return PlannedAction(intent=Intent.RECOMMENDATION, product_filters=ProductFilters(**common_filters), confidence=0.92 if store_entities else 0.80)
+        return PlannedAction(intent=Intent.PRODUCT_SEARCH, product_filters=ProductFilters(**common_filters), confidence=0.92 if store_entities else 0.80)
     if product_score > 0:
         return PlannedAction(intent=Intent.PRODUCT_SEARCH, product_filters=ProductFilters(**common_filters), confidence=0.90)
     if max_price is not None and search_terms:
