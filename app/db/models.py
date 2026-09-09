@@ -17,9 +17,6 @@ class Store(Base):
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     stripe_subscription_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     enabled_features: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
-    # ISO 4217 code (e.g. "USD", "BDT"). Fallback used when a synced product
-    # row has no currency of its own — see Product.currency below and
-    # ChatService._store_currency in app/chat/service.py.
     default_currency: Mapped[str] = mapped_column(String(10), default="USD", server_default="USD", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -52,9 +49,6 @@ class Product(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     category: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     price: Mapped[float | None] = mapped_column("selling_price", Numeric(12, 2), nullable=True)
-    # ISO 4217 code from the merchant's own data (e.g. "USD", "BDT", "EUR").
-    # Null when the source has no currency column — callers fall back to
-    # Store.default_currency in that case, never a hardcoded symbol.
     currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
     stock: Mapped[float | None] = mapped_column("quantity", Numeric(14, 3), nullable=True)
     image_url: Mapped[str | None] = mapped_column("main_image", Text, nullable=True)
@@ -84,6 +78,31 @@ class DataSource(Base):
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_sync_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     last_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+class SyncRun(Base):
+    __tablename__ = "sync_runs"
+    __table_args__ = (
+        Index("ix_sync_runs_datasource_started", "datasource_id", "started_at"),
+        Index("ix_sync_runs_store_started", "store_id", "started_at"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    store_id: Mapped[str] = mapped_column(String(36), ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)
+    datasource_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("datasources.id", ondelete="SET NULL"), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="running", server_default="running")
+    sync_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="full", server_default="full")
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    products_seen: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    updated: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    unchanged: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    stock_zeroed: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    health_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quality_report: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
+    reconciliation: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 class ChatImage(Base):
     __tablename__ = "chat_images"
