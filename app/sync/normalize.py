@@ -15,10 +15,7 @@ _CURRENCY_AND_GROUPING = re.compile(r"[^0-9+\-.,]")
 def _resolve_column(mapping: dict, field: str) -> str | None:
     entry = mapping.get(field)
     if entry is None:
-        aliases = {"image_url": "image", "product_url": "url"}
-        alt = aliases.get(field)
-        if alt:
-            entry = mapping.get(alt)
+        entry = mapping.get({"image_url": "image", "product_url": "url"}.get(field, ""))
     if isinstance(entry, dict):
         return entry.get("column")
     return entry
@@ -67,30 +64,36 @@ def _as_str(value: Any) -> str | None:
 def _normalize_attribute_value(value: Any) -> Any:
     if value is None:
         return None
-    if isinstance(value, (str, int, float, bool, list, dict)):
-        if isinstance(value, str):
-            return value.strip() or None
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, (int, float, bool, list, dict)):
         return value
     return str(value).strip() or None
 
 
 def _extract_attributes(raw: dict, mapping: dict) -> dict[str, Any]:
-    """Copy merchant-defined mapped columns without requiring platform fields."""
     result: dict[str, Any] = {}
     attribute_mapping = mapping.get("attributes") or {}
     if not isinstance(attribute_mapping, dict):
         return result
-
     for semantic_name, entry in attribute_mapping.items():
-        if not isinstance(semantic_name, str) or not semantic_name.strip():
-            continue
+        key = str(semantic_name).strip().lower()
         column = entry.get("column") if isinstance(entry, dict) else entry
-        if not isinstance(column, str) or not column.strip():
+        if not key or not isinstance(column, str) or not column.strip():
             continue
         value = _normalize_attribute_value(raw.get(column))
         if value is not None:
-            result[semantic_name.strip().lower()] = value
+            result[key] = value
     return result
+
+
+def _attribute_search_text(attributes: dict[str, Any]) -> str:
+    parts = []
+    for key, value in attributes.items():
+        parts.append(str(key))
+        if isinstance(value, (str, int, float, bool)):
+            parts.append(str(value))
+    return " | ".join(parts)
 
 
 def normalize_row(raw: dict, mapping: dict) -> dict | None:
@@ -104,14 +107,20 @@ def normalize_row(raw: dict, mapping: dict) -> dict | None:
     if not product_id or not name:
         return None
 
+    attributes = _extract_attributes(raw, mapping)
+    description = _as_str(_get(raw, mapping, "description"))
+    attribute_text = _attribute_search_text(attributes)
+    if attribute_text:
+        description = f"{description} | {attribute_text}" if description else attribute_text
+
     return {
         "id": product_id,
         "name": name,
-        "description": _as_str(_get(raw, mapping, "description")),
+        "description": description,
         "price": _as_float(_get(raw, mapping, "price")),
         "stock": _as_float(_get(raw, mapping, "stock")),
         "category": _as_str(_get(raw, mapping, "category")),
         "image_url": _as_str(_get(raw, mapping, "image_url")),
         "product_url": _as_str(_get(raw, mapping, "product_url")),
-        "attributes": _extract_attributes(raw, mapping),
+        "attributes": attributes,
     }
