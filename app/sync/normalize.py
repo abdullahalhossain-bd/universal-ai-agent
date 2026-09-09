@@ -14,13 +14,14 @@ _CURRENCY_AND_GROUPING = re.compile(r"[^0-9+\-.,]")
 
 
 def _resolve_column(mapping: dict, field: str) -> str | None:
-    # Prefer explicit canonical fields, then support common singular/plural
-    # aliases produced by automatic datasource mapping.
     aliases = {
-        "image_url": ("image_url", "image", "images"),
-        "product_url": ("product_url", "url"),
+        "image_url": (
+            "image_url", "image", "images", "main_image", "mainImage",
+            "image_src", "image_source", "image_url_1", "thumbnail",
+            "thumbnail_url", "featured_image", "photo", "picture",
+        ),
+        "product_url": ("product_url", "url", "link", "product_link", "permalink"),
     }
-
     for key in aliases.get(field, (field,)):
         entry = mapping.get(key)
         if entry is None:
@@ -40,130 +41,87 @@ def _get(raw: dict, mapping: dict, field: str) -> Any:
 
 
 def _as_float(value: Any) -> float | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
+    if value is None or value == "": return None
+    if isinstance(value, bool): return float(value)
+    if isinstance(value, (int, float)): return float(value)
     text = str(value).strip()
-    if not text:
-        return None
+    if not text: return None
     text = _CURRENCY_AND_GROUPING.sub("", text).replace(" ", "")
-    if not text:
-        return None
+    if not text: return None
     if "." in text and "," in text:
-        if text.rfind(",") > text.rfind("."):
-            text = text.replace(".", "").replace(",", ".")
-        else:
-            text = text.replace(",", "")
+        text = text.replace(".", "").replace(",", ".") if text.rfind(",") > text.rfind(".") else text.replace(",", "")
     elif text.count(",") == 1 and len(text.rsplit(",", 1)[1]) != 3:
         text = text.replace(",", ".")
     else:
         text = text.replace(",", "")
-    try:
-        return float(text)
-    except (TypeError, ValueError):
-        return None
+    try: return float(text)
+    except (TypeError, ValueError): return None
 
 
 def _as_str(value: Any) -> str | None:
-    if value is None:
-        return None
+    if value is None: return None
     text = str(value).strip()
     return text or None
 
 
 def _as_currency(value: Any) -> str | None:
-    """Normalize a merchant currency column to an ISO-4217-shaped code.
-
-    Accepts "usd", " BDT ", "$" style symbols are rejected (too ambiguous
-    to map reliably) — only alphabetic codes are kept, uppercased.
-    """
     text = _as_str(value)
-    if not text:
-        return None
+    if not text: return None
     text = text.strip().upper()
-    if not text.isalpha() or not (2 <= len(text) <= 10):
-        return None
-    return text
+    return text if text.isalpha() and 2 <= len(text) <= 10 else None
 
 
 def _first_image_url(value: Any) -> str | None:
     """Extract the first image URL from scalar, list, dict, or JSON gallery data."""
-    if value is None:
-        return None
-
+    if value is None: return None
     if isinstance(value, (list, tuple)):
         for item in value:
             found = _first_image_url(item)
-            if found:
-                return found
+            if found: return found
         return None
-
     if isinstance(value, dict):
-        for key in ("url", "src", "image_url", "image", "thumbnail"):
+        for key in ("url", "src", "image_url", "image", "thumbnail", "thumbnail_url", "original", "original_url"):
             if key in value:
                 found = _first_image_url(value[key])
-                if found:
-                    return found
+                if found: return found
         return None
-
     text = _as_str(value)
-    if not text:
-        return None
-
-    # Some merchant databases store a gallery as JSON text in one column.
+    if not text: return None
     if text[:1] in "[{":
-        try:
-            parsed = json.loads(text)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            parsed = None
+        try: parsed = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError): parsed = None
         if parsed is not None:
             found = _first_image_url(parsed)
-            if found:
-                return found
-
+            if found: return found
     return text
 
 
 def _normalize_attribute_value(value: Any) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value.strip() or None
-    if isinstance(value, (int, float, bool, list, dict)):
-        return value
+    if value is None: return None
+    if isinstance(value, str): return value.strip() or None
+    if isinstance(value, (int, float, bool, list, dict)): return value
     return str(value).strip() or None
 
 
 def _extract_attributes(raw: dict, mapping: dict) -> dict[str, Any]:
     result: dict[str, Any] = {}
     attribute_mapping = mapping.get("attributes") or {}
-    if not isinstance(attribute_mapping, dict):
-        return result
+    if not isinstance(attribute_mapping, dict): return result
     for semantic_name, entry in attribute_mapping.items():
         key = str(semantic_name).strip().lower()
         column = entry.get("column") if isinstance(entry, dict) else entry
-        if not key or not isinstance(column, str) or not column.strip():
-            continue
+        if not key or not isinstance(column, str) or not column.strip(): continue
         value = _normalize_attribute_value(raw.get(column))
-        if value is not None:
-            result[key] = value
+        if value is not None: result[key] = value
     return result
 
 
 def normalize_row(raw: dict, mapping: dict) -> dict | None:
     raw_id = _get(raw, mapping, "id")
     raw_name = _get(raw, mapping, "name")
-    if raw_id is None or raw_name is None:
-        return None
-
-    product_id = str(raw_id).strip()
-    name = str(raw_name).strip()
-    if not product_id or not name:
-        return None
-
+    if raw_id is None or raw_name is None: return None
+    product_id, name = str(raw_id).strip(), str(raw_name).strip()
+    if not product_id or not name: return None
     return {
         "id": product_id,
         "name": name,
