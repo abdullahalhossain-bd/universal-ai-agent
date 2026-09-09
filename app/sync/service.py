@@ -282,11 +282,6 @@ class ProductSyncService:
             self.db.commit()
 
 
-def _resolve_required(mapping, field):
-    entry = mapping.get(field)
-    return bool(entry.get("column")) if isinstance(entry, dict) else bool(entry)
-
-
 def _mapping_column(mapping, field):
     entry = mapping.get(field)
     return entry.get("column") if isinstance(entry, dict) else (entry or None)
@@ -296,7 +291,7 @@ def _mapping_columns(mapping):
     cols = []
     seen = set()
     for field, entry in mapping.items():
-        if field == "_sync_state":
+        if field in {"_sync_state", "_schema_discovery", "_rest_options"}:
             continue
         col = entry.get("column") if isinstance(entry, dict) else entry
         if col and col not in seen:
