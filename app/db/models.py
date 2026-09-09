@@ -145,7 +145,7 @@ class BehavioralEvent(Base):
     event_type: Mapped[str] = mapped_column(String(40), nullable=False)
     query: Mapped[str | None] = mapped_column(String(500), nullable=True)
     value: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
-    metadata: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
+    metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict, server_default="{}", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, server_default=func.now())
 
 class LearnedVocabulary(Base):
