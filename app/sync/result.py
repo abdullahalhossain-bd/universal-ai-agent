@@ -23,10 +23,12 @@ class SyncResult:
    v=p.get(f);self.data_quality["fields"][f]["present" if v is not None and v!="" else "missing"]+=1
   name=normalize_name(p.get("name"));attrs=p.get("attributes") if isinstance(p.get("attributes"),dict) else {};sku=p.get("sku") or attrs.get("sku")
   if sku:
-   k=str(sku).strip().casefold()
-   if k in self._seen_skus:self._duplicate_sku_count+=1
-   elif len(self._seen_skus)<200000:self._seen_skus.add(k)
-   if k not in self.duplicate_skus and len(self.duplicate_skus)<1000 and k in self._seen_skus and self._duplicate_sku_count:self.duplicate_skus.append(k)
+   k=str(sku).strip().casefold();duplicate=k in self._seen_skus
+   if duplicate:
+    self._duplicate_sku_count+=1
+    if k not in self.duplicate_skus and len(self.duplicate_skus)<1000:self.duplicate_skus.append(k)
+   else:
+    if len(self._seen_skus)<200000:self._seen_skus.add(k)
   if name:
    prior=self._seen_names.get(name)
    if prior is not None:
@@ -46,9 +48,8 @@ class SyncResult:
   if p.get("product_url") and not valid_http_url(p["product_url"]):self._invalid("malformed_url",p)
   if p.get("image_url") and not valid_http_url(p["image_url"]):self._invalid("invalid_image_url",p)
  def record_duplicate(self,pid):
-  v=str(pid)
+  v=str(pid);self._duplicate_id_count+=1
   if v not in self.duplicate_ids and len(self.duplicate_ids)<1000:self.duplicate_ids.append(v)
-  self._duplicate_id_count=max(self._duplicate_id_count,len(self.duplicate_ids))
  def record_price_change(self,pid,name,old,new):
   if len(self.price_changes)<1000:self.price_changes.append({"id":str(pid),"name":name,"old":old,"new":new,"direction":"increased" if new>old else "decreased"})
  def record_stock_change(self,pid,name,old,new):
