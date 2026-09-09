@@ -13,6 +13,7 @@ from app.sync.retry import run_with_retry
 from app.sync.service import ProductSyncService
 from app.sync.quality import repair_suggestions,schema_analysis
 from app.sync.stale import apply_stale_policy
+from app.sync.media_health import verify_and_persist_media_health
 logger=logging.getLogger("app.sync.processor")
 def _resolve_job(job,db):
  store_id=job.get("store_id") or job.get("tenant_id");datasource_id=job.get("datasource_id")
@@ -24,8 +25,7 @@ def _resolve_job(job,db):
  return {"store_id":store_id,"datasource_id":ds.id,"connector_type":ds.connector_type,"connection_url":decrypted or job.get("connection_url"),"api_base_url":ds.api_base_url,"table_name":ds.table_name or job.get("table_name"),"mapping":ds.mapping or job.get("mapping") or {},"full_sync":bool(ds.full_sync if "full_sync" not in job else job.get("full_sync",True)),"job_type":job.get("job_type","product_sync")}
 def _mapping_column(mapping,field):
  e=mapping.get(field);return e.get("column") if isinstance(e,dict) else(e or None)
-def _semantic_mapping(mapping):
- return {k:_mapping_column(mapping,k) for k in mapping if not k.startswith("_") and _mapping_column(mapping,k)}
+def _semantic_mapping(mapping):return {k:_mapping_column(mapping,k) for k in mapping if not k.startswith("_") and _mapping_column(mapping,k)}
 async def _auto_discover_mapping(connector,table_name,mapping):
  effective=dict(mapping or {});discover=getattr(connector,"discover",None)
  if discover is None:return effective,{"columns":[]},False
@@ -46,8 +46,7 @@ async def _auto_discover_mapping(connector,table_name,mapping):
  inferred=discover_mapping({n:None for n in names},effective);candidate=dict(effective)
  for field,column in inferred.items():
   if not field.startswith("_") and column and not effective.get(field):candidate[field]=column
- changed=_semantic_mapping(candidate)!=_semantic_mapping(effective)
- return candidate,{"table":str(table_name),"columns":names},changed
+ return candidate,{"table":str(table_name),"columns":names},_semantic_mapping(candidate)!=_semantic_mapping(effective)
 def _start_run(db,store_id,datasource_id,sync_mode):
  run=SyncRun(store_id=store_id,datasource_id=datasource_id,status="running",sync_mode=sync_mode,started_at=datetime.utcnow());db.add(run);db.commit();return run
 def _finish_run(db,run,result,status,error,started):
@@ -70,12 +69,10 @@ async def _process_once(job):
   else:
    if not resolved.get("connection_url"):raise ValueError("job missing connection_url")
    connector=ConnectorFactory.create(connector_type,resolved["connection_url"])
-  previous_mapping=dict(mapping);candidate,schema_meta,mapping_changed=await _auto_discover_mapping(connector,table_name,mapping)
-  initialized=bool(state.get("initialized"))
-  approval=mapping.get("_schema_approval") or {}
+  previous_mapping=dict(mapping);candidate,schema_meta,mapping_changed=await _auto_discover_mapping(connector,table_name,mapping);initialized=bool(state.get("initialized"));approval=mapping.get("_schema_approval") or {}
   if initialized and mapping_changed and approval.get("status")!="approved":
    pending=dict(mapping);pending["_pending_mapping"]={k:v for k,v in candidate.items() if not k.startswith("_")};pending["_schema_approval"]={"status":"pending","detected_at":datetime.utcnow().isoformat(),"reason":"source schema mapping changed; explicit merchant approval required"}
-   if schema_meta.get("columns"):pending["_pending_schema"] = schema_meta
+   if schema_meta.get("columns"):pending["_pending_schema"]=schema_meta
    if datasource_id:
     ds=db.query(DataSource).filter(DataSource.id==datasource_id,DataSource.store_id==store_id).first()
     if ds is not None:ds.mapping=pending;db.commit()
@@ -84,9 +81,8 @@ async def _process_once(job):
   mapping=candidate
   if datasource_id:
    ds=db.query(DataSource).filter(DataSource.id==datasource_id,DataSource.store_id==store_id).first()
-   if ds is not None and (mapping!=ds.mapping):ds.mapping=mapping;db.commit()
-  state=mapping.get("_sync_state") or {};has_timestamp=bool(_mapping_column(mapping,"updated_at") or _mapping_column(mapping,"created_at"));can_incremental=hasattr(connector,"fetch_product_rows_incremental") and bool(getattr(connector,"supports_incremental_sync",True));incremental=bool(state.get("initialized")) and has_timestamp and can_incremental;hash_fallback=bool(state.get("initialized")) and not incremental
-  mode="incremental" if incremental else("hash_fallback" if hash_fallback else "full")
+   if ds is not None and mapping!=ds.mapping:ds.mapping=mapping;db.commit()
+  state=mapping.get("_sync_state") or {};has_timestamp=bool(_mapping_column(mapping,"updated_at") or _mapping_column(mapping,"created_at"));can_incremental=hasattr(connector,"fetch_product_rows_incremental") and bool(getattr(connector,"supports_incremental_sync",True));incremental=bool(state.get("initialized")) and has_timestamp and can_incremental;hash_fallback=bool(state.get("initialized")) and not incremental;mode="incremental" if incremental else("hash_fallback" if hash_fallback else "full")
   run=_start_run(db,store_id,datasource_id,mode);service=ProductSyncService(db)
   if resolved["job_type"]=="stock_refresh":
    columns=[_mapping_column(mapping,f) for f in mapping if not f.startswith("_") and _mapping_column(mapping,f)];rows=[];offset=0
@@ -108,8 +104,11 @@ async def _process_once(job):
   if datasource_id:
    columns=mapping.get("_schema_discovery",{}).get("columns",[]) or schema_meta.get("columns",[])
    if columns:
-    analysis=schema_analysis({c:None for c in columns},previous_mapping);result.schema_drift=analysis.get("changes",[]) if not result.schema_drift else result.schema_drift
-    result.repair_suggestions=repair_suggestions({"current":analysis.get("current",{})},result.data_quality_report())
+    analysis=schema_analysis({c:None for c in columns},previous_mapping);result.schema_drift=analysis.get("changes",[]) if not result.schema_drift else result.schema_drift;result.repair_suggestions=repair_suggestions({"current":analysis.get("current",{})},result.data_quality_report())
+   # Media checks are a quality signal, never a reason to roll back a valid product sync.
+   db.commit()
+   media=await verify_and_persist_media_health(db,store_id=store_id,datasource_id=datasource_id)
+   result.data_quality["media_health"]=media;result.data_quality["broken_media"]=int(media["url"]["broken"]+media["image"]["broken"]);result.data_quality["media_health_persisted"]=True
    from app.datasources.service import DataSourceService
    DataSourceService(db).record_sync_result(store_id,datasource_id,status="success" if not result.errors else "error",error="; ".join(result.errors) if result.errors else None)
   _finish_run(db,run,result,"success" if not result.errors else "partial","; ".join(result.errors) if result.errors else None,started)
