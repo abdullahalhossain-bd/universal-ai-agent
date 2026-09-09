@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
 from app.auth.models import APIKey
+from app.chat.intelligent_service import IntelligentCommerceChatService
 from app.chat.dynamic_service import DynamicAttributeChatService
-from app.chat.professional_service import ProfessionalCommerceChatService
 from app.chat.schemas import ChatRequest, ChatResponse
 from app.core.rate_limit import enforce_rate_limit
 from app.core.security import resolve_client_ip
@@ -57,5 +57,5 @@ async def chat(
             "sources": [],
         }
 
-    service = ProfessionalCommerceChatService(db=db)
+    service = IntelligentCommerceChatService(db=db)
     return await service.handle(store_id=store.id, request=request)
