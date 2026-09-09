@@ -98,18 +98,14 @@ def _extract_in_stock(text: str) -> bool:
     explicit_patterns = [r"\bavailable\b", r"\bin\s+stock\b", r"\bstock\b", r"স্টক", r"স্টকে", r"স্টকটা", r"উপলব্ধ", r"মজুদ"]
     if any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in explicit_patterns):
         return True
-    has_existence = bool(re.search(r"\b(?:ase|ache|আছে|আছে়|রয়েছে|রয়েছে)\b", normalized))
-    if not has_existence:
+    existence_words = r"(?:ase|ache|আছে|আছে়|রয়েছে|রয়েছে)"
+    if not re.search(rf"\b{existence_words}\b", normalized, flags=re.IGNORECASE):
         return False
-    if re.search(r"\b(?:kemon|emon|কেমন|এমন|কীভাবে|কিভাবে)\b.*\b(?:ase|ache|আছে|রয়েছে|রয়েছে)\b", normalized):
+    if re.search(rf"\b(?:kemon|emon|কেমন|এমন|কীভাবে|কিভাবে)\b.*\b{existence_words}\b", normalized, flags=re.IGNORECASE):
         return False
-    availability_question_patterns = [
-        r"\bki\b.*\b(?:ase|ache)\b", r"\b(?:ase|ache)\s*\??$", r"\b(?:আছে|রয়েছে|রয়েছে)\s*\??$",
-        r"\bকী\b.*\b(?:আছে|রয়েছে|রয়েছে)\b", r"\bকি\b.*\b(?:আছে|রয়েছে|রয়েছে)\b",
-    ]
-    if any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in availability_question_patterns):
-        return True
-    return bool(re.search(r"\b[\w\u0980-\u09ff.-]+\s+(?:ase|ache|আছে|রয়েছে|রয়েছে)\s*\??$", normalized))
+    # Existence/availability questions may contain multiple product words,
+    # e.g. "I phone ase?" or "ল্যাপটপ আছে".
+    return bool(re.search(rf".+\s+{existence_words}\s*\??$", normalized, flags=re.IGNORECASE))
 
 
 def _clean_search_terms(text: str, exclude_words: set[str] | None = None, store_terms: set[str] | None = None) -> str:
@@ -214,9 +210,6 @@ def _looks_like_product_search(query: str, search_terms: str, attributes: dict, 
         return False
     if any(token in PRODUCT_ACTION_WORDS for token in tokens):
         return len(tokens) >= 2
-    # When a product/category noun is combined with a knowledge cue
-    # (e.g. "shoes return policy"), keep the query mixed instead of
-    # downgrading it to knowledge-only.
     non_knowledge = [token for token in tokens if token not in KNOWLEDGE_WORDS]
     if non_knowledge and any(token in KNOWLEDGE_WORDS for token in tokens):
         return True
@@ -236,6 +229,19 @@ def plan(query: str, store_terms: set[str] | None = None):
     in_stock = _extract_in_stock(query)
     search_terms = _clean_search_terms(query, exclude_words=attribute_exclusions, store_terms=store_terms)
     generic_product = _looks_like_product_search(query, search_terms, attributes, max_price, min_price)
+    catalog_browse = _catalog_browse_intent(query, store_entities)
+
+    # Explicit catalog questions must win over generic noun detection.
+    if catalog_browse and not recommendation and not attributes and max_price is None and min_price is None:
+        return PlannedAction(intent=Intent.CATALOG_BROWSE, confidence=0.90)
+
+    # A pure knowledge question must not become MIXED just because words such
+    # as "return" or "policy" make the generic product heuristic fire.
+    normalized_tokens = [token for token in _normalize_entity_text(query).split() if token not in STOP_WORDS]
+    knowledge_only = bool(normalized_tokens) and all(token in KNOWLEDGE_WORDS for token in normalized_tokens)
+    if knowledge_score > 0 and knowledge_only and not recommendation and not store_entities and not attributes and max_price is None and min_price is None:
+        return PlannedAction(intent=Intent.KNOWLEDGE_SEARCH, knowledge_query=query, confidence=0.90)
+
     product_score = min(1.0, 0.55 + 0.10 * len(store_entities)) if store_entities else (0.70 if attributes else (0.65 if recommendation else (0.55 if generic_product else 0.0)))
     entity_query = " ".join(store_entities) or search_terms
     if recommendation and not store_entities:
@@ -254,6 +260,4 @@ def plan(query: str, store_terms: set[str] | None = None):
     tokens = search_terms.split()
     if any(_looks_like_model_number(token) for token in tokens):
         return PlannedAction(intent=Intent.PRODUCT_SEARCH, product_filters=ProductFilters(product_name=search_terms or None, min_price=min_price, max_price=max_price, in_stock=in_stock, attributes=attributes), confidence=0.60)
-    if _catalog_browse_intent(query, store_entities):
-        return PlannedAction(intent=Intent.CATALOG_BROWSE, confidence=0.80)
     return PlannedAction(intent=Intent.UNKNOWN, confidence=0.20)
