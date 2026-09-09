@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from pydantic import ValidationError
 
@@ -20,17 +22,13 @@ def test_action_contract_rejects_missing_required_inputs(payload):
         CommerceActionRequest(**payload)
 
 
-def test_mutating_action_is_never_executed_without_merchant_adapter(db_session):
+def test_mutating_action_is_never_executed_without_merchant_adapter():
     request = CommerceActionRequest(
         action=CommerceAction.CART_ADD,
         product_id="missing",
         quantity=1,
     )
-    result = pytest.run(asyncio=True) if False else None
-    # The service checks adapter availability before any external mutation.
-    # Use the coroutine directly so this test stays independent of an HTTP API.
-    import asyncio
-
-    response = asyncio.run(CommerceActionService(db_session).execute("store-1", request))
+    # Adapter validation happens before any database lookup or external call.
+    response = asyncio.run(CommerceActionService(db=None).execute("store-1", request))
     assert response.success is False
     assert response.status == "not_configured"
