@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextvars import ContextVar
+import logging
 import re
 
 from sqlalchemy import and_, or_
@@ -15,6 +16,7 @@ from app.search.behavior_learning import get_behavior_scores, record_event
 from app.search.stopwords import STOPWORDS
 from app.search.synonyms import expand_terms
 
+logger = logging.getLogger(__name__)
 _RECOMMENDATION_CONTEXT: ContextVar[str] = ContextVar("recommendation_context", default="")
 _BEHAVIOR_SCORES: ContextVar[dict] = ContextVar("behavior_scores", default={})
 
@@ -110,14 +112,25 @@ class DynamicAttributeChatService(ChatService):
 
     @staticmethod
     def _recommendation_evidence(products: list[Product]) -> bool:
+        """Require meaningful catalog evidence before making a strong recommendation claim."""
         for product in products:
-            for field in ("rating", "review_count", "sales_count", "bestseller_score"):
-                value = getattr(product, field, None)
-                try:
-                    if value is not None and float(value) > 0:
-                        return True
-                except (TypeError, ValueError):
-                    continue
+            try:
+                rating = float(getattr(product, "rating", None)) if getattr(product, "rating", None) is not None else None
+                reviews = int(getattr(product, "review_count", None)) if getattr(product, "review_count", None) is not None else 0
+                if rating is not None and rating >= 4.0 and reviews >= 5:
+                    return True
+            except (TypeError, ValueError):
+                pass
+            try:
+                if int(getattr(product, "sales_count", None) or 0) >= 10:
+                    return True
+            except (TypeError, ValueError):
+                pass
+            try:
+                if float(getattr(product, "bestseller_score", None) or 0) >= 0.8:
+                    return True
+            except (TypeError, ValueError):
+                pass
         return False
 
     @staticmethod
@@ -130,32 +143,42 @@ class DynamicAttributeChatService(ChatService):
         reviews = getattr(product, "review_count", None)
         sales = getattr(product, "sales_count", None)
         bestseller = getattr(product, "bestseller_score", None)
+        try:
+            if rating is not None and float(rating) > 0:
+                reasons.append(f"rating {float(rating):.1f}/5")
+        except (TypeError, ValueError):
+            pass
+        try:
+            if reviews is not None and int(reviews) > 0:
+                reasons.append(f"{int(reviews):,} reviews")
+        except (TypeError, ValueError):
+            pass
+        try:
+            if sales is not None and int(sales) > 0:
+                reasons.append(f"{int(sales):,} sales")
+        except (TypeError, ValueError):
+            pass
+        try:
+            if bestseller is not None and float(bestseller) > 0:
+                reasons.append("bestseller হিসেবে ভালো performance")
+        except (TypeError, ValueError):
+            pass
 
-        if rating is not None:
-            reasons.append(f"rating {float(rating):.1f}/5")
-        if reviews is not None:
-            reasons.append(f"{int(reviews):,} reviews")
-        if sales is not None:
-            reasons.append(f"{int(sales):,} sales")
-        if bestseller is not None:
-            reasons.append("bestseller হিসেবে ভালো performance")
-
-        if reasons:
+        if reasons and self._recommendation_evidence([product]):
             return (
                 f"{self._format_product_name(product)}-কে আমি এগিয়ে রাখছি কারণ "
                 + ", ".join(reasons)
-                + ". তাই available information অনুযায়ী এটাকেই ভালো choice মনে হচ্ছে।"
+                + ". তাই available information অনুযায়ী এটিই শক্তিশালী choice মনে হচ্ছে।"
             )
 
         return (
-            "এই productগুলোর মধ্যে নির্ভরযোগ্য rating, review বা sales information যথেষ্ট নেই। "
-            "তাই শুধু অনুমান করে কোনো একটাকে সেরা বলছি না। চাইলে আমি price, stock বা অন্য available details দেখে optionগুলো তুলনা করে দিতে পারি।"
+            "এই productগুলোর মধ্যে নির্ভরযোগ্য evidence যথেষ্ট নেই। "
+            "তাই শুধু অনুমান করে কোনো একটাকে সেরা বলছি না। চাইলে price, stock বা available features দেখে optionগুলো তুলনা করে দিতে পারি।"
         )
 
     async def _search_products(self, store_id, message, filters, store_terms=None):
         attributes = getattr(filters, "attributes", {}) or {}
         query = self.db.query(Product).filter(Product.store_id == store_id)
-
         if filters:
             if filters.min_price is not None:
                 query = query.filter(Product.price >= filters.min_price)
@@ -163,14 +186,11 @@ class DynamicAttributeChatService(ChatService):
                 query = query.filter(Product.price <= filters.max_price)
             if filters.in_stock:
                 query = query.filter(or_(Product.stock.is_(None), Product.stock > 0))
-
         if attributes:
             query = apply_attribute_filters(query, attributes, Product.attributes)
-
         groups = self._build_product_text_conditions(getattr(filters, "product_name", None)) if filters else []
         if groups:
             query = query.filter(and_(*groups))
-
         limit = 100 if is_recommendation_query(message) else 10
         results = query.order_by(Product.name.asc()).limit(limit).all()
         if is_recommendation_query(message):
@@ -195,6 +215,7 @@ class DynamicAttributeChatService(ChatService):
                 )
         except Exception:
             self.db.rollback()
+            logger.exception("Failed to record product impression events")
 
     async def handle(self, store_id: str, request):
         context_token = _RECOMMENDATION_CONTEXT.set("")
@@ -204,7 +225,6 @@ class DynamicAttributeChatService(ChatService):
             conversation_id = getattr(request, "conversation_id", None)
             session = None
             context_products: list[Product] = []
-
             if conversation_id:
                 session = self._get_or_create_session(store_id, conversation_id)
                 history = self._load_history(session.id)
@@ -221,55 +241,31 @@ class DynamicAttributeChatService(ChatService):
                 response_message = "কোন product/category-এর মধ্যে best জানতে চান? যেমন: laptop, phone, বা অন্য কোনো product।"
                 self._save_message(session_id=session.id, role="assistant", content=response_message)
                 self._log_analytics_event(store_id=store_id, message=message, intent="recommendation", result_count=0)
-                return {
-                    "conversation_id": conversation_id,
-                    "type": "product_search",
-                    "message": response_message,
-                    "products": [],
-                    "sources": [],
-                }
+                return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": [], "sources": []}
 
-            # Explicit follow-ups must resolve against the last product result.
-            # Do this before the general planner so words like "link" or "image"
-            # cannot accidentally become a fresh catalog search.
-            if session is not None and context_products and (
-                self._is_link_request(message) or self._is_image_request(message)
-            ):
-                product = context_products[0]
+            # Resolve explicit references through the same canonical context resolver
+            # used by ChatService. This preserves "2 নম্বরটার", "third one", etc.
+            # instead of silently falling back to the first result.
+            referenced_product = None
+            if session is not None:
+                referenced_product = self._get_referenced_product(store_id, session.id, message)
+
+            if session is not None and referenced_product is not None and (self._is_link_request(message) or self._is_image_request(message)):
+                product = referenced_product
                 self._save_message(session_id=session.id, role="user", content=message)
-
                 if self._is_image_request(message):
-                    if getattr(product, "image_url", None):
-                        response_message = f"{self._format_product_name(product)}-এর image নিচে দেখানো হলো।"
-                    else:
-                        response_message = f"দুঃখিত, {self._format_product_name(product)}-এর image এখন available নেই।"
+                    response_message = f"{self._format_product_name(product)}-এর image নিচে দেখানো হলো।" if getattr(product, "image_url", None) else f"দুঃখিত, {self._format_product_name(product)}-এর image এখন available নেই।"
                 else:
-                    if getattr(product, "product_url", None):
-                        response_message = f"অবশ্যই 😊 {self._format_product_name(product)}-এর product page-এর link নিচের card-এ দিলাম।"
-                    else:
-                        response_message = f"দুঃখিত, {self._format_product_name(product)}-এর product link এখন available নেই।"
-
+                    response_message = f"অবশ্যই 😊 {self._format_product_name(product)}-এর product page-এর link নিচের card-এ দিলাম।" if getattr(product, "product_url", None) else f"দুঃখিত, {self._format_product_name(product)}-এর product link এখন available নেই।"
                 self._save_message(session_id=session.id, role="assistant", content=response_message)
-                return {
-                    "conversation_id": conversation_id,
-                    "type": "product_search",
-                    "message": response_message,
-                    "products": self._serialize_products([product]),
-                    "sources": [],
-                }
+                return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": self._serialize_products([product]), "sources": []}
 
-            if session is not None and context_products and self._is_recommendation_explanation(message):
-                product = context_products[0]
+            if session is not None and referenced_product is not None and self._is_recommendation_explanation(message):
                 self._save_message(session_id=session.id, role="user", content=message)
-                response_message = self._recommendation_explanation(product, context_products)
+                context_candidates = self._context_products(store_id, session.id) or [referenced_product]
+                response_message = self._recommendation_explanation(referenced_product, context_candidates)
                 self._save_message(session_id=session.id, role="assistant", content=response_message)
-                return {
-                    "conversation_id": conversation_id,
-                    "type": "product_search",
-                    "message": response_message,
-                    "products": self._serialize_products(context_products[:5]),
-                    "sources": [],
-                }
+                return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": self._serialize_products([referenced_product]), "sources": []}
 
             result = await super().handle(store_id=store_id, request=request)
             if not isinstance(result, dict):
@@ -277,10 +273,7 @@ class DynamicAttributeChatService(ChatService):
 
             if is_recommendation_query(message) and result.get("products"):
                 first = result["products"][0]
-                product_objects = self._get_products_by_ids(
-                    store_id,
-                    [str(p.get("id")) for p in result["products"] if p.get("id")],
-                )
+                product_objects = self._get_products_by_ids(store_id, [str(p.get("id")) for p in result["products"] if p.get("id")])
                 has_evidence = self._recommendation_evidence(product_objects)
                 if has_evidence:
                     best_line = f"আমার মতে {first.get('name', 'এই product')}-টাই এগিয়ে আছে"
@@ -288,38 +281,23 @@ class DynamicAttributeChatService(ChatService):
                         best_line += f" — ৳{first['price']:,.0f}"
                     best_line += " 😊"
                 else:
-                    best_line = (
-                        "এখনকার তথ্য অনুযায়ী নিশ্চিতভাবে কোনো একটাকে সেরা বলা যাচ্ছে না। "
-                        "নিচে available optionগুলো দিলাম—চাইলে price, stock বা অন্য details দেখে compare করে দিতে পারি।"
-                    )
+                    best_line = "এখনকার তথ্য অনুযায়ী নিশ্চিতভাবে কোনো একটাকে সেরা বলা যাচ্ছে না। নিচে available optionগুলো দিলাম—চাইলে price, stock বা অন্য details দেখে compare করে দিতে পারি।"
                 result["message"] = best_line
                 try:
                     target_session = self._get_or_create_session(store_id=store_id, conversation_id=result.get("conversation_id") or conversation_id)
-                    latest = (
-                        self.db.query(ChatMessage)
-                        .filter(ChatMessage.session_id == target_session.id, ChatMessage.role == "assistant")
-                        .order_by(ChatMessage.created_at.desc())
-                        .first()
-                    )
+                    latest = self.db.query(ChatMessage).filter(ChatMessage.session_id == target_session.id, ChatMessage.role == "assistant").order_by(ChatMessage.created_at.desc()).first()
                     if latest is not None:
                         latest.content = best_line
                         self.db.commit()
                 except Exception:
                     self.db.rollback()
+                    logger.exception("Failed to persist recommendation response")
 
             interaction_id = __import__("uuid").uuid4().hex
             products = result.get("products") or []
-            product_objects = []
             ids = [str(p.get("id")) for p in products if p.get("id")]
-            if ids:
-                product_objects = self._get_products_by_ids(store_id, ids)
-            self._record_impressions(
-                store_id=store_id,
-                conversation_id=result.get("conversation_id") or conversation_id or "",
-                query=message,
-                products=product_objects,
-                interaction_id=interaction_id,
-            )
+            product_objects = self._get_products_by_ids(store_id, ids) if ids else []
+            self._record_impressions(store_id=store_id, conversation_id=result.get("conversation_id") or conversation_id or "", query=message, products=product_objects, interaction_id=interaction_id)
             result["interaction_id"] = interaction_id
             return result
         finally:
@@ -336,20 +314,16 @@ class DynamicAttributeChatService(ChatService):
             query = query.filter(Product.price <= max_price)
         if filters_data.get("in_stock", False):
             query = query.filter(or_(Product.stock.is_(None), Product.stock > 0))
-
         attributes = filters_data.get("attributes") or {}
         if isinstance(attributes, dict):
             query = apply_attribute_filters(query, attributes, Product.attributes)
-
         product_name = filters_data.get("product_name")
         if product_name:
             groups = self._build_product_text_conditions(product_name)
             if groups:
                 query = query.filter(and_(*groups))
-
         if previous_ids:
             query = query.filter(~Product.id.in_(previous_ids))
-
         limit = max(batch_size, 100) if is_recommendation_query(query_text) else batch_size
         results = query.order_by(Product.name.asc()).limit(limit).all()
         if is_recommendation_query(query_text):
