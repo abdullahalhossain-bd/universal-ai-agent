@@ -71,7 +71,8 @@ async def _process_once(job):
    if not resolved.get("connection_url"):raise ValueError("job missing connection_url")
    connector=ConnectorFactory.create(connector_type,resolved["connection_url"])
   previous_mapping=dict(mapping);candidate,schema_meta,mapping_changed=await _auto_discover_mapping(connector,table_name,mapping);initialized=bool(state.get("initialized"));approval=mapping.get("_schema_approval") or {};candidate_hash=_mapping_hash(candidate);approved_hash=approval.get("candidate_hash")
-  allowed_mapping_change=(approval.get("status") in {"approved","rejected"} and approved_hash==candidate_hash)
+  approved_current=(approval.get("status")=="approved" and (approved_hash==candidate_hash or (not approved_hash and _semantic_mapping(mapping)==_semantic_mapping(candidate))))
+  allowed_mapping_change=approved_current or(approval.get("status")=="rejected" and approved_hash==candidate_hash)
   if initialized and mapping_changed and not allowed_mapping_change:
    pending=dict(mapping);pending["_pending_mapping"]={k:v for k,v in candidate.items() if not k.startswith("_")};pending["_schema_approval"]={"status":"pending","detected_at":datetime.utcnow().isoformat(),"candidate_hash":candidate_hash,"reason":"source schema mapping changed; explicit merchant approval required"}
    if schema_meta.get("columns"):pending["_pending_schema"]=schema_meta
