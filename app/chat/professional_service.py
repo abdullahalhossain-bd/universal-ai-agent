@@ -5,6 +5,7 @@ import re
 import uuid
 
 from app.chat.dynamic_service import DynamicAttributeChatService
+from app.products.recommendation import is_recommendation_query
 
 
 class ProfessionalCommerceChatService(DynamicAttributeChatService):
@@ -18,24 +19,11 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
         normalized = message.casefold().strip()
         normalized = re.sub(r"\s+", " ", normalized)
         aliases = {
-            "তৃতীয়": 3,
-            "তৃতীয়টা": 3,
-            "তৃতীয়টির": 3,
-            "তৃতীয়টার": 3,
-            "তৃতিয়": 3,
-            "তৃতিয়টা": 3,
-            "তৃতিয়টির": 3,
-            "তৃতিয়টার": 3,
-            "তৃতীয়টি": 3,
-            "তৃতিয়টি": 3,
-            "চতুর্থ": 4,
-            "চতুর্থটা": 4,
-            "চতুর্থটির": 4,
-            "চতুর্থটার": 4,
-            "পঞ্চম": 5,
-            "পঞ্চমটা": 5,
-            "পঞ্চমটির": 5,
-            "পঞ্চমটার": 5,
+            "তৃতীয়": 3, "তৃতীয়টা": 3, "তৃতীয়টির": 3, "তৃতীয়টার": 3,
+            "তৃতিয়": 3, "তৃতিয়টা": 3, "তৃতিয়টির": 3, "তৃতিয়টার": 3,
+            "তৃতীয়টি": 3, "তৃতিয়টি": 3,
+            "চতুর্থ": 4, "চতুর্থটা": 4, "চতুর্থটির": 4, "চতুর্থটার": 4,
+            "পঞ্চম": 5, "পঞ্চমটা": 5, "পঞ্চমটির": 5, "পঞ্চমটার": 5,
         }
         for phrase, value in aliases.items():
             if phrase in normalized:
@@ -50,14 +38,8 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
         ids = [str(item.get("id")) for item in products if item.get("id")]
         if not ids:
             return products
-
-        objects = (
-            db.query(Product)
-            .filter(Product.store_id == store_id, Product.id.in_(ids))
-            .all()
-        )
+        objects = db.query(Product).filter(Product.store_id == store_id, Product.id.in_(ids)).all()
         by_id = {str(product.id): product for product in objects}
-
         enriched = []
         for item in products:
             product = by_id.get(str(item.get("id")))
@@ -76,7 +58,6 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
 
     @staticmethod
     def _professional_result_message(products: list[dict]) -> str:
-        """Use natural sales-assistant language instead of search-engine terminology."""
         if len(products) == 1:
             product = products[0]
             name = product.get("name") or product.get("title") or "এই product"
@@ -117,10 +98,7 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
             context = self._load_product_context(session.id)
             if not (context.get("product_ids") or []):
                 self._save_message(session_id=session.id, role="user", content=message)
-                response_message = (
-                    "কোন product/category-এর মধ্যে best জানতে চান? "
-                    "যেমন: laptop, phone, বা অন্য কোনো product।"
-                )
+                response_message = "কোন product/category-এর মধ্যে best জানতে চান? যেমন: laptop, phone, বা অন্য কোনো product।"
                 self._save_message(session_id=session.id, role="assistant", content=response_message)
                 self._log_analytics_event(store_id=store_id, message=message, intent="recommendation", result_count=0)
                 return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": [], "sources": []}
@@ -130,10 +108,7 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
             request.conversation_id = conversation_id
             session = self._get_or_create_session(store_id, conversation_id)
             self._save_message(session_id=session.id, role="user", content=message)
-            response_message = (
-                "কোন product/category-এর মধ্যে best জানতে চান? "
-                "যেমন: laptop, phone, বা অন্য কোনো product।"
-            )
+            response_message = "কোন product/category-এর মধ্যে best জানতে চান? যেমন: laptop, phone, বা অন্য কোনো product।"
             self._save_message(session_id=session.id, role="assistant", content=response_message)
             self._log_analytics_event(store_id=store_id, message=message, intent="recommendation", result_count=0)
             return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": [], "sources": []}
@@ -142,11 +117,7 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
         referenced_product = None
         if conversation_id:
             session = self._get_or_create_session(store_id, conversation_id)
-            referenced_product = self._get_referenced_product(
-                store_id=store_id,
-                session_id=session.id,
-                message=message,
-            )
+            referenced_product = self._get_referenced_product(store_id=store_id, session_id=session.id, message=message)
 
         is_link = self._is_link_request(message)
         is_image = self._is_image_request(message)
@@ -155,49 +126,23 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
         if (is_link or is_image or is_explanation) and referenced_product is None:
             if session is not None:
                 self._save_message(session_id=session.id, role="user", content=message)
-            response_message = (
-                "অবশ্যই 😊 কোন product-এর কথা বলছেন? "
-                "যেমন product-এর নাম বা তালিকার নম্বরটি বলুন।"
-            )
+            response_message = "অবশ্যই 😊 কোন product-এর কথা বলছেন? যেমন product-এর নাম বা তালিকার নম্বরটি বলুন।"
             if session is not None:
                 self._save_message(session_id=session.id, role="assistant", content=response_message)
-            return {
-                "conversation_id": conversation_id or str(uuid.uuid4()),
-                "type": "product_search",
-                "message": response_message,
-                "products": [],
-                "sources": [],
-            }
+            return {"conversation_id": conversation_id or str(uuid.uuid4()), "type": "product_search", "message": response_message, "products": [], "sources": []}
 
         if session is not None and referenced_product is not None and (is_link or is_image or is_explanation):
             self._save_message(session_id=session.id, role="user", content=message)
             name = self._format_product_name(referenced_product)
             if is_image:
-                response_message = (
-                    f"অবশ্যই 😊 {name}-এর image নিচে দেখুন।"
-                    if getattr(referenced_product, "image_url", None)
-                    else f"দুঃখিত, {name}-এর image এখন available নেই।"
-                )
+                response_message = f"অবশ্যই 😊 {name}-এর image নিচে দেখুন।" if getattr(referenced_product, "image_url", None) else f"দুঃখিত, {name}-এর image এখন available নেই।"
             elif is_link:
-                response_message = (
-                    f"অবশ্যই 😊 {name}-এর product page-এর link নিচের card-এ দিলাম।"
-                    if getattr(referenced_product, "product_url", None)
-                    else f"দুঃখিত, {name}-এর product link এখন available নেই।"
-                )
+                response_message = f"অবশ্যই 😊 {name}-এর product page-এর link নিচের card-এ দিলাম।" if getattr(referenced_product, "product_url", None) else f"দুঃখিত, {name}-এর product link এখন available নেই।"
             else:
                 context_products = self._context_products(store_id, session.id)
-                response_message = self._recommendation_explanation(
-                    referenced_product,
-                    context_products or [referenced_product],
-                )
+                response_message = self._recommendation_explanation(referenced_product, context_products or [referenced_product])
             self._save_message(session_id=session.id, role="assistant", content=response_message)
-            return {
-                "conversation_id": conversation_id,
-                "type": "product_search",
-                "message": response_message,
-                "products": self._serialize_products([referenced_product]),
-                "sources": [],
-            }
+            return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": self._serialize_products([referenced_product]), "sources": []}
 
         result = await super().handle(store_id=store_id, request=request)
         if not isinstance(result, dict):
@@ -206,9 +151,10 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
         products = self._enrich_product_payload(store_id, self.db, result.get("products") or [])
         result["products"] = products
 
-        is_recommendation = self._is_bare_recommendation(message) or any(
-            token in message.casefold() for token in ("best", "top", "recommend", "সেরা", "ভালো")
-        )
+        # IMPORTANT: use the same token-aware recommendation detector as the
+        # planner/ranker. Never use substring checks such as ``"top" in
+        # "laptop"``; that turns ordinary product names into recommendations.
+        is_recommendation = is_recommendation_query(message)
         is_followup = is_link or is_image or is_explanation
         if products and result.get("type") == "product_search" and not is_recommendation and not is_followup:
             result["message"] = self._professional_result_message(products)
