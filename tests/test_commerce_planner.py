@@ -26,6 +26,24 @@ def test_product_existence_queries_set_in_stock():
         assert action.product_filters.product_name == "laptop"
 
 
+def test_knowledge_question_is_not_forced_into_product_search_or_mixed():
+    for query in (
+        "What is your return policy?",
+        "What is the return policy?",
+        "Can you tell me your shipping policy?",
+        "return policy",
+        "shipping policy",
+    ):
+        action = plan(query, STORE_TERMS)
+        assert action.intent == Intent.KNOWLEDGE_SEARCH
+
+
+def test_catalog_browse_remains_catalog_browse():
+    for query in ("what do you have", "what do you sell", "what's available", "কি কি আছে"):
+        action = plan(query, STORE_TERMS)
+        assert action.intent == Intent.CATALOG_BROWSE
+
+
 def test_best_laptop_is_marked_as_recommendation_search():
     action = plan("best laptop konta", STORE_TERMS)
     assert action.intent == Intent.PRODUCT_SEARCH
@@ -40,18 +58,6 @@ def test_bare_best_keeps_recommendation_mode_without_fake_product():
     assert action.product_filters is not None
     assert action.product_filters.recommendation is True
     assert action.product_filters.product_name is None
-
-
-def test_catalog_browse_remains_catalog_browse():
-    for query in ("what do you have", "what do you sell", "what's available", "কি কি আছে"):
-        action = plan(query, STORE_TERMS)
-        assert action.intent == Intent.CATALOG_BROWSE
-
-
-def test_knowledge_question_is_not_forced_into_product_search():
-    for query in ("What is your return policy?", "return policy", "shipping policy"):
-        action = plan(query, STORE_TERMS)
-        assert action.intent == Intent.KNOWLEDGE_SEARCH
 
 
 def test_bare_recommendation_detector_is_strict():
@@ -79,10 +85,9 @@ def test_professional_product_index_reference_supports_bengali_ordinals():
     assert service._extract_product_index("পঞ্চমটার ছবি দাও") == 5
 
 
-def test_professional_recommendation_requires_real_support():
-    assert not ProfessionalCommerceChatService._recommendation_has_support([
-        {"name": "Laptop", "rating": 3.8, "review_count": 0, "sales_count": 0, "bestseller_score": 0}
-    ])
+def test_recommendation_support_requires_meaningful_evidence():
+    weak = {"name": "Laptop", "rating": 4.7, "review_count": 1, "sales_count": 0, "bestseller_score": 0}
+    assert not ProfessionalCommerceChatService._recommendation_has_support([weak])
     assert ProfessionalCommerceChatService._recommendation_has_support([
         {"name": "Laptop", "rating": 4.7, "review_count": 12, "sales_count": 0, "bestseller_score": 0}
     ])
@@ -91,7 +96,7 @@ def test_professional_recommendation_requires_real_support():
     ])
 
 
-def test_recommendation_evidence_requires_verified_catalog_signals():
+def test_dynamic_recommendation_evidence_requires_meaningful_catalog_signals():
     class ProductStub:
         rating = None
         review_count = None
@@ -99,7 +104,11 @@ def test_recommendation_evidence_requires_verified_catalog_signals():
         bestseller_score = None
 
     assert not DynamicAttributeChatService._recommendation_evidence([ProductStub()])
+    ProductStub.rating = 3.9
+    ProductStub.review_count = 100
+    assert not DynamicAttributeChatService._recommendation_evidence([ProductStub()])
     ProductStub.rating = 4.7
+    ProductStub.review_count = 5
     assert DynamicAttributeChatService._recommendation_evidence([ProductStub()])
 
 
