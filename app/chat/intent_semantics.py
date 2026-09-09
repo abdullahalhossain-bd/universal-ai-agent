@@ -13,10 +13,10 @@ import unicodedata
 # Only unambiguous destination/page markers live here. Generic commerce words
 # such as "product", "shop" or "store" must never turn a product search into
 # a link request by themselves.
-_DIRECT_LINK_TERMS = {
+_DIRECT_LINK_STEMS = (
     "link", "url", "website", "page", "permalink",
     "লিংক", "লিঙ্ক", "ওয়েবসাইট", "ওয়েবসাইট", "পেজ", "পারমালিংক",
-}
+)
 _PURCHASE_STEMS = (
     "buy", "purchas", "order", "checkout", "kin", "ken", "nib", "neb",
     "kinb", "kinbo", "kinte", "kenbo", "kenar", "kinar",
@@ -59,7 +59,7 @@ def classify_product_link_request(message: str) -> bool | None:
         return False
     tokens = _tokens(q)
 
-    direct = any(token in _DIRECT_LINK_TERMS for token in tokens)
+    direct = _has_stem(tokens, _DIRECT_LINK_STEMS)
     purchase = _has_stem(tokens, _PURCHASE_STEMS)
     destination = _has_stem(tokens, _DESTINATION_STEMS)
     action = _has_stem(tokens, _ACTION_STEMS)
