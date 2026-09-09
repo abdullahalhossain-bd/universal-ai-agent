@@ -1,6 +1,6 @@
 from app.search.base import SearchProvider
 from app.products.query_models import ProductSearchRequest
-from app.search.query_intent import extract_product_intent
+from app.products.query_intent import extract_product_intent
 
 
 class ProductSearchProvider(SearchProvider):
