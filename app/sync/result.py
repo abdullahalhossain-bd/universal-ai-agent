@@ -6,6 +6,14 @@ from app.sync.quality import VALID_CURRENCIES, valid_http_url, normalize_name
 
 QUALITY_FIELDS = ("name", "price", "image_url", "product_url")
 
+
+def _number(value):
+    try:
+        return float(value) if value is not None and value != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass
 class SyncResult:
     store_id: str
@@ -51,13 +59,10 @@ class SyncResult:
             }
 
     def _issue(self, field: str, item: dict, *, issue_type: str | None = None):
-        # Persist first; the in-memory report remains intentionally capped for
-        # response/dashboard size, while the database keeps the complete history.
         if self.issue_sink is not None:
             try:
                 self.issue_sink(field, {"issue_type": issue_type or field, **item})
             except Exception:
-                # Issue persistence must never corrupt or abort the product sync.
                 pass
         bucket = self.data_quality.setdefault("issue_samples", {}).setdefault(field, [])
         if len(bucket) < 1000:
@@ -87,11 +92,12 @@ class SyncResult:
                 self._issue(f, {"id": pid, "name": p.get("name"), "reason": "missing"}, issue_type="missing_field")
         if pid and pid in self._seen_ids:
             self._duplicate_id_count += 1
+            self._issue("duplicate_id", {"id": pid, "name": p.get("name"), "reason": "same source ID appeared more than once"}, issue_type="duplicate")
         if pid:
             self._seen_ids.add(pid)
         name = normalize_name(p.get("name"))
         attrs = p.get("attributes") if isinstance(p.get("attributes"), dict) else {}
-        sku = p.get("sku") or attrs.get("sku")
+        sku = p.get("sku") or attrs.get("sku") or attrs.get("product_code") or attrs.get("item_code")
         if sku:
             k = str(sku).strip().casefold()
             if k in self._seen_skus:
@@ -107,7 +113,8 @@ class SyncResult:
                 self._duplicate_name_count += 1
                 if name not in self.duplicate_names and len(self.duplicate_names) < 1000:
                     self.duplicate_names.append(name)
-                same_price = p.get("price") is not None and prior.get("price") == p.get("price")
+                old_price = _number(prior.get("price")); new_price = _number(p.get("price"))
+                same_price = old_price is not None and new_price is not None and old_price == new_price
                 same_cat = bool(p.get("category")) and normalize_name(p.get("category")) == normalize_name(prior.get("category"))
                 confidence = 95 if same_price and same_cat else (80 if same_price or same_cat else 60)
                 candidate = {
@@ -122,15 +129,15 @@ class SyncResult:
             self._seen_names[name] = {"id": pid, "price": p.get("price"), "category": p.get("category")}
         if not str(p.get("name") or "").strip():
             self._invalid("empty_name", p)
-        try:
-            if p.get("price") is not None and float(p["price"]) < 0:
-                self._invalid("negative_price", p)
-        except (TypeError, ValueError):
+        price = _number(p.get("price"))
+        if p.get("price") is not None and price is None:
             self._invalid("invalid_price", p)
-        try:
-            if p.get("stock") is not None and float(p["stock"]) < 0:
-                self._invalid("invalid_stock", p)
-        except (TypeError, ValueError):
+        elif price is not None and price < 0:
+            self._invalid("negative_price", p)
+        stock = _number(p.get("stock"))
+        if p.get("stock") is not None and stock is None:
+            self._invalid("invalid_stock", p)
+        elif stock is not None and stock < 0:
             self._invalid("invalid_stock", p)
         if p.get("currency") and str(p["currency"]).upper() not in VALID_CURRENCIES:
             self._invalid("invalid_currency", p)
@@ -147,18 +154,21 @@ class SyncResult:
         self._issue("duplicate_id", {"id": value, "reason": "same source ID appeared more than once"}, issue_type="duplicate")
 
     def record_price_change(self, pid, name, old, new):
-        if new > old:
-            self._price_increased += 1
-        elif new < old:
-            self._price_decreased += 1
-        item = {"id": str(pid), "name": name, "old": old, "new": new, "direction": "increased" if new > old else "decreased"}
+        old_n = _number(old); new_n = _number(new)
+        if old_n is None or new_n is None or old_n == new_n:
+            return
+        if new_n > old_n: self._price_increased += 1
+        else: self._price_decreased += 1
+        item = {"id": str(pid), "name": name, "old": old, "new": new, "direction": "increased" if new_n > old_n else "decreased"}
         self._issue("price_changes", item, issue_type="price_change")
         if len(self.price_changes) < 1000:
             self.price_changes.append(item)
 
     def record_stock_change(self, pid, name, old, new):
-        o = float(old or 0); n = float(new or 0)
-        state = "became_out_of_stock" if o > 0 and n <= 0 else ("came_back_in_stock" if o <= 0 and n > 0 else "changed")
+        old_n = _number(old); new_n = _number(new)
+        if old_n is None or new_n is None or old_n == new_n:
+            return
+        state = "became_out_of_stock" if old_n > 0 and new_n <= 0 else ("came_back_in_stock" if old_n <= 0 and new_n > 0 else "changed")
         if state == "became_out_of_stock": self._stock_out += 1
         elif state == "came_back_in_stock": self._stock_back += 1
         else: self._stock_other += 1
@@ -185,10 +195,15 @@ class SyncResult:
     def calculate_health_score(self):
         r = self.data_quality_report(); f = r["fields"]; total = max(1, int(r["products"]))
         base = f["name"]["coverage_pct"] * .30 + f["price"]["coverage_pct"] * .25 + f["image_url"]["coverage_pct"] * .20 + f["product_url"]["coverage_pct"] * .25
-        invalid_rate = sum(self.invalid_counts.values()) / total
-        dup_rate = (self._duplicate_id_count + self._duplicate_sku_count) / total
+        invalid_products = set()
+        for items in self.invalid_data.values():
+            for item in items:
+                if item.get("id"): invalid_products.add(str(item["id"]))
+        invalid_rate = len(invalid_products) / total
+        dup_rate = len(set(self.duplicate_ids)) / total + len(set(self.duplicate_skus)) / total
         broken_rate = float(r.get("broken_media", 0)) / total
-        penalty = min(12, invalid_rate * 100 * .20) + min(10, dup_rate * 100 * .10) + min(5, self.skipped / max(1, int(r["source_rows"])) * 5) + min(10, broken_rate * 100 * .10)
+        skipped_rate = self.skipped / max(1, int(r["source_rows"]))
+        penalty = min(12, invalid_rate * 100 * .20) + min(10, dup_rate * 100 * .10) + min(5, skipped_rate * 5) + min(10, broken_rate * 100 * .10)
         rec = self.reconciliation or {}
         if rec and not rec.get("reconciled", False):
             penalty += min(10, float(rec.get("unexplained", 0) or 0) / total * 10)
@@ -196,7 +211,7 @@ class SyncResult:
 
     def set_reconciliation(self, *, source_rows, accepted_products, db_count, rejected=0, duplicates=0, known_stale=0):
         expected = max(0, int(accepted_products)); delta = db_count - expected; unexplained = max(0, abs(delta) - known_stale)
-        self.reconciliation = {"source_rows": int(source_rows), "unique_source_ids": expected + int(duplicates), "accepted_products": expected, "db_count": int(db_count), "expected_db_count": expected, "difference": int(delta), "missing_in_db": max(0, -delta), "stale_in_db": max(0, delta), "known_stale": int(known_stale), "rejected": int(rejected), "duplicates": int(duplicates), "unexplained": int(unexplained), "reconciled": unexplained == 0}
+        self.reconciliation = {"source_rows": int(source_rows), "unique_source_ids": max(0, expected + int(duplicates)), "accepted_products": expected, "db_count": int(db_count), "expected_db_count": expected, "difference": int(delta), "missing_in_db": max(0, -delta), "stale_in_db": max(0, delta), "known_stale": int(known_stale), "rejected": int(rejected), "duplicates": int(duplicates), "unexplained": int(unexplained), "reconciled": unexplained == 0}
 
     @property
     def seen_ids(self): return set(self._seen_ids)
