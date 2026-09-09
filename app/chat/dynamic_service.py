@@ -1,6 +1,8 @@
 """ChatService variant with first-class merchant-defined attributes and recommendations."""
 from __future__ import annotations
 
+from contextvars import ContextVar
+
 from sqlalchemy import and_, or_
 
 from app.chat.service import ChatService
@@ -9,6 +11,8 @@ from app.products.attribute_filters import apply_attribute_filters
 from app.products.recommendation import is_recommendation_query, rank_products
 from app.search.stopwords import STOPWORDS
 from app.search.synonyms import expand_terms
+
+_RECOMMENDATION_CONTEXT: ContextVar[str] = ContextVar("recommendation_context", default="")
 
 
 class DynamicAttributeChatService(ChatService):
@@ -64,14 +68,29 @@ class DynamicAttributeChatService(ChatService):
         if groups:
             query = query.filter(and_(*groups))
 
-        # Hard filters are applied before ranking. Recommendation ranking only
-        # decides ordering and therefore cannot escape budget/attribute/stock
-        # constraints.
+        # Fetch a wider candidate pool, then rank only after all hard filters.
         limit = 50 if is_recommendation_query(message) else 10
         results = query.order_by(Product.name.asc()).limit(limit).all()
         if is_recommendation_query(message):
-            return rank_products(results, message)[:10]
+            context = _RECOMMENDATION_CONTEXT.get()
+            ranking_query = f"{message} {context}".strip()
+            return rank_products(results, ranking_query)[:10]
         return results
+
+    async def handle(self, store_id: str, request):
+        """Carry recent conversation intent into an otherwise ambiguous 'best' query."""
+        token = _RECOMMENDATION_CONTEXT.set("")
+        try:
+            conversation_id = getattr(request, "conversation_id", None)
+            if conversation_id:
+                session = self._get_or_create_session(store_id, conversation_id)
+                history = self._load_history(session.id)
+                previous_user = [m["content"] for m in history if m.get("role") == "user"][-2:]
+                previous_context = self._load_product_context(session.id).get("query") or ""
+                _RECOMMENDATION_CONTEXT.set(" ".join(previous_user + [previous_context]))
+            return await super().handle(store_id=store_id, request=request)
+        finally:
+            _RECOMMENDATION_CONTEXT.reset(token)
 
     def _get_next_products(self, store_id, query_text, filters_data, previous_ids, batch_size=5):
         query = self.db.query(Product).filter(Product.store_id == store_id)
@@ -99,5 +118,5 @@ class DynamicAttributeChatService(ChatService):
 
         results = query.order_by(Product.name.asc()).limit(batch_size).all()
         if is_recommendation_query(query_text):
-            return rank_products(results, query_text)
+            return rank_products(results, f"{query_text} {_RECOMMENDATION_CONTEXT.get()}".strip())
         return results
