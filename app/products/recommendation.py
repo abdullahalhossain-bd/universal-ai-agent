@@ -1,7 +1,27 @@
-"""Deterministic, merchant-data-driven recommendation ranking."""
+"""Deterministic, merchant-data-driven recommendation ranking.
+
+Ranking signals are intentionally conservative and evidence-based — the goal
+is to never let the assistant claim a product is "best" on weaker grounds
+than a careful human merchandiser would accept:
+
+- **Bayesian rating shrinkage**: a single 5-star review must not outrank a
+  product with hundreds of 4.6-star reviews. Small-sample ratings are pulled
+  toward the catalog's observed mean until enough reviews accumulate.
+- **Log-dampened popularity**: review/sales/bestseller counts are
+  log-transformed before normalizing, so one viral outlier product doesn't
+  flatten every other product's popularity score to near zero.
+- **Stock-aware penalty**: an out-of-stock item is never hidden (a merchant
+  may still want it discoverable), but it is multiplicatively deprioritized
+  so the assistant doesn't recommend something a customer cannot buy today.
+- **Variant diversification**: a top-10 list is capped on how many
+  same-base-product variants (colour/size) it can hold before making room
+  for genuinely different products, so "best laptop" doesn't come back as
+  five colourways of the same SKU.
+"""
 from __future__ import annotations
 
 import difflib
+import math
 import re
 from typing import Iterable, Mapping
 
@@ -80,6 +100,130 @@ def _relative_signal(items, attr_name: str) -> dict[int, float]:
     return {key: value / maximum for key, value in values.items()}
 
 
+def _log_signal(items, attr_name: str) -> dict[int, float]:
+    """Log-dampened, 0..1 normalized popularity signal.
+
+    A raw linear normalization (``value / max``) lets a single viral
+    bestseller crush every other product's score toward zero even when
+    those other products are also genuinely popular. ``log1p`` compresses
+    the tail so the *relative ordering* of popular products still matters
+    without one outlier dominating the whole catalog.
+    """
+    raw: dict[int, float] = {}
+    for item in items:
+        value = getattr(item, attr_name, None)
+        try:
+            value = float(value) if value is not None else None
+        except (TypeError, ValueError):
+            value = None
+        if value is not None and value > 0:
+            raw[id(item)] = math.log1p(value)
+    if not raw:
+        return {}
+    maximum = max(raw.values())
+    if maximum <= 0:
+        return {key: 0.0 for key in raw}
+    return {key: value / maximum for key, value in raw.items()}
+
+
+def _bayesian_rating_signal(items, prior_reviews: float = 8.0) -> dict[int, float]:
+    """Shrink small-sample ratings toward the catalog's observed mean.
+
+    Without this, a brand-new product with one 5-star review outranks a
+    product with 500 reviews averaging 4.6 — a genuinely bad recommendation
+    that erodes merchant/customer trust. The shrinkage weight
+    (``prior_reviews``) means a product needs real review volume before its
+    raw rating is trusted at face value; sparse-review products are pulled
+    toward the average until evidence accumulates.
+    """
+    pairs = []
+    for item in items:
+        rating = getattr(item, "rating", None)
+        try:
+            rating = float(rating) if rating is not None else None
+        except (TypeError, ValueError):
+            rating = None
+        if rating is None or not 0 <= rating <= 5:
+            continue
+        reviews = getattr(item, "review_count", None)
+        try:
+            reviews = max(0.0, float(reviews)) if reviews is not None else 0.0
+        except (TypeError, ValueError):
+            reviews = 0.0
+        pairs.append((item, rating, reviews))
+    if not pairs:
+        return {}
+    global_mean = sum(rating for _, rating, _ in pairs) / len(pairs)
+    signal: dict[int, float] = {}
+    for item, rating, reviews in pairs:
+        shrunk = ((reviews * rating) + (prior_reviews * global_mean)) / (reviews + prior_reviews)
+        signal[id(item)] = max(0.0, min(1.0, shrunk / 5.0))
+    return signal
+
+
+_VARIANT_WORDS = {
+    "red", "blue", "green", "black", "white", "yellow", "grey", "gray", "pink",
+    "purple", "orange", "brown", "silver", "gold", "navy", "maroon", "beige",
+    "small", "medium", "large", "xl", "xxl", "xs", "s", "m", "l",
+    "লাল", "নীল", "সবুজ", "কালো", "সাদা", "হলুদ", "সোনালি", "রুপালি",
+    "ছোট", "মাঝারি", "বড়",
+}
+
+
+def _base_name(name: str) -> str:
+    """Collapse a product name to its variant-independent base.
+
+    Strips a trailing colour/size qualifier and anything after a common
+    variant separator (``-``, ``(``, ``:``), so "T-Shirt - Red" and
+    "T-Shirt (Blue, L)" collapse to the same base while genuinely distinct
+    products keep their own identity.
+    """
+    name = (name or "").casefold()
+    for sep in (" - ", " – ", "(", "|", ":", ","):
+        if sep in name:
+            name = name.split(sep, 1)[0]
+    tokens = [t for t in _tokens(name) if t not in _VARIANT_WORDS]
+    return " ".join(tokens).strip()
+
+
+def _diversify_variants(ranked: list, max_per_base: int = 2) -> list:
+    """Keep score order, but stop letting one product's colour/size variants
+    monopolize the results — cap same-base-product repeats and push the rest
+    later so genuinely different products still surface near the top.
+
+    Never drops an item; only reorders. Safe to apply after any scoring.
+    """
+    if len(ranked) <= max_per_base:
+        return ranked
+    seen: dict[str, int] = {}
+    kept, deferred = [], []
+    for item in ranked:
+        key = f"{_base_name(str(getattr(item, 'name', '') or ''))}|{str(getattr(item, 'category', '') or '').casefold()}"
+        count = seen.get(key, 0)
+        if count < max_per_base:
+            kept.append(item)
+            seen[key] = count + 1
+        else:
+            deferred.append(item)
+    return kept + deferred
+
+
+def _stock_penalty(product) -> float:
+    """Multiplicative deprioritization for known-empty stock.
+
+    Unknown stock (``None`` — merchant doesn't track it) is never
+    penalized. Only an explicit ``stock <= 0`` is treated as evidence the
+    item can't be bought right now, so it rarely leads a recommendation
+    even if every other signal favors it.
+    """
+    stock = getattr(product, "stock", None)
+    try:
+        stock = float(stock) if stock is not None else None
+    except (TypeError, ValueError):
+        stock = None
+    return 0.6 if stock is not None and stock <= 0 else 1.0
+
+
 def rank_products(products: Iterable, query: str, behavior_scores: Mapping[str, float] | None = None) -> list:
     """Rank already-filtered products using query intent + verified merchant data."""
     items = list(products)
@@ -95,9 +239,9 @@ def rank_products(products: Iterable, query: str, behavior_scores: Mapping[str, 
 
     prices = [float(p.price) for p in items if getattr(p, "price", None) is not None]
     lo, hi = (min(prices), max(prices)) if prices else (None, None)
-    rating_signal = _relative_signal(items, "rating")
-    review_signal = _relative_signal(items, "review_count")
-    sales_signal = _relative_signal(items, "sales_count")
+    rating_signal = _bayesian_rating_signal(items)
+    review_signal = _log_signal(items, "review_count")
+    sales_signal = _log_signal(items, "sales_count")
     bestseller_signal = _relative_signal(items, "bestseller_score")
     observed_behavior = behavior_scores or {}
     behavior_values = [max(0.0, float(v)) for v in observed_behavior.values() if v is not None]
@@ -142,4 +286,13 @@ def rank_products(products: Iterable, query: str, behavior_scores: Mapping[str, 
         evidence_signal = max(quality_signal, popularity_evidence)
         return relevance * .55 + evidence_signal * .20 + behavior * .12 + price_value(p) * .06 + completeness * .05 + stock_signal * .02
 
-    return sorted(items, key=lambda p: (-score(p), str(getattr(p, "name", "")).casefold()))
+    def final_score(p):
+        # Stock is a multiplicative gate, not an additive bonus: an
+        # out-of-stock item should lose even if every other signal (rating,
+        # popularity, relevance) favors it — a "best" recommendation the
+        # customer can't actually buy is a worse answer than a slightly
+        # weaker in-stock alternative.
+        return score(p) * _stock_penalty(p)
+
+    ranked = sorted(items, key=lambda p: (-final_score(p), str(getattr(p, "name", "")).casefold()))
+    return _diversify_variants(ranked)
