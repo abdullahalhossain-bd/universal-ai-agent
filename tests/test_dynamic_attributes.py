@@ -35,7 +35,7 @@ def test_semantic_attribute_extraction_uses_only_declared_schema():
     }
 
 
-def test_planner_extracts_multiple_merchant_attributes():
+def test_planner_extracts_multiple_merchant_attributes_and_keeps_product_term():
     class StoreTerms(set):
         attribute_schema = {
             "ram": ["ram", "memory"],
@@ -46,6 +46,17 @@ def test_planner_extracts_multiple_merchant_attributes():
     terms = StoreTerms({"laptop", "ram", "memory", "finish", "color", "size", "16gb", "black", "xl"})
     planned = plan("16GB memory black color XL size laptop", store_terms=terms)
     assert planned.product_filters.attributes == {"ram": "16gb", "finish": "black", "size": "xl"}
+    assert planned.product_filters.product_name == "laptop"
+
+
+def test_planner_handles_attribute_only_queries():
+    class StoreTerms(set):
+        attribute_schema = {"ram": ["ram", "memory"]}
+
+    terms = StoreTerms({"ram", "memory", "16gb"})
+    planned = plan("8GB memory", store_terms=terms)
+    assert planned.product_filters.attributes == {"ram": "8gb"}
+    assert planned.product_filters.product_name is None
 
 
 def test_existence_words_do_not_become_stock_filter_without_availability_question():
