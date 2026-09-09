@@ -6,7 +6,7 @@ from app.connectors.config import ConnectorConfig
 from app.connectors.credential_store import get_credential_store
 from app.connectors.factory import ConnectorFactory
 from app.db.database import SessionLocal
-from app.db.models import DataSource,SyncRun
+from app.db.models import DataSource,Product,SyncRun
 from app.sync.normalize import discover_mapping
 from app.sync.result import SyncResult
 from app.sync.retry import run_with_retry
@@ -49,7 +49,7 @@ async def _auto_discover_mapping(connector,table_name,mapping):
 def _start_run(db,store_id,datasource_id,sync_mode):
     run=SyncRun(store_id=store_id,datasource_id=datasource_id,status="running",sync_mode=sync_mode,started_at=datetime.utcnow());db.add(run);db.commit();return run
 def _finish_run(db,run,result,status,error,started):
-    run.status=status;run.finished_at=datetime.utcnow();run.duration_ms=max(0,int((time.monotonic()-started)*1000));
+    run.status=status;run.finished_at=datetime.utcnow();run.duration_ms=max(0,int((time.monotonic()-started)*1000))
     if result is not None:
         full=result.to_dict();run.products_seen=int(full["data_quality"].get("products",0));run.created=result.created;run.updated=result.updated;run.unchanged=result.unchanged;run.skipped=result.skipped;run.stock_zeroed=result.stock_zeroed;run.health_score=result.calculate_health_score();run.quality_report=full;run.reconciliation=result.reconciliation or {}
     run.error=error;db.commit()
@@ -87,11 +87,12 @@ async def _process_once(job):
             upper=datetime.utcnow() if incremental and (_mapping_column(mapping,"updated_at") or _mapping_column(mapping,"created_at")) else None
             result=service.sync_from_connector(store_id,connector,table_name,mapping,full_sync=resolved["full_sync"],sync_state=state,sync_upper_bound=upper,source_datasource_id=datasource_id)
             if not result.errors and datasource_id:
-                if incremental:
-                    from app.sync.processor import _persist_watermark
-                    _persist_watermark(db,datasource_id,mapping,connector,table_name,upper_bound=upper)
+                if incremental:_persist_watermark(db,datasource_id,mapping,connector,table_name,upper_bound=upper)
                 elif resolved["full_sync"]:
                     result.stale=apply_stale_policy(db,store_id=store_id,datasource_id=datasource_id,seen_ids=result.seen_ids,grace_syncs=2)
+                    db_count=int(db.query(Product).filter(Product.store_id==store_id,Product.source_datasource_id==datasource_id).count())
+                    known_stale=int(result.stale.get("stale_active",0) or 0)
+                    result.set_reconciliation(source_count=len(result.seen_ids),db_count=db_count,rejected=0,duplicates=len(result.duplicate_ids),known_stale=known_stale)
         if datasource_id:
             columns=mapping.get("_schema_discovery",{}).get("columns",[])
             if columns:
