@@ -9,7 +9,11 @@ KNOWLEDGE_WORDS = {
     "policy", "return", "refund", "shipping", "delivery", "about", "contact",
     "faq", "how", "when", "where", "office", "address", "location", "hours",
     "kothay", "thikana", "office kothay", "নীতি", "রিটার্ন", "রিফান্ড", "ডেলিভারি",
-    "শিপিং", "সম্পর্কে", "যোগাযোগ", "কীভাবে", "কখন", "কোথায়", "ঠিকানা", "অফিস",
+    "শিপিং", "সম্পর্কে", "যোগাযোগ", "কীভাবে", "কখন", "কোথায়", "কোথায়", "ঠিকানা", "অফিস",
+}
+KNOWLEDGE_FILLER_WORDS = {
+    "what", "whats", "what's", "is", "are", "your", "the", "my", "do", "you", "can",
+    "please", "tell", "me", "does", "this", "there", "about",
 }
 CATALOG_BROWSE_CUES = {
     "কি আছে", "কী আছে", "কি কি আছে", "কী কী আছে", "সব আছে", "সব কি আছে",
@@ -98,14 +102,19 @@ def _extract_in_stock(text: str) -> bool:
     explicit_patterns = [r"\bavailable\b", r"\bin\s+stock\b", r"\bstock\b", r"স্টক", r"স্টকে", r"স্টকটা", r"উপলব্ধ", r"মজুদ"]
     if any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in explicit_patterns):
         return True
-    existence_words = r"(?:ase|ache|আছে|আছে়|রয়েছে|রয়েছে)"
-    if not re.search(rf"\b{existence_words}\b", normalized, flags=re.IGNORECASE):
+    tokens = normalized.split()
+    existence_tokens = {"ase", "ache", "আছে", "আছে়", "রয়েছে", "রয়েছে"}
+    if not any(token in existence_tokens for token in tokens):
         return False
-    if re.search(rf"\b(?:kemon|emon|কেমন|এমন|কীভাবে|কিভাবে)\b.*\b{existence_words}\b", normalized, flags=re.IGNORECASE):
+    # A trailing existence verb is the natural Bangla/Banglish availability
+    # form: "laptop ache", "I phone ase", "ল্যাপটপ আছে". Do not treat
+    # explanatory questions such as "kemon ache" as stock filters.
+    last = tokens[-1].rstrip("?!.,") if tokens else ""
+    if last not in existence_tokens:
         return False
-    # Existence/availability questions may contain multiple product words,
-    # e.g. "I phone ase?" or "ল্যাপটপ আছে".
-    return bool(re.search(rf".+\s+{existence_words}\s*\??$", normalized, flags=re.IGNORECASE))
+    if len(tokens) >= 2 and tokens[-2] in {"kemon", "emon", "কেমন", "এমন", "how"}:
+        return False
+    return True
 
 
 def _clean_search_terms(text: str, exclude_words: set[str] | None = None, store_terms: set[str] | None = None) -> str:
@@ -210,7 +219,7 @@ def _looks_like_product_search(query: str, search_terms: str, attributes: dict, 
         return False
     if any(token in PRODUCT_ACTION_WORDS for token in tokens):
         return len(tokens) >= 2
-    non_knowledge = [token for token in tokens if token not in KNOWLEDGE_WORDS]
+    non_knowledge = [token for token in tokens if token not in KNOWLEDGE_WORDS and token not in KNOWLEDGE_FILLER_WORDS]
     if non_knowledge and any(token in KNOWLEDGE_WORDS for token in tokens):
         return True
     return 1 <= len(tokens) <= 4 and not any(token in KNOWLEDGE_WORDS for token in tokens)
@@ -231,16 +240,14 @@ def plan(query: str, store_terms: set[str] | None = None):
     generic_product = _looks_like_product_search(query, search_terms, attributes, max_price, min_price)
     catalog_browse = _catalog_browse_intent(query, store_entities)
 
-    # Explicit catalog questions must win over generic noun detection.
     if catalog_browse and not recommendation and not attributes and max_price is None and min_price is None:
         return PlannedAction(intent=Intent.CATALOG_BROWSE, confidence=0.90)
 
-    # A pure knowledge question must not become MIXED just because words such
-    # as "return" or "policy" make the generic product heuristic fire.
     normalized_tokens = [token for token in _normalize_entity_text(query).split() if token not in STOP_WORDS]
-    knowledge_only = bool(normalized_tokens) and all(token in KNOWLEDGE_WORDS for token in normalized_tokens)
+    knowledge_core = [token for token in normalized_tokens if token not in KNOWLEDGE_FILLER_WORDS]
+    knowledge_only = bool(knowledge_core) and all(token in KNOWLEDGE_WORDS for token in knowledge_core)
     if knowledge_score > 0 and knowledge_only and not recommendation and not store_entities and not attributes and max_price is None and min_price is None:
-        return PlannedAction(intent=Intent.KNOWLEDGE_SEARCH, knowledge_query=query, confidence=0.90)
+        return PlannedAction(intent=Intent.KNOWLEDGE_SEARCH, knowledge_query=query, confidence=0.95)
 
     product_score = min(1.0, 0.55 + 0.10 * len(store_entities)) if store_entities else (0.70 if attributes else (0.65 if recommendation else (0.55 if generic_product else 0.0)))
     entity_query = " ".join(store_entities) or search_terms
@@ -258,6 +265,6 @@ def plan(query: str, store_terms: set[str] | None = None):
     if knowledge_score > 0:
         return PlannedAction(intent=Intent.KNOWLEDGE_SEARCH, knowledge_query=query, confidence=0.75)
     tokens = search_terms.split()
-    if any(_looks_like_model_number(token) for token in tokens):
-        return PlannedAction(intent=Intent.PRODUCT_SEARCH, product_filters=ProductFilters(product_name=search_terms or None, min_price=min_price, max_price=max_price, in_stock=in_stock, attributes=attributes), confidence=0.60)
-    return PlannedAction(intent=Intent.UNKNOWN, confidence=0.20)
+    if tokens:
+        return PlannedAction(intent=Intent.PRODUCT_SEARCH, product_filters=ProductFilters(product_name=search_terms, in_stock=in_stock, attributes=attributes), confidence=0.70)
+    return PlannedAction(intent=Intent.UNKNOWN, confidence=0.30)
