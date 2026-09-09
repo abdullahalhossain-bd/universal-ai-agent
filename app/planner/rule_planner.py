@@ -24,6 +24,10 @@ RECOMMENDATION_CUES = {
     "সেরা", "সর্বোত্তম", "ভালো", "ভাল", "সাজেস্ট", "রিকমেন্ড", "সবচেয়ে ভালো", "সবচেয়ে ভালো",
 }
 STOP_WORDS = set(SHARED_STOPWORDS) | {"এমন", "যেমন", "মতো", "মত", "কম", "কমে", "নিচে", "উপরে", "বেশি"}
+_GENERIC_ENTITY_ALIASES = {
+    "ফোন": "phone", "মোবাইল": "mobile", "স্মার্টফোন": "smartphone", "আইফোন": "iphone",
+    "ফোনটা": "phone", "মোবাইলটা": "mobile", "smart phone": "smartphone", "i phone": "iphone",
+}
 
 
 def _normalize_digits(text: str) -> str:
@@ -105,6 +109,8 @@ def _clean_search_terms(text: str, exclude_words: set[str] | None = None, store_
 def _resolve_store_entities(query: str, store_terms: set[str] | None) -> list[str]:
     if not store_terms: return []
     query_norm = _normalize_entity_text(query)
+    for source, alias in _GENERIC_ENTITY_ALIASES.items():
+        query_norm = re.sub(rf"(?<!\w){re.escape(source)}(?!\w)", alias, query_norm, flags=re.IGNORECASE)
     if not query_norm: return []
     candidates = sorted({_normalize_entity_text(str(term)) for term in store_terms if str(term).strip()}, key=lambda term: (len(term.split()), len(term)), reverse=True)
     exact = [term for term in candidates if term and term in query_norm]
@@ -120,6 +126,8 @@ def _resolve_store_entities(query: str, store_terms: set[str] | None) -> list[st
         if len(compact_token) < 3: continue
         for term, compact in compact_candidates:
             if compact_token in compact or compact in compact_token:
+                substring_matches.append(term)
+            elif compact_token in {"phone", "mobile", "smartphone"} and compact.startswith("iphone"):
                 substring_matches.append(term)
     if substring_matches: return list(dict.fromkeys(substring_matches))[:8]
     fuzzy = []
