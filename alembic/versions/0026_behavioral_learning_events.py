@@ -25,7 +25,7 @@ def upgrade() -> None:
         sa.Column("event_type", sa.String(40), nullable=False),
         sa.Column("query", sa.String(500), nullable=True),
         sa.Column("value", sa.Numeric(14, 4), nullable=True),
-        sa.Column("metadata", sa.JSON(), nullable=False, server_default=sa.text("{}")),
+        sa.Column("metadata", sa.JSON(), nullable=False, server_default="{}"),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
     )
     op.create_index("ix_behavioral_events_store_created", "behavioral_events", ["store_id", "created_at"])
