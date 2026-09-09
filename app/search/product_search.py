@@ -14,6 +14,7 @@ class ProductSearchProvider(SearchProvider):
     def _build_request(self, query, limit, extra_filters=None):
         """Convert planner or natural language input into structured search."""
         extra_filters = extra_filters or {}
+        attribute_mapping = getattr(self.product_service, "mapping", {}).get("attributes", {})
 
         if isinstance(query, ProductSearchRequest):
             data = query.model_dump(exclude_none=True)
@@ -23,8 +24,6 @@ class ProductSearchProvider(SearchProvider):
 
         if hasattr(query, "model_dump"):
             data = query.model_dump(exclude_none=True)
-            # LLMAction stores structured filters under ``filters``. Merge that
-            # nested payload instead of accidentally discarding it.
             nested = data.pop("filters", {}) or {}
             merged = {**nested, **data, **extra_filters}
             natural_text = merged.get("query") or merged.get("product_name")
@@ -41,11 +40,12 @@ class ProductSearchProvider(SearchProvider):
                 max_price=merged.get("max_price"),
                 in_stock_only=bool(merged.get("in_stock", merged.get("in_stock_only", False))),
                 sku=merged.get("sku"),
+                attributes=merged.get("attributes") or {},
                 limit=min(limit, int(merged.get("limit", limit) or limit)),
             )
 
         text = str(query or "").strip()
-        intent = extract_product_intent(text)
+        intent = extract_product_intent(text, attribute_fields=attribute_mapping)
         intent.update({k: v for k, v in extra_filters.items() if v is not None})
         intent["limit"] = limit
         return ProductSearchRequest(**intent)
