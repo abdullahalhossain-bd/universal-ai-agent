@@ -18,11 +18,11 @@
   var position = script.getAttribute("data-position") === "bottom-left" ? "left" : "right";
   var STORAGE_KEY = "ucai_widget_conv_" + API_KEY.slice(-8);
   var INTERACTION_KEY = "ucai_widget_interaction_" + API_KEY.slice(-8);
-  var INTERACTION_TTL_MS = 24 * 60 * 60 * 1000; // chat-assisted conversions attribute for 24h after the chat turn
+  var INTERACTION_TTL_MS = 24 * 60 * 60 * 1000;
   var conversationId = null;
   var pollingTimer = null;
   var lastMerchantMessageId = null;
-  var lastInteraction = null; // {interaction_id, conversation_id, product_ids, ts} — also mirrored to localStorage
+  var lastInteraction = null;
 
   try { conversationId = localStorage.getItem(STORAGE_KEY); } catch (_) {}
   try {
@@ -36,11 +36,11 @@
   var shadow = host.attachShadow({ mode: "open" });
   var style = document.createElement("style");
   style.textContent = "*{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif}" +
-    ".bubble{width:58px;height:58px;border:0;border-radius:50%;background:" + ACCENT + ";color:#fff;box-shadow:0 8px 28px rgba(0,0,0,.22);cursor:pointer;display:grid;place-items:center}.bubble:focus-visible,.close:focus-visible,.composer button:focus-visible,.tool:focus-visible,.action:focus-visible{outline:3px solid #93c5fd;outline-offset:2px}.bubble svg{width:27px;height:27px;fill:#fff}" +
+    ".bubble{width:58px;height:58px;border:0;border-radius:50%;background:" + ACCENT + ";color:#fff;box-shadow:0 8px 28px rgba(0,0,0,.22);cursor:pointer;display:grid;place-items:center}.bubble:focus-visible,.close:focus-visible,.composer button:focus-visible,.tool:focus-visible,.action:focus-visible,.product-option:focus-visible{outline:3px solid #93c5fd;outline-offset:2px}.bubble svg{width:27px;height:27px;fill:#fff}" +
     ".panel{position:absolute;bottom:72px;" + position + ":0;width:390px;max-width:calc(100vw - 28px);height:610px;max-height:calc(100vh - 105px);background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 18px 55px rgba(0,0,0,.22);display:none;overflow:hidden;flex-direction:column}.panel.open{display:flex}" +
     ".header{background:" + ACCENT + ";color:#fff;padding:15px 17px;display:flex;align-items:center;justify-content:space-between}.header strong{font-size:14px}.header small{display:block;opacity:.75;font-weight:400;margin-top:2px}.close{background:transparent;border:0;color:#fff;font-size:22px;cursor:pointer}" +
     ".messages{flex:1;overflow:auto;padding:15px;background:#f8fafc;display:flex;flex-direction:column;gap:10px}.msg{max-width:86%;padding:10px 13px;border-radius:14px;font-size:13.5px;line-height:1.5;white-space:pre-wrap}.user{align-self:flex-end;background:" + ACCENT + ";color:#fff;border-bottom-right-radius:4px}.assistant{align-self:flex-start;background:#fff;color:#172033;border:1px solid #e5e7eb;border-bottom-left-radius:4px}.merchant{align-self:flex-start;background:#f0fdf4;color:#14532d;border:1px solid #bbf7d0;border-bottom-left-radius:4px}.typing{color:#9ca3af;font-style:italic}" +
-    ".products{align-self:flex-start;width:min(100%,350px);display:grid;gap:10px}.product{background:#fff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;box-shadow:0 2px 8px rgba(15,23,42,.04)}.product-image{width:100%;height:155px;object-fit:cover;background:#f1f5f9;display:block}.product-image-fallback{height:155px;background:#f1f5f9;color:#64748b;display:grid;place-items:center;font-size:12px}.product-body{padding:11px 12px}.product-name{font-weight:700;font-size:14px;color:#111827;line-height:1.35}.product-meta{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:7px}.price{font-size:15px;font-weight:800;color:#111827}.stock{font-size:11px;padding:3px 7px;border-radius:999px;background:#ecfdf5;color:#047857}.stock.out{background:#fef2f2;color:#b91c1c}.stock.unknown{background:#f8fafc;color:#64748b}.rating{font-size:11px;color:#64748b;margin-top:5px}.actions{display:flex;gap:7px;margin-top:10px}.action{flex:1;text-align:center;text-decoration:none;border:1px solid #dbe0e6;border-radius:9px;padding:7px 8px;font-size:11.5px;font-weight:600;color:#334155;background:#fff;cursor:pointer}.action.primary{background:" + ACCENT + ";border-color:" + ACCENT + ";color:#fff}.action.disabled{opacity:.5;pointer-events:none}.composer{display:flex;gap:7px;padding:10px;border-top:1px solid #e5e7eb;background:#fff;align-items:flex-end}.composer textarea{flex:1;min-height:40px;max-height:90px;resize:none;border:1px solid #d8dde5;border-radius:11px;padding:9px 10px;outline:0;font-size:13.5px}.composer textarea:focus{border-color:" + ACCENT + "}.composer button{border:0;background:" + ACCENT + ";color:#fff;border-radius:10px;padding:0 14px;height:40px;font-weight:700;cursor:pointer}.composer button:disabled{opacity:.5}.tools{display:flex;gap:6px;padding:7px 10px 0;background:#fff}.tool{border:1px solid #d8dde5;background:#fff;border-radius:8px;padding:5px 8px;font-size:11px;color:#475569;cursor:pointer}.preview{display:none;padding:6px 10px;background:#fff;border-top:1px solid #f1f5f9;font-size:11px;color:#475569}.preview.show{display:flex;justify-content:space-between;align-items:center}.footer{font-size:10px;text-align:center;color:#9ca3af;padding:4px 0 8px}";
+    ".products{align-self:flex-start;width:min(100%,350px);display:grid;gap:10px}.product{background:#fff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;box-shadow:0 2px 8px rgba(15,23,42,.04);transition:.18s}.product:hover{transform:translateY(-1px);box-shadow:0 7px 20px rgba(15,23,42,.09)}.product-image{width:100%;height:155px;object-fit:cover;background:#f1f5f9;display:block}.product-image-fallback{height:155px;background:#f1f5f9;color:#64748b;display:grid;place-items:center;font-size:12px}.product-body{padding:11px 12px}.product-option{width:100%;border:0;background:transparent;padding:0;text-align:left;cursor:pointer}.product-option-row{display:flex;align-items:flex-start;gap:8px}.product-number{width:24px;height:24px;min-width:24px;border-radius:8px;background:#f1f5f9;color:#475569;display:grid;place-items:center;font-size:11px;font-weight:800}.product-name{font-weight:700;font-size:14px;color:#111827;line-height:1.35}.product-meta{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:7px}.price{font-size:15px;font-weight:800;color:#111827}.stock{font-size:11px;padding:3px 7px;border-radius:999px;background:#ecfdf5;color:#047857}.stock.out{background:#fef2f2;color:#b91c1c}.stock.unknown{background:#f8fafc;color:#64748b}.rating{font-size:11px;color:#64748b;margin-top:5px}.actions{display:flex;gap:7px;margin-top:10px}.action{flex:1;text-align:center;text-decoration:none;border:1px solid #dbe0e6;border-radius:9px;padding:7px 8px;font-size:11.5px;font-weight:600;color:#334155;background:#fff;cursor:pointer}.action.primary{background:" + ACCENT + ";border-color:" + ACCENT + ";color:#fff}.action.disabled{opacity:.5;pointer-events:none}.composer{display:flex;gap:7px;padding:10px;border-top:1px solid #e5e7eb;background:#fff;align-items:flex-end}.composer textarea{flex:1;min-height:40px;max-height:90px;resize:none;border:1px solid #d8dde5;border-radius:11px;padding:9px 10px;outline:0;font-size:13.5px}.composer textarea:focus{border-color:" + ACCENT + "}.composer button{border:0;background:" + ACCENT + ";color:#fff;border-radius:10px;padding:0 14px;height:40px;font-weight:700;cursor:pointer}.composer button:disabled{opacity:.5}.tools{display:flex;gap:6px;padding:7px 10px 0;background:#fff}.tool{border:1px solid #d8dde5;background:#fff;border-radius:8px;padding:5px 8px;font-size:11px;color:#475569;cursor:pointer}.preview{display:none;padding:6px 10px;background:#fff;border-top:1px solid #f1f5f9;font-size:11px;color:#475569}.preview.show{display:flex;justify-content:space-between;align-items:center}.footer{font-size:10px;text-align:center;color:#9ca3af;padding:4px 0 8px}";
   shadow.appendChild(style);
 
   var wrap = document.createElement("div");
@@ -64,13 +64,8 @@
 
   function scroll() { messages.scrollTop = messages.scrollHeight; }
   function addMessage(role, text) { var el = document.createElement("div"); el.className = "msg " + role; el.textContent = text || ""; messages.appendChild(el); scroll(); return el; }
-  function money(value) { if (value === null || value === undefined || value === "") return "দাম জানতে যোগাযোগ করুন"; var n = Number(value); return Number.isFinite(n) ? "৳" + n.toLocaleString("en-BD", { maximumFractionDigits: 0 }) : "৳" + String(value); }
+  function money(value, currency) { if (value === null || value === undefined || value === "") return "দাম জানতে যোগাযোগ করুন"; var n = Number(value), cur = String(currency || "").trim(); if (Number.isFinite(n)) { var formatted = n.toLocaleString(undefined, { maximumFractionDigits: 2 }); return cur ? cur + " " + formatted : formatted; } return cur ? cur + " " + String(value) : String(value); }
 
-  // --- Conversion tracking -------------------------------------------------
-  // Every chat turn that returns products carries an `interaction_id`.
-  // Remembering it (in memory + localStorage) lets us attribute a click on a
-  // product card, and later an add-to-cart/purchase on the merchant's own
-  // site, back to the chat conversation that recommended it.
   function rememberInteraction(interactionId, convId, productIds) {
     if (!interactionId) return;
     lastInteraction = { interaction_id: interactionId, conversation_id: convId || null, product_ids: productIds || [], ts: Date.now() };
@@ -80,7 +75,7 @@
   function trackEvent(eventType, opts) {
     opts = opts || {};
     var interactionId = opts.interaction_id || (lastInteraction && lastInteraction.interaction_id);
-    if (!interactionId) return false; // nothing to attribute this to — no prior chat interaction
+    if (!interactionId) return false;
     var payload = {
       interaction_id: interactionId,
       event_type: eventType,
@@ -89,16 +84,15 @@
       value: typeof opts.value === "number" ? opts.value : null,
       metadata: opts.metadata || {},
     };
-    var body = JSON.stringify(payload);
-    var url = API_BASE + "/v1/behavior/events";
-    // `keepalive` lets this request survive the page navigating away right
-    // after the call (product link opening, checkout redirect) — unlike
-    // navigator.sendBeacon, fetch keepalive still sends the real x-api-key
-    // header instead of needing the key exposed as a URL query param.
-    try {
-      fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-api-key": API_KEY }, body: body, keepalive: true }).catch(function () {});
-    } catch (_) {}
+    try { fetch(API_BASE + "/v1/behavior/events", { method: "POST", headers: { "content-type": "application/json", "x-api-key": API_KEY }, body: JSON.stringify(payload), keepalive: true }).catch(function () {}); } catch (_) {}
     return true;
+  }
+
+  function askAboutProduct(p) {
+    var name = p.name || p.title || "এই product";
+    input.value = name + " সম্পর্কে details চাই";
+    input.focus();
+    sendMessage();
   }
 
   function addProducts(products, interactionId, convId) {
@@ -106,9 +100,9 @@
     var productIds = products.map(function (p) { return p && p.id; }).filter(Boolean);
     rememberInteraction(interactionId, convId, productIds);
     var box = document.createElement("div"); box.className = "products";
-    products.slice(0, 10).forEach(function (p) {
+    products.slice(0, 10).forEach(function (p, index) {
       var card = document.createElement("article"); card.className = "product";
-      var image = safeUrl(p.image_url || p.image || p.main_image);
+      var image = safeUrl(p.image_url || p.image || p.main_image || p.thumbnail);
       if (image) {
         var img = document.createElement("img");
         img.className = "product-image"; img.src = image; img.alt = p.name || "Product"; img.loading = "lazy";
@@ -118,31 +112,30 @@
         var fallback = document.createElement("div"); fallback.className = "product-image-fallback"; fallback.textContent = "ছবি পাওয়া যাচ্ছে না"; card.appendChild(fallback);
       }
       var body = document.createElement("div"); body.className = "product-body";
-      var name = document.createElement("div"); name.className = "product-name"; name.textContent = p.name || p.title || "Product"; body.appendChild(name);
+      var option = document.createElement("button"); option.className = "product-option"; option.type = "button"; option.setAttribute("aria-label", "এই product সম্পর্কে জানতে চাই");
+      var row = document.createElement("span"); row.className = "product-option-row";
+      var number = document.createElement("span"); number.className = "product-number"; number.textContent = String(index + 1); row.appendChild(number);
+      var name = document.createElement("span"); name.className = "product-name"; name.textContent = p.name || p.title || "Product"; row.appendChild(name);
+      option.appendChild(row); option.addEventListener("click", function () { askAboutProduct(p); });
+      body.appendChild(option);
       var meta = document.createElement("div"); meta.className = "product-meta";
-      var price = document.createElement("span"); price.className = "price"; price.textContent = money(p.price); meta.appendChild(price);
+      var price = document.createElement("span"); price.className = "price"; price.textContent = money(p.price, p.currency_symbol || p.currency_code || p.currency); meta.appendChild(price);
       var stock = document.createElement("span");
       var stockNumber = Number(p.stock);
       stock.className = "stock" + (p.stock !== null && p.stock !== undefined && Number.isFinite(stockNumber) && stockNumber <= 0 ? " out" : " unknown");
       stock.textContent = p.stock === null || p.stock === undefined || !Number.isFinite(stockNumber) ? "স্টক জানা নেই" : (stockNumber > 0 ? "স্টকে আছে" : "স্টক শেষ");
-      meta.appendChild(stock);
-      body.appendChild(meta);
+      meta.appendChild(stock); body.appendChild(meta);
       if (p.rating !== null && p.rating !== undefined) {
-        var ratingValue = Number(p.rating);
-        var rating = document.createElement("div"); rating.className = "rating";
-        rating.textContent = "★ " + (Number.isFinite(ratingValue) ? ratingValue.toFixed(1) : String(p.rating)) + (p.review_count ? " · " + Number(p.review_count).toLocaleString("en-BD") + "টি review" : "");
+        var ratingValue = Number(p.rating); var rating = document.createElement("div"); rating.className = "rating";
+        rating.textContent = "★ " + (Number.isFinite(ratingValue) ? ratingValue.toFixed(1) : String(p.rating)) + (p.review_count ? " · " + Number(p.review_count).toLocaleString(undefined) + "টি review" : "");
         body.appendChild(rating);
       }
       var actions = document.createElement("div"); actions.className = "actions";
       var url = safeUrl(p.product_url || p.url || p.link);
       var link = document.createElement("a"); link.className = "action primary" + (url ? "" : " disabled"); link.textContent = url ? "Product দেখুন" : "Link নেই";
-      if (url) {
-        link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer";
-        link.addEventListener("click", function () { trackEvent("click", { product_id: p.id, interaction_id: interactionId, conversation_id: convId }); });
-      }
+      if (url) { link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.addEventListener("click", function () { trackEvent("click", { product_id: p.id, interaction_id: interactionId, conversation_id: convId }); }); }
       actions.appendChild(link);
-      var ask = document.createElement("button"); ask.className = "action"; ask.type = "button"; ask.textContent = "এটি সম্পর্কে জিজ্ঞেস করুন";
-      ask.addEventListener("click", function () { input.value = (p.name || "এই product") + " সম্পর্কে details চাই"; input.focus(); });
+      var ask = document.createElement("button"); ask.className = "action"; ask.type = "button"; ask.textContent = "Details"; ask.addEventListener("click", function () { askAboutProduct(p); });
       actions.appendChild(ask); body.appendChild(actions); card.appendChild(body); box.appendChild(card);
     });
     messages.appendChild(box); scroll();
@@ -150,27 +143,14 @@
 
   function setSending(value) { sending = value; send.disabled = value; input.disabled = value; imageButton.disabled = value; }
   function clearImage() { selectedImageId = null; imageInput.value = ""; preview.classList.remove("show"); previewName.textContent = ""; }
-
-  function friendlyError(status) {
-    if (status === 401 || status === 403) return "দুঃখিত, এই serviceটি এখন আপনার store-এর জন্য available নেই।";
-    if (status === 413) return "ছবিটি একটু বড় হয়েছে। ছোট একটি image পাঠান।";
-    if (status === 429) return "একটু বেশি request হয়ে গেছে 😊 কিছুক্ষণ পর আবার চেষ্টা করুন।";
-    if (status >= 500) return "দুঃখিত, আমাদের service-এ সাময়িক সমস্যা হচ্ছে। একটু পরে আবার চেষ্টা করুন।";
-    return "দুঃখিত, এখন উত্তর দিতে সমস্যা হচ্ছে। একটু পরে আবার চেষ্টা করুন।";
-  }
+  function friendlyError(status) { if (status === 401 || status === 403) return "দুঃখিত, এই serviceটি এখন আপনার store-এর জন্য available নেই।"; if (status === 413) return "ছবিটি একটু বড় হয়েছে। ছোট একটি image পাঠান।"; if (status === 429) return "একটু বেশি request হয়ে গেছে 😊 কিছুক্ষণ পর আবার চেষ্টা করুন।"; if (status >= 500) return "দুঃখিত, আমাদের service-এ সাময়িক সমস্যা হচ্ছে। একটু পরে আবার চেষ্টা করুন।"; return "দুঃখিত, এখন উত্তর দিতে সমস্যা হচ্ছে। একটু পরে আবার চেষ্টা করুন।"; }
 
   function uploadImage(file) {
-    if (!file || sending) return;
-    setSending(true);
-    preview.classList.add("show");
-    previewName.textContent = "ছবি আপলোড হচ্ছে…";
+    if (!file || sending) return; setSending(true); preview.classList.add("show"); previewName.textContent = "ছবি আপলোড হচ্ছে…";
     var form = new FormData(); form.append("file", file); if (conversationId) form.append("conversation_id", conversationId);
     fetch(API_BASE + "/v1/images", { method: "POST", headers: { "x-api-key": API_KEY }, body: form })
       .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
-      .then(function (data) {
-        selectedImageId = data.image_id; previewName.textContent = "ছবি প্রস্তুত: " + (file.name || "image"); addMessage("user", "📷 " + (file.name || "ছবি") + " পাঠিয়েছি.");
-        return fetch(API_BASE + "/v1/images/" + encodeURIComponent(selectedImageId) + "/analyze", { method: "POST", headers: { "content-type": "application/json", "x-api-key": API_KEY }, body: JSON.stringify({ conversation_id: conversationId, question: input.value.trim() || null }) });
-      })
+      .then(function (data) { selectedImageId = data.image_id; previewName.textContent = "ছবি প্রস্তুত: " + (file.name || "image"); addMessage("user", "📷 " + (file.name || "ছবি") + " পাঠিয়েছি."); return fetch(API_BASE + "/v1/images/" + encodeURIComponent(selectedImageId) + "/analyze", { method: "POST", headers: { "content-type": "application/json", "x-api-key": API_KEY }, body: JSON.stringify({ conversation_id: conversationId, question: input.value.trim() || null }) }); })
       .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
       .then(function (data) { if (data.conversation_id) { conversationId = data.conversation_id; try { localStorage.setItem(STORAGE_KEY, conversationId); } catch (_) {} } addMessage("assistant", data.message || "ছবিটি দেখেছি।"); addProducts(data.products, data.interaction_id, data.conversation_id); clearImage(); })
       .catch(function (err) { previewName.textContent = "ছবি পাঠানো যায়নি"; addMessage("assistant", friendlyError(Number(err.message))); })
@@ -179,19 +159,12 @@
 
   function startPolling() {
     if (!conversationId || pollingTimer) return;
-    pollingTimer = setInterval(function () {
-      fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversationId), { headers: { "x-api-key": API_KEY } })
-        .then(function (r) { if (!r.ok) return null; return r.json(); })
-        .then(function (data) { if (!data || !Array.isArray(data.messages)) return; data.messages.forEach(function (m) { if (m.role !== "merchant" || !m.id || m.id === lastMerchantMessageId) return; lastMerchantMessageId = m.id; addMessage("merchant", "Store team: " + (m.content || "")); }); })
-        .catch(function () {});
-    }, 5000);
+    pollingTimer = setInterval(function () { fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversationId), { headers: { "x-api-key": API_KEY } }).then(function (r) { if (!r.ok) return null; return r.json(); }).then(function (data) { if (!data || !Array.isArray(data.messages)) return; data.messages.forEach(function (m) { if (m.role !== "merchant" || !m.id || m.id === lastMerchantMessageId) return; lastMerchantMessageId = m.id; addMessage("merchant", "Store team: " + (m.content || "")); }); }).catch(function () {}); }, 5000);
   }
-
   function stopPolling() { if (pollingTimer) { clearInterval(pollingTimer); pollingTimer = null; } }
 
   function sendMessage() {
-    var text = input.value.trim();
-    if (!text || sending) return;
+    var text = input.value.trim(); if (!text || sending) return;
     addMessage("user", text); input.value = ""; input.style.height = "auto"; setSending(true);
     var typing = addMessage("typing", "একটু দেখছি…");
     fetch(API_BASE + "/v1/chat", { method: "POST", headers: { "content-type": "application/json", "x-api-key": API_KEY }, body: JSON.stringify({ message: text, conversation_id: conversationId }) })
@@ -201,11 +174,7 @@
       .finally(function () { setSending(false); input.focus(); });
   }
 
-  function setOpen(open) {
-    panel.classList.toggle("open", open); bubble.setAttribute("aria-expanded", open ? "true" : "false");
-    if (open) { input.focus(); startPolling(); }
-  }
-
+  function setOpen(open) { panel.classList.toggle("open", open); bubble.setAttribute("aria-expanded", open ? "true" : "false"); if (open) { input.focus(); startPolling(); } }
   bubble.addEventListener("click", function () { var open = !panel.classList.contains("open"); setOpen(open); if (open && !greeted) { greeted = true; addMessage("assistant", GREETING); } });
   close.addEventListener("click", function () { setOpen(false); bubble.focus(); });
   send.addEventListener("click", sendMessage);
@@ -216,27 +185,8 @@
   input.addEventListener("input", function () { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 90) + "px"; });
   window.addEventListener("beforeunload", stopPolling);
 
-  // --- Public conversion API -------------------------------------------
-  // The chat widget can see clicks on the products it recommends, but only
-  // the merchant's own site knows when a customer actually adds an item to
-  // their cart or completes checkout. Merchants call this from that page
-  // (e.g. their "Added to cart" handler or order-confirmation page) to
-  // attribute the sale back to the chat conversation that drove it:
-  //
-  //   UniversalCommerceAI.trackAddToCart(productId, price);
-  //   UniversalCommerceAI.trackPurchase(orderTotal, productId);
-  //
-  // Both fall back gracefully (no-op, return false) if this visitor never
-  // interacted with the chat widget within the last 24h — no fabricated
-  // attribution.
   window.UniversalCommerceAI = window.UniversalCommerceAI || {};
-  window.UniversalCommerceAI.trackConversion = function (eventType, opts) {
-    return trackEvent(eventType, opts);
-  };
-  window.UniversalCommerceAI.trackAddToCart = function (productId, value) {
-    return trackEvent("add_to_cart", { product_id: productId, value: value });
-  };
-  window.UniversalCommerceAI.trackPurchase = function (value, productId) {
-    return trackEvent("purchase", { product_id: productId, value: value });
-  };
+  window.UniversalCommerceAI.trackConversion = function (eventType, opts) { return trackEvent(eventType, opts); };
+  window.UniversalCommerceAI.trackAddToCart = function (productId, value) { return trackEvent("add_to_cart", { product_id: productId, value: value }); };
+  window.UniversalCommerceAI.trackPurchase = function (value, productId) { return trackEvent("purchase", { product_id: productId, value: value }); };
 })();
