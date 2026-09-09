@@ -81,6 +81,22 @@ class DynamicAttributeChatService(ChatService):
         )
 
     @staticmethod
+    def _is_contextual_confirmation(message: str) -> bool:
+        """Detect short confirmations that accept the immediately offered action."""
+        normalized = message.casefold().strip()
+        normalized = re.sub(r"[?!.:,;]+", " ", normalized)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        confirmations = {
+            "ok", "okay", "yes", "yeah", "yep", "sure", "done", "give", "give it", "show",
+            "ok dao", "okay dao", "yes dao", "sure dao", "give me", "give me that",
+            "আচ্ছা দাও", "আচ্ছা দেন", "আচ্ছা দেখাও", "আচ্ছা দেখান", "ঠিক আছে দাও", "ঠিক আছে দেন",
+            "হ্যাঁ দাও", "হ্যাঁ দেন", "দাও", "দেন", "দেখাও", "দেখান", "দিয়ে দাও", "দিয়ে দেন",
+            "assa dao", "accha dao", "acha dao", "assa den", "accha den", "acha den",
+            "thik ache dao", "thik ase dao", "thik ache den", "thik ase den",
+        }
+        return normalized in confirmations
+
+    @staticmethod
     def _is_link_request(message: str) -> bool:
         q = message.casefold().strip()
         return any(term in q for term in (
@@ -176,6 +192,21 @@ class DynamicAttributeChatService(ChatService):
             "তাই শুধু অনুমান করে কোনো একটাকে সেরা বলছি না। চাইলে price, stock বা available features দেখে optionগুলো তুলনা করে দিতে পারি।"
         )
 
+    def _context_comparison_message(self, products: list[Product]) -> str:
+        """Answer a short confirmation by carrying out the action just offered."""
+        if not products:
+            return "দুঃখিত, আগের product optionগুলো এখন আর পাওয়া যাচ্ছে না। আবার laptop/phone-এর মতো product লিখে খুঁজে দিতে পারি।"
+        lines = ["অবশ্যই 😊 আগের laptop optionগুলো price ও stock অনুযায়ী তুলনা করে দিলাম:"]
+        for product in products:
+            name = self._format_product_name(product)
+            price = getattr(product, "price", None)
+            stock = getattr(product, "stock", None)
+            price_text = f"৳{float(price):,.0f}" if price is not None else "দাম জানা নেই"
+            stock_text = "স্টকে আছে" if stock is None or float(stock) > 0 else "স্টক শেষ"
+            lines.append(f"• {name} — {price_text} — {stock_text}")
+        lines.append("চাইলে এগুলোর মধ্যে budget বা specific feature ধরে আরও narrow করে দিতে পারি।")
+        return "\n".join(lines)
+
     async def _search_products(self, store_id, message, filters, store_terms=None):
         attributes = getattr(filters, "attributes", {}) or {}
         query = self.db.query(Product).filter(Product.store_id == store_id)
@@ -243,9 +274,22 @@ class DynamicAttributeChatService(ChatService):
                 self._log_analytics_event(store_id=store_id, message=message, intent="recommendation", result_count=0)
                 return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": [], "sources": []}
 
-            # Resolve explicit references through the same canonical context resolver
-            # used by ChatService. This preserves "2 নম্বরটার", "third one", etc.
-            # instead of silently falling back to the first result.
+            # Short confirmations should continue the action offered by the previous
+            # response instead of being sent back through the product-name planner.
+            # Example: after "চাইলে ... compare করে দিতে পারি", "assa dao" means
+            # "okay, do it" and should compare the existing result set.
+            if session is not None and context_products and self._is_contextual_confirmation(message):
+                self._save_message(session_id=session.id, role="user", content=message)
+                response_message = self._context_comparison_message(context_products)
+                self._save_message(session_id=session.id, role="assistant", content=response_message)
+                return {
+                    "conversation_id": conversation_id,
+                    "type": "product_search",
+                    "message": response_message,
+                    "products": self._serialize_products(context_products),
+                    "sources": [],
+                }
+
             referenced_product = None
             if session is not None:
                 referenced_product = self._get_referenced_product(store_id, session.id, message)
@@ -324,9 +368,4 @@ class DynamicAttributeChatService(ChatService):
                 query = query.filter(and_(*groups))
         if previous_ids:
             query = query.filter(~Product.id.in_(previous_ids))
-        limit = max(batch_size, 100) if is_recommendation_query(query_text) else batch_size
-        results = query.order_by(Product.name.asc()).limit(limit).all()
-        if is_recommendation_query(query_text):
-            ranked = self._rank(store_id, results, f"{query_text} {_RECOMMENDATION_CONTEXT.get()}".strip())
-            return ranked[:batch_size]
-        return results
+        return query.order_by(Product.name.asc()).limit(batch_size).all()
