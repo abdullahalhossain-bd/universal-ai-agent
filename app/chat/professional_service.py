@@ -12,16 +12,15 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
     @staticmethod
     def _enrich_product_payload(store_id: str, db, products: list[dict]) -> list[dict]:
         """Guarantee frontend-safe image/link fields for product cards."""
+        from app.db.models import Product
+
         ids = [str(item.get("id")) for item in products if item.get("id")]
         if not ids:
             return products
 
         objects = (
-            db.query(__import__("app.db.models", fromlist=["Product"]).Product)
-            .filter(
-                __import__("app.db.models", fromlist=["Product"]).Product.store_id == store_id,
-                __import__("app.db.models", fromlist=["Product"]).Product.id.in_(ids),
-            )
+            db.query(Product)
+            .filter(Product.store_id == store_id, Product.id.in_(ids))
             .all()
         )
         by_id = {str(product.id): product for product in objects}
@@ -41,12 +40,12 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
         return enriched
 
     @staticmethod
-    def _professional_result_message(message: str, products: list[dict]) -> str:
+    def _professional_result_message(products: list[dict]) -> str:
         count = len(products)
         if count == 1:
             product = products[0]
             name = product.get("name") or product.get("title") or "Product"
-            return f"{name}-এর details নিচে দেখুন। Price, stock, image এবং product page link available থাকলে card-এ দেখানো হবে।"
+            return f"{name}-এর details নিচে দেখুন। Price, stock, image এবং available product page link card-এ দেখানো হবে।"
         return (
             f"আপনার query অনুযায়ী {count}টি matching product পাওয়া গেছে। "
             "নিচে প্রতিটি product-এর price, stock, image এবং available product page link দেখুন।"
@@ -98,12 +97,16 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
         if not isinstance(result, dict):
             return result
 
-        products = result.get("products") or []
-        products = self._enrich_product_payload(store_id, self.db, products)
+        products = self._enrich_product_payload(store_id, self.db, result.get("products") or [])
         result["products"] = products
 
-        # Replace terse/internal result-count copy with customer-facing copy.
-        if products and result.get("type") == "product_search":
-            result["message"] = self._professional_result_message(message, products)
+        # Dynamic service already creates the special recommendation,
+        # explanation, image and link responses. Do not overwrite them.
+        is_recommendation = self._is_bare_recommendation(message) or any(
+            token in message.casefold() for token in ("best", "top", "recommend", "সেরা", "ভালো")
+        )
+        is_followup = self._is_link_request(message) or self._is_image_request(message) or self._is_recommendation_explanation(message)
+        if products and result.get("type") == "product_search" and not is_recommendation and not is_followup:
+            result["message"] = self._professional_result_message(products)
 
         return result
