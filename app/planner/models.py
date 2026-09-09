@@ -18,6 +18,7 @@ class ProductFilters(BaseModel):
     min_price: float | None = None
     max_price: float | None = None
     in_stock: bool = False
+    recommendation: bool = False
     attributes: dict = Field(default_factory=dict)
 
 
@@ -34,6 +35,7 @@ class SearchIntent(str, Enum):
     MOST_EXPENSIVE = "most_expensive"
     IN_STOCK = "in_stock"
     SIMILAR = "similar"
+    RECOMMENDATION = "recommendation"
 
 
 class QueryPlan(BaseModel):
