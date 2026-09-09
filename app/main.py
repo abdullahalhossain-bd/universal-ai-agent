@@ -31,6 +31,7 @@ from app.chat.router import router as chat_router
 from app.api.routes.messages import router as messages_router
 from app.api.routes.images import router as images_router
 from app.api.routes.media import router as media_router
+from app.api.routes.behavior import router as behavior_router
 from app.api.v1.discovery import router as discovery_v1_router
 from app.api.v1.mapping import router as mapping_v1_router
 from app.widget.router import router as widget_router
@@ -42,25 +43,12 @@ from app.api.routes.admin_analytics import router as admin_analytics_router
 
 
 def _ensure_alembic_baseline() -> None:
-    """Stamp an already-provisioned schema when Alembic state is missing.
-
-    The live Render database was provisioned from the ORM schema before
-    Alembic version tracking was enabled. Never run the historical
-    migrations against that existing schema: validate that every active
-    ORM table and column exists first, then create only the Alembic state
-    table by stamping the current head.
-    """
+    """Stamp an already-provisioned schema when Alembic state is missing."""
     from sqlalchemy import inspect
-
     inspector = inspect(engine)
     if inspector.has_table("alembic_version"):
         return
-
-    missing_tables = [
-        table.name
-        for table in Base.metadata.sorted_tables
-        if not inspector.has_table(table.name)
-    ]
+    missing_tables = [table.name for table in Base.metadata.sorted_tables if not inspector.has_table(table.name)]
     missing_columns = []
     for table in Base.metadata.sorted_tables:
         if not inspector.has_table(table.name):
@@ -69,21 +57,15 @@ def _ensure_alembic_baseline() -> None:
         for column in table.columns:
             if column.name not in actual_columns:
                 missing_columns.append(f"{table.name}.{column.name}")
-
     if missing_tables or missing_columns:
         details = []
         if missing_tables:
             details.append(f"tables={missing_tables}")
         if missing_columns:
             details.append(f"columns={missing_columns}")
-        raise RuntimeError(
-            "Alembic version table is missing and the existing schema does not "
-            "match the active ORM schema; refusing to stamp head: " + "; ".join(details)
-        )
-
+        raise RuntimeError("Alembic version table is missing and the existing schema does not match the active ORM schema; refusing to stamp head: " + "; ".join(details))
     from alembic import command
     from alembic.config import Config
-
     alembic_config = Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
     command.stamp(alembic_config, "head")
     logger.info("Alembic version table was missing; validated existing schema and stamped head")
@@ -101,32 +83,17 @@ async def lifespan(app: FastAPI):
     else:
         _ensure_alembic_baseline()
         logger.info("auto_create_tables=false: schema creation skipped; Alembic state verified")
-
     background_tasks: list[asyncio.Task] = []
     if settings.run_sync_inline:
-        # Run the datasource sync worker + scheduler as background tasks inside
-        # this same process, instead of requiring separate (paid) Render worker
-        # services. Redis Streams consumer groups make this safe to run
-        # alongside dedicated `app.sync.worker` / `app.sync.scheduler`
-        # processes too, if those are ever added later — jobs are only ever
-        # claimed by one consumer at a time.
         try:
             from app.sync.worker import run_worker
             from app.sync.scheduler import scheduler as run_scheduler
-
             background_tasks.append(asyncio.create_task(run_worker(), name="inline-sync-worker"))
-            background_tasks.append(
-                asyncio.create_task(run_scheduler(settings.redis_url), name="inline-sync-scheduler")
-            )
+            background_tasks.append(asyncio.create_task(run_scheduler(settings.redis_url), name="inline-sync-scheduler"))
             logger.info("RUN_SYNC_INLINE=true: datasource sync worker + scheduler started in-process")
         except Exception:
-            logger.exception(
-                "Failed to start inline sync worker/scheduler; datasource syncing will not run "
-                "unless a separate app.sync.worker process is deployed"
-            )
-
+            logger.exception("Failed to start inline sync worker/scheduler; datasource syncing will not run unless a separate app.sync.worker process is deployed")
     yield
-
     for task in background_tasks:
         task.cancel()
     for task in background_tasks:
@@ -140,7 +107,7 @@ from app.core.security import get_cors_allow_origins
 app.add_middleware(CORSMiddleware, allow_origins=get_cors_allow_origins(), allow_credentials=False, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], allow_headers=["x-api-key", "content-type", "authorization"])
 from app.core.middleware import RequestContextMiddleware
 app.add_middleware(RequestContextMiddleware)
-app.include_router(chat_router); app.include_router(messages_router); app.include_router(images_router); app.include_router(media_router); app.include_router(stores_router); app.include_router(auth_router); app.include_router(api_keys_router); app.include_router(billing_router); app.include_router(admin_router); app.include_router(admin_analytics_router); app.include_router(products_router); app.include_router(datasources_router); app.include_router(knowledge_router); app.include_router(discovery_v1_router, prefix="/v1"); app.include_router(mapping_v1_router, prefix="/v1"); app.include_router(widget_router)
+app.include_router(chat_router); app.include_router(messages_router); app.include_router(images_router); app.include_router(media_router); app.include_router(stores_router); app.include_router(auth_router); app.include_router(api_keys_router); app.include_router(billing_router); app.include_router(admin_router); app.include_router(admin_analytics_router); app.include_router(products_router); app.include_router(datasources_router); app.include_router(knowledge_router); app.include_router(behavior_router); app.include_router(discovery_v1_router, prefix="/v1"); app.include_router(mapping_v1_router, prefix="/v1"); app.include_router(widget_router)
 _CHAT_DIR = Path(__file__).resolve().parent.parent / "frontend" / "chat"
 if _CHAT_DIR.is_dir(): app.mount("/chat", StaticFiles(directory=str(_CHAT_DIR), html=True), name="chat-ui")
 from app.core.alerting import send_alert
@@ -164,8 +131,7 @@ async def unhandled_exception_handler(request, exc):
     return JSONResponse(status_code=500, content={"detail": "Internal server error.", "request_id": request_id}, headers={"X-Request-ID": request_id or "-"})
 
 @app.get("/", tags=["Health"])
-async def root():
-    return {"name": "Universal Commerce AI API", "version": "1.0.0", "status": "ok", "docs": "/docs", "health": "/health", "ready": "/ready"}
+async def root(): return {"name": "Universal Commerce AI API", "version": "1.0.0", "status": "ok", "docs": "/docs", "health": "/health", "ready": "/ready"}
 
 @app.get("/health", tags=["Health"])
 async def health(): return {"status": "ok"}
