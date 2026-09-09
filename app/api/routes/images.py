@@ -80,14 +80,10 @@ async def upload_image(
             conversation_id=conversation_id,
         )
     except Exception:
-        # The object was already written. Remove it if the DB transaction
-        # cannot create its authoritative metadata row, otherwise every
-        # transient DB failure leaves an unreachable storage object behind.
         db.rollback()
         try:
             await storage.delete(storage_key)
         except Exception:
-            # Cleanup is best-effort; preserve the original DB failure.
             pass
         raise
 
@@ -109,6 +105,16 @@ async def analyze_image(
 ):
     store = resolve_active_store(api_key=api_key, db=db)
     require_feature(store, FEATURE_IMAGE_SEARCH)
+
+    # Image IDs are store-scoped, and conversation-bound uploads must also
+    # remain bound to their original conversation. Without this check a
+    # caller who knows an image_id could attach an uploaded image to a
+    # different conversation in the same store.
+    image_record = ImageRepository(db).get(store_id=store.id, image_id=image_id)
+    if image_record is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    if image_record.conversation_id is not None and image_record.conversation_id != request.conversation_id:
+        raise HTTPException(status_code=404, detail="Image not found")
 
     service = ChatService(db=db)
     return await service.handle_image(
