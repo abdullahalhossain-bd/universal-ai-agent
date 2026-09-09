@@ -1,12 +1,12 @@
 from app.products.query_models import ProductSearchRequest
-from app.products.sql_builder import ProductSQLBuilder
+from app.products.sql_builder_dynamic import DynamicProductSQLBuilder
 from app.products.universal import UniversalProduct
 
 
 class ProductQueryService:
     def __init__(self, connector, mapping, dialect):
         self.connector = connector
-        self.builder = ProductSQLBuilder(mapping=mapping, dialect=dialect)
+        self.builder = DynamicProductSQLBuilder(mapping=mapping, dialect=dialect)
         self.mapping = mapping
 
     async def search(self, request: ProductSearchRequest):
@@ -16,14 +16,16 @@ class ProductQueryService:
 
     def _normalize(self, row):
         def get(field):
-            column = self.mapping.get(field)
+            definition = self.mapping.get(field)
+            column = definition.get("column") if isinstance(definition, dict) else definition
             return row.get(column) if column else None
 
         attributes = {}
-        for semantic_name, column in (self.mapping.get("attributes") or {}).items():
-            value = row.get(column)
+        for semantic_name, definition in (self.mapping.get("attributes") or {}).items():
+            column = definition.get("column") if isinstance(definition, dict) else definition
+            value = row.get(column) if column else None
             if value is not None:
-                attributes[semantic_name] = value
+                attributes[str(semantic_name).strip().lower()] = value
 
         return UniversalProduct(
             id=str(get("id")),
