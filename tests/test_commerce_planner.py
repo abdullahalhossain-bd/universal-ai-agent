@@ -1,5 +1,8 @@
+from types import SimpleNamespace
+
 from app.planner.models import Intent
 from app.planner.rule_planner import plan
+from app.products.semantic_attributes import deterministic_extract
 from app.chat.dynamic_service import DynamicAttributeChatService
 
 
@@ -63,3 +66,38 @@ def test_recommendation_evidence_requires_verified_catalog_signals():
 
     ProductStub.rating = 4.7
     assert DynamicAttributeChatService._recommendation_evidence([ProductStub()])
+
+
+def test_generic_product_search_does_not_require_store_vocabulary():
+    for query in ("Nike shoes", "কালো জুতা দেখাও চাই", "laptop"):
+        action = plan(query, None)
+        assert action.intent == Intent.PRODUCT_SEARCH
+        assert action.product_filters is not None
+
+
+def test_dynamic_attributes_use_adjacent_value_not_next_attribute():
+    schema = {
+        "ram": ["ram"],
+        "color": ["color"],
+        "size": ["size"],
+    }
+    extracted = deterministic_extract("16GB RAM black color XL size", schema)
+    assert extracted == {"ram": "16gb", "color": "black", "size": "xl"}
+
+
+def test_dynamic_attribute_schema_supports_aliases():
+    schema = {
+        "finish": ["finish", "color", "colour"],
+        "memory": ["memory", "ram"],
+    }
+    extracted = deterministic_extract("black colour 16GB RAM", schema)
+    assert extracted["finish"] == "black"
+    assert extracted["memory"] == "16gb"
+
+
+def test_in_stock_queries_keep_existence_semantics():
+    for query in ("laptop ase", "laptop ache", "ল্যাপটপ আছে", "laptop available"):
+        action = plan(query, {"Laptop"})
+        assert action.intent == Intent.PRODUCT_SEARCH
+        assert action.product_filters is not None
+        assert action.product_filters.in_stock is True
