@@ -12,6 +12,7 @@ tests exist so a future edit can't silently drop the guard again.
 import pytest
 
 from app.core.network_guard import assert_safe_connection_host
+from tests.markers import requires_postgres
 
 
 @pytest.mark.parametrize(
@@ -48,6 +49,7 @@ def test_allows_public_looking_host():
     )
 
 
+@requires_postgres
 def test_discovery_scan_rejects_private_host(client):
     """
     End-to-end proof the guard is wired into the live endpoint, not
