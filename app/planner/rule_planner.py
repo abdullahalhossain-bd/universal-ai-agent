@@ -80,6 +80,12 @@ def _extract_min_price(text: str) -> float | None:
     return None
 
 
+def _normalize_entity_text(value: str) -> str:
+    value = _normalize_digits(value).lower().strip()
+    value = re.sub(r"[^\w\u0980-\u09ff.-]+", " ", value, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", value).strip()
+
+
 def _extract_in_stock(text: str) -> bool:
     normalized = _normalize_entity_text(text)
     if not normalized:
@@ -121,12 +127,6 @@ def _clean_search_terms(text: str, exclude_words: set[str] | None = None, store_
         if matched:
             return " ".join(matched)
     return " ".join(useful)
-
-
-def _normalize_entity_text(value: str) -> str:
-    value = _normalize_digits(value).lower().strip()
-    value = re.sub(r"[^\w\u0980-\u09ff.-]+", " ", value, flags=re.UNICODE)
-    return re.sub(r"\s+", " ", value).strip()
 
 
 def _resolve_store_entities(query: str, store_terms: set[str] | None) -> list[str]:
@@ -174,24 +174,33 @@ def _extract_attributes(query: str, store_terms):
     return deterministic_extract(query, schema)
 
 
-def _attribute_search_exclusions(attributes: dict) -> set[str]:
+def _attribute_search_exclusions(attributes: dict, store_terms=None) -> set[str]:
     excluded = set()
+    schema = getattr(store_terms, "attribute_schema", None) or {}
+    for aliases in schema.values():
+        for alias in aliases:
+            excluded.update(_normalize_entity_text(alias).split())
     for value in attributes.values():
         if isinstance(value, str):
-            excluded.update(value.casefold().split())
+            excluded.update(_normalize_entity_text(value).split())
     return excluded
 
 
 def plan(query: str, store_terms: set[str] | None = None):
     text = query.lower()
-    store_entities = _resolve_store_entities(query, store_terms)
     attributes = _extract_attributes(query, store_terms)
+    attribute_exclusions = _attribute_search_exclusions(attributes, store_terms)
+    store_entities = [
+        entity for entity in _resolve_store_entities(query, store_terms)
+        if not any(entity == alias or entity in aliases for aliases in (getattr(store_terms, "attribute_schema", {}) or {}).values() for alias in aliases)
+        and entity not in attribute_exclusions
+    ]
     product_score = min(1.0, 0.55 + 0.10 * len(store_entities)) if store_entities else (0.70 if attributes else 0.0)
     knowledge_score = sum(word in text for word in KNOWLEDGE_WORDS)
     max_price = _extract_max_price(query)
     min_price = _extract_min_price(query)
     in_stock = _extract_in_stock(query)
-    search_terms = _clean_search_terms(query, exclude_words=_attribute_search_exclusions(attributes), store_terms=store_terms)
+    search_terms = _clean_search_terms(query, exclude_words=attribute_exclusions, store_terms=store_terms)
     entity_query = " ".join(store_entities) or search_terms
 
     common_filters = dict(
@@ -203,7 +212,7 @@ def plan(query: str, store_terms: set[str] | None = None):
     )
 
     if product_score > 0 and knowledge_score > 0:
-        return PlannedAction(intent=Intent.MIXED, product_filters=ProductFilters(**common_filters), knowledge_query=_clean_search_terms(query, exclude_words=set(store_entities) | _attribute_search_exclusions(attributes)) or query, confidence=0.90)
+        return PlannedAction(intent=Intent.MIXED, product_filters=ProductFilters(**common_filters), knowledge_query=_clean_search_terms(query, exclude_words=set(store_entities) | attribute_exclusions) or query, confidence=0.90)
     if product_score > 0:
         return PlannedAction(intent=Intent.PRODUCT_SEARCH, product_filters=ProductFilters(**common_filters), confidence=0.90)
     if max_price is not None and search_terms:
