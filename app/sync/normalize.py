@@ -1,16 +1,12 @@
-"""
-Normalize a raw merchant row into the local Product field shape.
+"""Normalize a raw merchant row into the local Product field shape.
 
-Mapping keys are semantic types (id, name, price, stock, …). Values may be
-either a column name string or a dict with a ``column`` key (legacy shape
-from the mapping engine).
+Merchant-specific fields live under the ``attributes`` namespace. Mapping
+entries may be strings or ``{"column": ..., "aliases": [...]}`` objects.
 """
-
 from __future__ import annotations
 
 import re
 from typing import Any
-
 
 REQUIRED_FIELDS = ("id", "name")
 _CURRENCY_AND_GROUPING = re.compile(r"[^0-9+\-.,]")
@@ -30,9 +26,7 @@ def _resolve_column(mapping: dict, field: str) -> str | None:
 
 def _get(raw: dict, mapping: dict, field: str) -> Any:
     column = _resolve_column(mapping, field)
-    if not column:
-        return None
-    return raw.get(column)
+    return raw.get(column) if column else None
 
 
 def _as_float(value: Any) -> float | None:
@@ -45,12 +39,9 @@ def _as_float(value: Any) -> float | None:
     text = str(value).strip()
     if not text:
         return None
-    # Accept common merchant formats such as "৳1,299", "$ 1,299.50",
-    # "1 299.50", while rejecting strings that contain no numeric value.
     text = _CURRENCY_AND_GROUPING.sub("", text).replace(" ", "")
     if not text:
         return None
-    # If both separators occur, the last separator is treated as decimal.
     if "." in text and "," in text:
         if text.rfind(",") > text.rfind("."):
             text = text.replace(".", "").replace(",", ".")
@@ -73,11 +64,38 @@ def _as_str(value: Any) -> str | None:
     return text or None
 
 
+def _normalize_attribute_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool, list, dict)):
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+    return str(value).strip() or None
+
+
+def _extract_attributes(raw: dict, mapping: dict) -> dict[str, Any]:
+    """Copy merchant-defined mapped columns without requiring platform fields."""
+    result: dict[str, Any] = {}
+    attribute_mapping = mapping.get("attributes") or {}
+    if not isinstance(attribute_mapping, dict):
+        return result
+
+    for semantic_name, entry in attribute_mapping.items():
+        if not isinstance(semantic_name, str) or not semantic_name.strip():
+            continue
+        column = entry.get("column") if isinstance(entry, dict) else entry
+        if not isinstance(column, str) or not column.strip():
+            continue
+        value = _normalize_attribute_value(raw.get(column))
+        if value is not None:
+            result[semantic_name.strip().lower()] = value
+    return result
+
+
 def normalize_row(raw: dict, mapping: dict) -> dict | None:
-    """Return a dict suitable for Product upsert, or None if invalid."""
     raw_id = _get(raw, mapping, "id")
     raw_name = _get(raw, mapping, "name")
-
     if raw_id is None or raw_name is None:
         return None
 
@@ -95,4 +113,5 @@ def normalize_row(raw: dict, mapping: dict) -> dict | None:
         "category": _as_str(_get(raw, mapping, "category")),
         "image_url": _as_str(_get(raw, mapping, "image_url")),
         "product_url": _as_str(_get(raw, mapping, "product_url")),
+        "attributes": _extract_attributes(raw, mapping),
     }
