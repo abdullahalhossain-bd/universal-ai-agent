@@ -1,11 +1,35 @@
 import { useEffect, useState } from 'react'
-import { MessageSquareText, Send, UploadCloud, Sparkles } from 'lucide-react'
+import { MessageSquareText, Send, UploadCloud, Sparkles, ExternalLink } from 'lucide-react'
 import { api, ApiError } from '../api/client'
 import { Alert, Button, Card, EmptyState, Input, PageHeader, Spinner } from '../components/ui'
+
+const safeUrl = (value) => {
+  if (typeof value !== 'string') return null
+  const valueTrimmed = value.trim()
+  try {
+    const url = new URL(valueTrimmed, window.location.origin)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null
+  } catch {
+    return null
+  }
+}
+
+const formatPrice = (value) => {
+  if (value === null || value === undefined || value === '') return ''
+  const number = Number(value)
+  return Number.isFinite(number) ? `$${number.toFixed(2)}` : String(value)
+}
+
+const roleLabel = (role) => {
+  if (role === 'user') return 'Customer'
+  if (role === 'merchant') return 'You'
+  return 'AI Assistant'
+}
 
 export default function ChatPreview() {
   const [message, setMessage] = useState('')
   const [conversation, setConversation] = useState([])
+  const [conversationId, setConversationId] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [imageId, setImageId] = useState('')
@@ -29,10 +53,20 @@ export default function ChatPreview() {
     setConversation((prev) => [...prev, { role: 'user', content: next }, { role: 'assistant', content: 'Thinking…' }])
 
     try {
-      const result = await api.post('/v1/chat', { message: next })
+      const result = await api.post('/v1/chat', {
+        message: next,
+        conversation_id: conversationId,
+      })
+      if (result?.conversation_id) setConversationId(result.conversation_id)
+
       setConversation((prev) => {
         const items = [...prev]
-        items[items.length - 1] = { role: 'assistant', content: result?.message || 'No response returned.' }
+        items[items.length - 1] = {
+          role: 'assistant',
+          content: result?.message || 'No response returned.',
+          products: Array.isArray(result?.products) ? result.products : [],
+          sources: Array.isArray(result?.sources) ? result.sources : [],
+        }
         return items
       })
       setMessage('')
@@ -50,6 +84,7 @@ export default function ChatPreview() {
 
   const uploadImage = async (e) => {
     const file = e.target.files?.[0]
+    e.target.value = ''
     if (!file) return
     setUploading(true)
     setError('')
@@ -80,22 +115,44 @@ export default function ChatPreview() {
     setLoading(true)
     setError('')
     try {
-      const result = await fetch(`/v1/images/${imageId}/analyze`, {
+      const result = await fetch(`/v1/images/${encodeURIComponent(imageId)}/analyze`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${localStorage.getItem('merchant_console_token') || ''}`,
         },
-        body: JSON.stringify({ question: imageQuestion, conversation_id: 'merchant-preview' }),
+        body: JSON.stringify({ question: imageQuestion.trim() || null, conversation_id: conversationId }),
       })
       const data = await result.json().catch(() => ({}))
       if (!result.ok) throw new ApiError(result.status, data.detail || 'Image analysis failed')
-      setConversation((prev) => [...prev, { role: 'user', content: `Image: ${imageQuestion}` }, { role: 'assistant', content: data.message || 'No visual summary returned.' }])
+      if (data?.conversation_id) setConversationId(data.conversation_id)
+      setConversation((prev) => [
+        ...prev,
+        { role: 'user', content: `Image: ${imageQuestion.trim() || 'What is this product?'}` },
+        {
+          role: 'assistant',
+          content: data.message || 'No visual summary returned.',
+          products: Array.isArray(data.products) ? data.products : [],
+          sources: Array.isArray(data.sources) ? data.sources : [],
+        },
+      ])
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : 'Image analysis failed.')
     } finally {
       setLoading(false)
     }
+  }
+
+  const startNewChat = () => {
+    setConversationId(null)
+    setImageId('')
+    setConversation([
+      {
+        role: 'assistant',
+        content: 'New conversation started. Ask about product details, shipping, policies, or items in your catalog.',
+      },
+    ])
+    setError('')
   }
 
   return (
@@ -112,15 +169,73 @@ export default function ChatPreview() {
       )}
 
       <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
-        <Card>
-          <div className="mb-4 flex items-center gap-2 text-sm font-medium text-text">
-            <MessageSquareText size={16} /> Live chat test
+        <Card className="flex min-h-[680px] flex-col">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-medium text-text">
+              <MessageSquareText size={16} /> Live chat test
+            </div>
+            <Button onClick={startNewChat} disabled={loading}>New chat</Button>
           </div>
 
-          <div className="space-y-3 rounded-lg border border-line bg-paper p-3">
+          {conversationId && (
+            <div className="mb-3 text-[10px] text-muted">Conversation: {conversationId}</div>
+          )}
+
+          <div className="flex-1 space-y-3 overflow-y-auto rounded-lg border border-line bg-paper p-3">
             {conversation.map((item, index) => (
-              <div key={`${item.role}-${index}`} className={`rounded-lg px-3 py-2 text-sm ${item.role === 'user' ? 'ml-8 bg-accent text-white' : 'mr-8 bg-white text-text border border-line'}`}>
-                {item.content}
+              <div key={`${item.role}-${index}`}>
+                <div className={`rounded-lg px-3 py-2 text-sm ${item.role === 'user' ? 'ml-8 bg-accent text-white' : 'mr-8 bg-white text-text border border-line'}`}>
+                  <div className="mb-1 text-[10px] font-medium uppercase opacity-60">{roleLabel(item.role)}</div>
+                  <div className="whitespace-pre-wrap break-words">{item.content}</div>
+                </div>
+
+                {item.products?.length > 0 && (
+                  <div className="mr-8 mt-2 grid gap-2 sm:grid-cols-2">
+                    {item.products.slice(0, 6).map((product, productIndex) => {
+                      const url = safeUrl(product?.product_url || product?.url || product?.link)
+                      const name = product?.name || product?.title || 'Product'
+                      const price = formatPrice(product?.price)
+                      const stock = product?.stock
+                      const content = (
+                        <>
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="font-medium">{name}</span>
+                            {url && <ExternalLink size={13} className="shrink-0 opacity-50" />}
+                          </div>
+                          {price && <div className="mt-1 text-xs text-muted">{price}</div>}
+                          {stock !== null && stock !== undefined && (
+                            <div className="mt-1 text-[11px] text-muted">{Number(stock) > 0 ? 'In stock' : 'Out of stock'}</div>
+                          )}
+                        </>
+                      )
+                      return url ? (
+                        <a key={`${product?.id || name}-${productIndex}`} href={url} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-line bg-white p-3 text-xs text-text hover:border-accent">
+                          {content}
+                        </a>
+                      ) : (
+                        <div key={`${product?.id || name}-${productIndex}`} className="rounded-lg border border-line bg-white p-3 text-xs text-text">
+                          {content}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {item.sources?.length > 0 && (
+                  <div className="mr-8 mt-2 flex flex-wrap gap-2">
+                    {item.sources.slice(0, 6).map((source, sourceIndex) => {
+                      const url = safeUrl(source?.url)
+                      const label = source?.title || source?.url || 'Source'
+                      return url ? (
+                        <a key={`${label}-${sourceIndex}`} href={url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-muted underline hover:text-text">
+                          {label}
+                        </a>
+                      ) : (
+                        <span key={`${label}-${sourceIndex}`} className="text-[10px] text-muted">{label}</span>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -131,6 +246,7 @@ export default function ChatPreview() {
               className="flex-1"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat() } }}
               placeholder="Ask about shipping, products, or policy questions"
             />
             <Button onClick={sendChat} disabled={loading || !message.trim()}>
@@ -150,7 +266,7 @@ export default function ChatPreview() {
             <div className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-line bg-paper px-4 py-8 text-center text-sm text-muted">
               <UploadCloud size={18} className="mr-2" />
               <span>{uploading ? 'Uploading…' : 'Choose image'}</span>
-              <input type="file" accept="image/*" className="hidden" onChange={uploadImage} />
+              <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={uploadImage} disabled={uploading} />
             </div>
           </label>
 
@@ -163,7 +279,7 @@ export default function ChatPreview() {
                 onChange={(e) => setImageQuestion(e.target.value)}
                 className="mt-4"
               />
-              <Button className="mt-3 w-full" onClick={askImageQuestion} disabled={loading}>
+              <Button className="mt-3 w-full" onClick={askImageQuestion} disabled={loading || !imageQuestion.trim()}>
                 {loading ? <Spinner /> : <Sparkles size={16} />}
                 Analyze image
               </Button>
