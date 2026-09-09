@@ -13,7 +13,7 @@ class Store(Base):
     plan: Mapped[str] = mapped_column(String(20), default="starter", server_default="starter", nullable=False)
     monthly_budget: Mapped[float] = mapped_column(Numeric(12, 6), default=1.000000, server_default="1.000000", nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="setup", nullable=False)
-    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     stripe_subscription_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     enabled_features: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
@@ -109,7 +109,7 @@ class SearchLearning(Base):
     kind: Mapped[str] = mapped_column(String(50), nullable=False, default="product_correction", server_default="product_correction")
     source_query: Mapped[str] = mapped_column(String(255), nullable=False)
     corrected_term: Mapped[str] = mapped_column(String(255), nullable=False)
-    source: Mapped[str] = mapped_column(String(30), nullable=False, default="groq", server_default="groq")
+    source: Mapped[str] = mapped_column(String(30), nullable=False, default="groq")
     hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now())
@@ -130,9 +130,27 @@ class QueryEvent(Base):
     result_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     had_results: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
 
+class BehavioralEvent(Base):
+    __tablename__ = "behavioral_events"
+    __table_args__ = (
+        Index("ix_behavioral_events_store_created", "store_id", "created_at"),
+        Index("ix_behavioral_events_store_product_created", "store_id", "product_id", "created_at"),
+        Index("ix_behavioral_events_interaction", "interaction_id", "created_at"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    interaction_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)
+    product_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    query: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    value: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
+    metadata: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, server_default=func.now())
+
 class LearnedVocabulary(Base):
     __tablename__ = "learned_vocabulary"
     term: Mapped[str] = mapped_column(String(120), primary_key=True)
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
     resolved_value: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, server_default=func.now())
