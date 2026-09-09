@@ -1,14 +1,14 @@
 """Canonical merchant product synchronization."""
 from __future__ import annotations
 import logging
-from datetime import datetime, timezone
+from datetime import datetime,timezone
 from itertools import chain
-from typing import Any, Iterable
+from typing import Any,Iterable
 from sqlalchemy.orm import Session
 from app.db.models import Product
-from app.sync.normalize import normalize_row, validate_mapping
+from app.sync.normalize import normalize_row,validate_mapping
 from app.sync.result import SyncResult
-from app.sync.upsert import upsert_products, zero_missing_stock
+from app.sync.upsert import upsert_products,zero_missing_stock
 from app.sync.fingerprint import product_fingerprint
 logger=logging.getLogger("app.sync")
 class ProductSyncService:
@@ -29,7 +29,8 @@ class ProductSyncService:
     except Exception as exc:result.skipped+=1;result.record_quality(None);result.errors.append(f"normalize failed: {exc}");continue
     if normalized is None:result.skipped+=1;result.record_quality(None);continue
     pid=str(normalized["id"])
-    if pid in seen:result.record_duplicate(pid);result.skipped+=1;continue
+    if pid in seen:
+     result.data_quality["source_rows"]+=1;result.record_duplicate(pid);result.skipped+=1;continue
     seen.add(pid);normalized["_source_fingerprint"]=product_fingerprint(normalized);normalized["attributes"]=dict(normalized.get("attributes") or {});normalized["attributes"]["_source_fingerprint"]=normalized["_source_fingerprint"]
     result.record_quality(normalized);batch.append(normalized)
     if len(batch)>=self.batch_size:upsert_products(self.db,store_id,batch,batch_size=self.batch_size,result=result,source_datasource_id=source_datasource_id,commit=False);batch=[]
