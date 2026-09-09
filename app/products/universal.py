@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -30,4 +30,6 @@ class UniversalProduct:
     images: str | list | None = None
     created_at: object | None = None
     updated_at: object | None = None
+    # Arbitrary merchant-defined product attributes, preserved end-to-end.
+    attributes: dict = field(default_factory=dict)
     raw_data: dict | None = None
