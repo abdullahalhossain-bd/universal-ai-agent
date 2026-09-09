@@ -70,8 +70,9 @@ async def _process_once(job):
   else:
    if not resolved.get("connection_url"):raise ValueError("job missing connection_url")
    connector=ConnectorFactory.create(connector_type,resolved["connection_url"])
-  previous_mapping=dict(mapping);candidate,schema_meta,mapping_changed=await _auto_discover_mapping(connector,table_name,mapping);initialized=bool(state.get("initialized"));approval=mapping.get("_schema_approval") or {};candidate_hash=_mapping_hash(candidate)
-  if initialized and mapping_changed and not (approval.get("status")=="approved" or(approval.get("status")=="rejected" and approval.get("candidate_hash")==candidate_hash)):
+  previous_mapping=dict(mapping);candidate,schema_meta,mapping_changed=await _auto_discover_mapping(connector,table_name,mapping);initialized=bool(state.get("initialized"));approval=mapping.get("_schema_approval") or {};candidate_hash=_mapping_hash(candidate);approved_hash=approval.get("candidate_hash")
+  allowed_mapping_change=(approval.get("status") in {"approved","rejected"} and approved_hash==candidate_hash)
+  if initialized and mapping_changed and not allowed_mapping_change:
    pending=dict(mapping);pending["_pending_mapping"]={k:v for k,v in candidate.items() if not k.startswith("_")};pending["_schema_approval"]={"status":"pending","detected_at":datetime.utcnow().isoformat(),"candidate_hash":candidate_hash,"reason":"source schema mapping changed; explicit merchant approval required"}
    if schema_meta.get("columns"):pending["_pending_schema"]=schema_meta
    if datasource_id:
@@ -107,7 +108,6 @@ async def _process_once(job):
    if columns:
     analysis=schema_analysis({c:None for c in columns},previous_mapping);result.schema_drift=analysis.get("changes",[]) if not result.schema_drift else result.schema_drift;result.repair_suggestions=repair_suggestions({"current":analysis.get("current",{})},result.data_quality_report())
    db.commit();media=await verify_and_persist_media_health(db,store_id=store_id,datasource_id=datasource_id);result.data_quality["media_health"]=media;result.data_quality["broken_media"]=int(media["url"]["broken"]+media["image"]["broken"]);result.data_quality["media_health_persisted"]=True
-   # A completed source scan establishes a durable hash baseline even when timestamps are unavailable.
    if not state.get("initialized"):
     ds=db.query(DataSource).filter(DataSource.id==datasource_id).first()
     if ds is not None:
