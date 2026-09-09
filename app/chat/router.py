@@ -1,14 +1,18 @@
+from uuid import uuid4
+
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
-from app.db.database import get_db
-from app.db.models import Store
-from app.db.agent_config import AgentConfig
-from app.core.security import resolve_client_ip
-from app.core.rate_limit import enforce_rate_limit
-from app.core.tenant import get_current_store
-from app.chat.schemas import ChatRequest, ChatResponse
+
+from app.auth.models import APIKey
 from app.chat.dynamic_service import DynamicAttributeChatService
 from app.chat.professional_service import ProfessionalCommerceChatService
+from app.chat.schemas import ChatRequest, ChatResponse
+from app.core.rate_limit import enforce_rate_limit
+from app.core.security import resolve_client_ip
+from app.core.tenant import get_current_store
+from app.db.agent_config import AgentConfig
+from app.db.database import get_db
+from app.db.models import Store
 
 router = APIRouter(prefix="/v1/chat", tags=["Chat"])
 
@@ -38,11 +42,8 @@ async def chat(
     config = db.query(AgentConfig).filter(AgentConfig.store_id == store.id).first()
     if config is not None and not config.auto_reply_enabled:
         service = DynamicAttributeChatService(db=db)
-        conversation_id = request.conversation_id or __import__("uuid").uuid4().hex
-        session = service._get_or_create_session(
-            store_id=store.id,
-            conversation_id=conversation_id,
-        )
+        conversation_id = request.conversation_id or uuid4().hex
+        session = service._get_or_create_session(store_id=store.id, conversation_id=conversation_id)
         service._save_message(
             session_id=session.id,
             role="user",
@@ -51,7 +52,7 @@ async def chat(
         return {
             "conversation_id": conversation_id,
             "type": "manual",
-            "message": "ধন্যবাদ 😊 আমাদের store team আপনার messageটি পেয়েছে। একজন team member শিগগিরই আপনাকে reply করবেন।",
+            "message": "ধন্যবাদ 😊 আপনার বার্তাটি আমাদের টিম পেয়েছে। একজন team member শিগগিরই আপনাকে উত্তর দেবেন।",
             "products": [],
             "sources": [],
         }
