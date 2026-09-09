@@ -10,26 +10,30 @@ import re
 import unicodedata
 
 
-_URL_TERMS = {
-    "link", "url", "website", "web", "page", "shop", "store", "product",
-    "লিংক", "লিঙ্ক", "ওয়েবসাইট", "ওয়েবসাইট", "পেজ", "পাতা", "শপ", "দোকান",
+# Only unambiguous destination/page markers live here. Generic commerce words
+# such as "product", "shop" or "store" must never turn a product search into
+# a link request by themselves.
+_DIRECT_LINK_TERMS = {
+    "link", "url", "website", "page", "permalink",
+    "লিংক", "লিঙ্ক", "ওয়েবসাইট", "ওয়েবসাইট", "পেজ", "পারমালিংক",
 }
 _PURCHASE_STEMS = (
-    "buy", "purchas", "order", "checkout", "shop", "kin", "ken", "nib", "neb",
-    "kinb", "kinbo", "kinte", "kenbo", "kenar", "kinar", "অর্ডার", "কিন", "কেন",
-    "কিনব", "কিনবো", "কিনতে", "কেনার", "কোথা থেকে অর্ডার", "নেব",
+    "buy", "purchas", "order", "checkout", "kin", "ken", "nib", "neb",
+    "kinb", "kinbo", "kinte", "kenbo", "kenar", "kinar",
+    "অর্ডার", "কিন", "কেন", "কিনব", "কিনবো", "কিনতে", "কেনার", "নেব",
 )
-_DESTINATION_TERMS = {
-    "where", "whereabouts", "kothay", "kotha", "kothai", "kothay", "kothaay",
-    "কোথায়", "কোথায়", "কোথা", "যেখান", "কোথা থেকে",
-}
+_DESTINATION_STEMS = (
+    "where", "whereabouts", "kothay", "kotha", "kothai", "kothaay",
+    "কোথায়", "কোথায়", "কোথা", "যেখান",
+)
 _ACTION_STEMS = (
-    "give", "dao", "den", "diben", "show", "open", "send", "path", "পাব", "পাওয়া",
-    "দাও", "দেন", "দিবেন", "দেখাও", "দেখান", "খুল", "পাঠা",
+    "give", "dao", "den", "diben", "show", "open", "send", "path", "pabo", "pab",
+    "পাব", "পাওয়া", "দাও", "দেন", "দিবেন", "দেখাও", "দেখান", "খুল", "পাঠা",
 )
 _NEGATIVE_KNOWLEDGE_STEMS = (
     "office", "address", "location", "delivery", "shipping", "return", "refund",
-    "policy", "support", "contact", "অফিস", "ঠিকানা", "ডেলিভারি", "শিপিং", "রিটার্ন", "রিফান্ড",
+    "policy", "support", "contact", "hours", "অফিস", "ঠিকানা", "লোকেশন",
+    "ডেলিভারি", "শিপিং", "রিটার্ন", "রিফান্ড", "নীতি", "যোগাযোগ",
 )
 
 
@@ -49,39 +53,37 @@ def _has_stem(tokens: list[str], stems: tuple[str, ...]) -> bool:
 
 
 def classify_product_link_request(message: str) -> bool | None:
-    """Return True/False for high-confidence cases, None for ambiguity."""
+    """Return True/False for high-confidence cases, None only when ambiguous."""
     q = _normalize(message)
     if not q:
         return False
     tokens = _tokens(q)
 
-    direct = sum(1 for token in tokens if token in _URL_TERMS)
+    direct = any(token in _DIRECT_LINK_TERMS for token in tokens)
     purchase = _has_stem(tokens, _PURCHASE_STEMS)
-    destination = _has_stem(tokens, _DESTINATION_TERMS)
+    destination = _has_stem(tokens, _DESTINATION_STEMS)
     action = _has_stem(tokens, _ACTION_STEMS)
     negative = _has_stem(tokens, _NEGATIVE_KNOWLEDGE_STEMS)
 
-    # Explicit page/link language is deterministic even without context.
-    if direct >= 1:
+    if direct:
         return True
 
-    # Natural shopping language: "where can I buy it?", "where do I get it?".
-    # This is semantic feature composition, not a phrase allow-list.
+    # "where can I buy/order/get it?" is a product-destination request even
+    # when the user never says link, URL or website.
     if destination and purchase and not negative:
         return True
 
-    # "where can I get/find it" is ambiguous by itself; with a product context
-    # the caller can safely ask the LLM fallback to distinguish product purchase
-    # intent from a generic knowledge/location question.
+    # "where can I get it?" / "where do I find it?" can mean several things.
+    # Return None so a caller with product context can use the existing LLM
+    # stack as a rare fallback rather than maintaining endless phrases here.
     if destination and action and not negative:
         return None
 
-    # Purchase/order language without a destination is usually a product action,
-    # but only treat it as a link request when it also points to a product/page.
+    # Purchase + action without a destination is also ambiguous (e.g. a request
+    # to explain how to buy). Let the context-aware fallback decide.
     if purchase and action and not negative:
         return None
 
-    # A bare destination question should not hijack knowledge queries.
     if destination:
         return False
 
