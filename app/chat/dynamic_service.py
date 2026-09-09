@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from contextvars import ContextVar
+import json
 import logging
 import re
+import uuid
 
 from sqlalchemy import and_, or_
 
@@ -22,7 +24,7 @@ _BEHAVIOR_SCORES: ContextVar[dict] = ContextVar("behavior_scores", default={})
 
 
 class DynamicAttributeChatService(ChatService):
-    """ChatService with structured attributes and adaptive recommendation ranking."""
+    """ChatService with structured attributes, recommendations and stateful follow-ups."""
 
     @staticmethod
     def _text_terms(product_name: str | None) -> list[str]:
@@ -56,6 +58,89 @@ class DynamicAttributeChatService(ChatService):
             }
         super()._save_product_context(session_id=session_id, products=products, query=query, filters=filters, offset=offset)
 
+    def _set_pending_action(self, session_id: str, action: str, product_ids: list[str] | None = None) -> None:
+        """Persist one structured next-step action; no confirmation phrases are stored."""
+        context_message = (
+            self.db.query(ChatMessage)
+            .filter(ChatMessage.session_id == session_id, ChatMessage.role == "product_context")
+            .order_by(ChatMessage.created_at.desc())
+            .first()
+        )
+        if context_message is None:
+            return
+        try:
+            context = json.loads(context_message.content or "{}")
+            context["pending_action"] = {
+                "action": action,
+                "product_ids": product_ids or context.get("product_ids") or [],
+                "turns_left": 1,
+            }
+            context_message.content = json.dumps(context, ensure_ascii=False)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            logger.exception("Failed to persist pending conversational action")
+
+    def _load_pending_action(self, session_id: str) -> dict | None:
+        context = self._load_product_context(session_id)
+        action = context.get("pending_action")
+        if not isinstance(action, dict) or not action.get("action"):
+            return None
+        try:
+            if int(action.get("turns_left", 0)) < 1:
+                return None
+        except (TypeError, ValueError):
+            return None
+        return action
+
+    def _consume_pending_action(self, session_id: str) -> None:
+        context_message = (
+            self.db.query(ChatMessage)
+            .filter(ChatMessage.session_id == session_id, ChatMessage.role == "product_context")
+            .order_by(ChatMessage.created_at.desc())
+            .first()
+        )
+        if context_message is None:
+            return
+        try:
+            context = json.loads(context_message.content or "{}")
+            context.pop("pending_action", None)
+            context_message.content = json.dumps(context, ensure_ascii=False)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            logger.exception("Failed to consume pending conversational action")
+
+    def _message_has_product_match(self, store_id: str, message: str) -> bool:
+        """Check whether the new turn independently identifies catalog content.
+
+        This is deliberately data-driven: it does not maintain a list of
+        confirmation words or Bengali/Banglish variants. If the new turn can
+        actually match this merchant's catalog, it remains a fresh query.
+        """
+        tokens = [
+            token.strip(".,!?;:()[]{}\"'")
+            for token in re.split(r"\s+", message.casefold())
+            if len(token.strip(".,!?;:()[]{}\"'")) >= 3
+        ]
+        if not tokens:
+            return False
+        # Very generic conversational/action words are not useful product evidence.
+        generic = {"the", "this", "that", "please", "show", "give", "want", "need", "dao", "den", "দাও", "দেন", "দেখাও", "দেখান"}
+        tokens = [token for token in tokens if token not in generic]
+        if not tokens:
+            return False
+        query = self.db.query(Product.id).filter(Product.store_id == store_id)
+        conditions = []
+        for token in tokens[:8]:
+            conditions.append(or_(
+                Product.name.ilike(f"%{token}%"),
+                Product.category.ilike(f"%{token}%"),
+                Product.brand.ilike(f"%{token}%"),
+                Product.description.ilike(f"%{token}%"),
+            ))
+        return query.filter(or_(*conditions)).first() is not None
+
     def _rank(self, store_id: str, products: list[Product], query: str) -> list[Product]:
         if not products or not is_recommendation_query(query):
             return products
@@ -70,65 +155,33 @@ class DynamicAttributeChatService(ChatService):
         tokens = [t for t in re.split(r"\s+", normalized) if t]
         if not tokens or len(tokens) > 5:
             return False
-        generic = {
-            "best", "top", "recommend", "recommended", "suggest", "suggestion",
-            "konta", "kon", "ta", "one", "which", "is", "the", "please",
-            "কোনটা", "কোনটি", "কোন", "টা", "টি", "সেরা", "ভালো", "ভাল", "সর্বোত্তম",
-        }
-        return all(token in generic for token in tokens) and any(
-            token in {"best", "top", "recommend", "recommended", "suggest", "suggestion", "সেরা", "ভালো", "ভাল", "সর্বোত্তম"}
-            for token in tokens
-        )
-
-    @staticmethod
-    def _is_contextual_confirmation(message: str) -> bool:
-        """Detect short confirmations that accept the immediately offered action."""
-        normalized = message.casefold().strip()
-        normalized = re.sub(r"[?!.:,;]+", " ", normalized)
-        normalized = re.sub(r"\s+", " ", normalized).strip()
-        confirmations = {
-            "ok", "okay", "yes", "yeah", "yep", "sure", "done", "give", "give it", "show",
-            "ok dao", "okay dao", "yes dao", "sure dao", "give me", "give me that",
-            "আচ্ছা দাও", "আচ্ছা দেন", "আচ্ছা দেখাও", "আচ্ছা দেখান", "ঠিক আছে দাও", "ঠিক আছে দেন",
-            "হ্যাঁ দাও", "হ্যাঁ দেন", "দাও", "দেন", "দেখাও", "দেখান", "দিয়ে দাও", "দিয়ে দেন",
-            "assa dao", "accha dao", "acha dao", "assa den", "accha den", "acha den",
-            "thik ache dao", "thik ase dao", "thik ache den", "thik ase den",
-        }
-        return normalized in confirmations
+        generic = {"best", "top", "recommend", "recommended", "suggest", "suggestion", "konta", "kon", "ta", "one", "which", "is", "the", "please", "কোনটা", "কোনটি", "কোন", "টা", "টি", "সেরা", "ভালো", "ভাল", "সর্বোত্তম"}
+        return all(token in generic for token in tokens) and any(token in {"best", "top", "recommend", "recommended", "suggest", "suggestion", "সেরা", "ভালো", "ভাল", "সর্বোত্তম"} for token in tokens)
 
     @staticmethod
     def _is_link_request(message: str) -> bool:
         q = message.casefold().strip()
-        return any(term in q for term in (
-            "link", "url", "website", "product page", "লিংক", "লিঙ্ক", "ওয়েবসাইট", "ওয়েবসাইট",
-        ))
+        return any(term in q for term in ("link", "url", "website", "product page", "লিংক", "লিঙ্ক", "ওয়েবসাইট", "ওয়েবসাইট"))
 
     @staticmethod
     def _is_image_request(message: str) -> bool:
         q = message.casefold().strip()
-        return any(term in q for term in (
-            "image", "photo", "picture", "pic", "ছবি", "ইমেজ", "ফটো",
-        ))
+        return any(term in q for term in ("image", "photo", "picture", "pic", "ছবি", "ইমেজ", "ফটো"))
 
     @staticmethod
     def _is_recommendation_explanation(message: str) -> bool:
         q = message.casefold().strip()
-        patterns = (
-            "kemne sera", "kemon kore sera", "ken sera", "karon ki", "why best",
-            "how best", "how is it best", "why is it best", "best keno",
-            "কেন সেরা", "কিভাবে সেরা", "কীভাবে সেরা", "কেন best", "কীভাবে best",
-            "কেন ভালো", "কিভাবে ভালো", "basis ki", "basis", "reason",
-        )
+        patterns = ("kemne sera", "kemon kore sera", "ken sera", "karon ki", "why best", "how best", "how is it best", "why is it best", "best keno", "কেন সেরা", "কিভাবে সেরা", "কীভাবে সেরা", "কেন best", "কীভাবে best", "কেন ভালো", "কিভাবে ভালো", "basis ki", "basis", "reason")
         return any(pattern in q for pattern in patterns)
 
-    def _context_products(self, store_id: str, session_id: str) -> list[Product]:
-        context = self._load_product_context(session_id)
-        ids = context.get("product_ids") or []
-        return self._get_products_by_ids(store_id, ids)
+    def _context_products(self, store_id: str, session_id: str, product_ids: list[str] | None = None) -> list[Product]:
+        context_ids = product_ids
+        if context_ids is None:
+            context_ids = self._load_product_context(session_id).get("product_ids") or []
+        return self._get_products_by_ids(store_id, context_ids)
 
     @staticmethod
     def _recommendation_evidence(products: list[Product]) -> bool:
-        """Require meaningful catalog evidence before making a strong recommendation claim."""
         for product in products:
             try:
                 rating = float(getattr(product, "rating", None)) if getattr(product, "rating", None) is not None else None
@@ -155,10 +208,7 @@ class DynamicAttributeChatService(ChatService):
 
     def _recommendation_explanation(self, product: Product, candidates: list[Product]) -> str:
         reasons = []
-        rating = getattr(product, "rating", None)
-        reviews = getattr(product, "review_count", None)
-        sales = getattr(product, "sales_count", None)
-        bestseller = getattr(product, "bestseller_score", None)
+        rating, reviews, sales, bestseller = (getattr(product, key, None) for key in ("rating", "review_count", "sales_count", "bestseller_score"))
         try:
             if rating is not None and float(rating) > 0:
                 reasons.append(f"rating {float(rating):.1f}/5")
@@ -179,32 +229,21 @@ class DynamicAttributeChatService(ChatService):
                 reasons.append("bestseller হিসেবে ভালো performance")
         except (TypeError, ValueError):
             pass
-
         if reasons and self._recommendation_evidence([product]):
-            return (
-                f"{self._format_product_name(product)}-কে আমি এগিয়ে রাখছি কারণ "
-                + ", ".join(reasons)
-                + ". তাই available information অনুযায়ী এটিই শক্তিশালী choice মনে হচ্ছে।"
-            )
-
-        return (
-            "এই productগুলোর মধ্যে নির্ভরযোগ্য evidence যথেষ্ট নেই। "
-            "তাই শুধু অনুমান করে কোনো একটাকে সেরা বলছি না। চাইলে price, stock বা available features দেখে optionগুলো তুলনা করে দিতে পারি।"
-        )
+            return f"{self._format_product_name(product)}-কে আমি এগিয়ে রাখছি কারণ " + ", ".join(reasons) + ". তাই available information অনুযায়ী এটিই শক্তিশালী choice মনে হচ্ছে।"
+        return "এই productগুলোর মধ্যে নির্ভরযোগ্য evidence যথেষ্ট নেই। তাই শুধু অনুমান করে কোনো একটাকে সেরা বলছি না। চাইলে price, stock বা available features দেখে optionগুলো তুলনা করে দিতে পারি।"
 
     def _context_comparison_message(self, products: list[Product]) -> str:
-        """Answer a short confirmation by carrying out the action just offered."""
         if not products:
-            return "দুঃখিত, আগের product optionগুলো এখন আর পাওয়া যাচ্ছে না। আবার laptop/phone-এর মতো product লিখে খুঁজে দিতে পারি।"
-        lines = ["অবশ্যই 😊 আগের laptop optionগুলো price ও stock অনুযায়ী তুলনা করে দিলাম:"]
+            return "দুঃখিত, আগের product optionগুলো এখন আর পাওয়া যাচ্ছে না। নতুন করে product লিখে খুঁজে দিতে পারি।"
+        lines = ["অবশ্যই 😊 আগের product optionগুলো price ও stock অনুযায়ী তুলনা করে দিলাম:"]
         for product in products:
-            name = self._format_product_name(product)
             price = getattr(product, "price", None)
             stock = getattr(product, "stock", None)
             price_text = f"৳{float(price):,.0f}" if price is not None else "দাম জানা নেই"
             stock_text = "স্টকে আছে" if stock is None or float(stock) > 0 else "স্টক শেষ"
-            lines.append(f"• {name} — {price_text} — {stock_text}")
-        lines.append("চাইলে এগুলোর মধ্যে budget বা specific feature ধরে আরও narrow করে দিতে পারি।")
+            lines.append(f"• {self._format_product_name(product)} — {price_text} — {stock_text}")
+        lines.append("চাইলে budget বা specific feature ধরে এগুলো আরও narrow করে দিতে পারি।")
         return "\n".join(lines)
 
     async def _search_products(self, store_id, message, filters, store_terms=None):
@@ -225,8 +264,7 @@ class DynamicAttributeChatService(ChatService):
         limit = 100 if is_recommendation_query(message) else 10
         results = query.order_by(Product.name.asc()).limit(limit).all()
         if is_recommendation_query(message):
-            context = _RECOMMENDATION_CONTEXT.get()
-            ranking_query = f"{message} {context}".strip()
+            ranking_query = f"{message} {_RECOMMENDATION_CONTEXT.get()}".strip()
             return self._rank(store_id, results, ranking_query)[:10]
         return results
 
@@ -235,15 +273,7 @@ class DynamicAttributeChatService(ChatService):
             return
         try:
             for product in products:
-                record_event(
-                    self.db,
-                    store_id=store_id,
-                    interaction_id=interaction_id,
-                    event_type="impression",
-                    product_id=str(product.id),
-                    conversation_id=conversation_id,
-                    query=query,
-                )
+                record_event(self.db, store_id=store_id, interaction_id=interaction_id, event_type="impression", product_id=str(product.id), conversation_id=conversation_id, query=query)
         except Exception:
             self.db.rollback()
             logger.exception("Failed to record product impression events")
@@ -256,6 +286,7 @@ class DynamicAttributeChatService(ChatService):
             conversation_id = getattr(request, "conversation_id", None)
             session = None
             context_products: list[Product] = []
+            pending_action = None
             if conversation_id:
                 session = self._get_or_create_session(store_id, conversation_id)
                 history = self._load_history(session.id)
@@ -263,10 +294,11 @@ class DynamicAttributeChatService(ChatService):
                 previous_context = self._load_product_context(session.id).get("query") or ""
                 _RECOMMENDATION_CONTEXT.set(" ".join(previous_user + [previous_context]))
                 context_products = self._context_products(store_id, session.id)
+                pending_action = self._load_pending_action(session.id)
 
             if is_recommendation_query(message) and self._is_bare_recommendation(message) and not _RECOMMENDATION_CONTEXT.get().strip():
                 if session is None:
-                    conversation_id = conversation_id or __import__("uuid").uuid4().hex
+                    conversation_id = conversation_id or uuid.uuid4().hex
                     session = self._get_or_create_session(store_id, conversation_id)
                 self._save_message(session_id=session.id, role="user", content=message)
                 response_message = "কোন product/category-এর মধ্যে best জানতে চান? যেমন: laptop, phone, বা অন্য কোনো product।"
@@ -274,21 +306,23 @@ class DynamicAttributeChatService(ChatService):
                 self._log_analytics_event(store_id=store_id, message=message, intent="recommendation", result_count=0)
                 return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": [], "sources": []}
 
-            # Short confirmations should continue the action offered by the previous
-            # response instead of being sent back through the product-name planner.
-            # Example: after "চাইলে ... compare করে দিতে পারি", "assa dao" means
-            # "okay, do it" and should compare the existing result set.
-            if session is not None and context_products and self._is_contextual_confirmation(message):
-                self._save_message(session_id=session.id, role="user", content=message)
-                response_message = self._context_comparison_message(context_products)
-                self._save_message(session_id=session.id, role="assistant", content=response_message)
-                return {
-                    "conversation_id": conversation_id,
-                    "type": "product_search",
-                    "message": response_message,
-                    "products": self._serialize_products(context_products),
-                    "sources": [],
-                }
+            # Conversation continuation is state-driven, not phrase-driven.
+            # If the previous assistant response offered an action and this turn
+            # does not independently identify a catalog request, consume that action.
+            if session is not None and pending_action and context_products:
+                explicit_reference = self._get_referenced_product(store_id, session.id, message)
+                is_special_request = self._is_link_request(message) or self._is_image_request(message) or self._is_recommendation_explanation(message) or is_recommendation_query(message)
+                has_new_product = self._message_has_product_match(store_id, message)
+                if explicit_reference is None and not is_special_request and not has_new_product:
+                    action = pending_action.get("action")
+                    if action == "compare_products":
+                        self._save_message(session_id=session.id, role="user", content=message)
+                        response_message = self._context_comparison_message(context_products)
+                        self._save_message(session_id=session.id, role="assistant", content=response_message)
+                        self._consume_pending_action(session.id)
+                        interaction_id = uuid.uuid4().hex
+                        self._record_impressions(store_id=store_id, conversation_id=conversation_id or "", query=message, products=context_products, interaction_id=interaction_id)
+                        return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": self._serialize_products(context_products), "sources": [], "interaction_id": interaction_id}
 
             referenced_product = None
             if session is not None:
@@ -333,11 +367,13 @@ class DynamicAttributeChatService(ChatService):
                     if latest is not None:
                         latest.content = best_line
                         self.db.commit()
+                    if not has_evidence:
+                        self._set_pending_action(target_session.id, "compare_products", [str(p.id) for p in product_objects])
                 except Exception:
                     self.db.rollback()
-                    logger.exception("Failed to persist recommendation response")
+                    logger.exception("Failed to persist recommendation response/action")
 
-            interaction_id = __import__("uuid").uuid4().hex
+            interaction_id = uuid.uuid4().hex
             products = result.get("products") or []
             ids = [str(p.get("id")) for p in products if p.get("id")]
             product_objects = self._get_products_by_ids(store_id, ids) if ids else []
