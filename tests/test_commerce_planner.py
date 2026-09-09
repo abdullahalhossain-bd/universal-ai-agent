@@ -1,9 +1,8 @@
-from types import SimpleNamespace
-
+from app.chat.dynamic_service import DynamicAttributeChatService
+from app.chat.professional_service import ProfessionalCommerceChatService
 from app.planner.models import Intent
 from app.planner.rule_planner import plan
 from app.products.semantic_attributes import deterministic_extract
-from app.chat.dynamic_service import DynamicAttributeChatService
 
 
 STORE_TERMS = {"Iphone12", "Laptop", "Asus Gaming", "Dell Intel i9"}
@@ -55,6 +54,25 @@ def test_product_follow_up_detectors_cover_bangla_banglish_and_english():
     assert DynamicAttributeChatService._is_recommendation_explanation("কেন সেরা?")
 
 
+def test_product_index_reference_supports_bengali_and_english_ordinals():
+    service = DynamicAttributeChatService.__new__(DynamicAttributeChatService)
+    assert service._extract_product_index("২ নম্বরটার দাম কত?") == 2
+    assert service._extract_product_index("second one er link dao") == 2
+    assert service._extract_product_index("তৃতীয়টা দেখাও") == 3
+
+
+def test_professional_recommendation_requires_real_support():
+    assert not ProfessionalCommerceChatService._recommendation_has_support([
+        {"name": "Laptop", "rating": 3.8, "review_count": 0, "sales_count": 0, "bestseller_score": 0}
+    ])
+    assert ProfessionalCommerceChatService._recommendation_has_support([
+        {"name": "Laptop", "rating": 4.7, "review_count": 12, "sales_count": 0, "bestseller_score": 0}
+    ])
+    assert ProfessionalCommerceChatService._recommendation_has_support([
+        {"name": "Laptop", "rating": None, "review_count": None, "sales_count": 20, "bestseller_score": 0}
+    ])
+
+
 def test_recommendation_evidence_requires_verified_catalog_signals():
     class ProductStub:
         rating = None
@@ -63,7 +81,6 @@ def test_recommendation_evidence_requires_verified_catalog_signals():
         bestseller_score = None
 
     assert not DynamicAttributeChatService._recommendation_evidence([ProductStub()])
-
     ProductStub.rating = 4.7
     assert DynamicAttributeChatService._recommendation_evidence([ProductStub()])
 
