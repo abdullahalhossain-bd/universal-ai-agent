@@ -5,12 +5,24 @@ adding deterministic product-reference resolution for follow-up turns.
 """
 from __future__ import annotations
 
+import re
+
 from app.chat.conversation_intelligence import resolve_follow_up
 from app.chat.professional_service import ProfessionalCommerceChatService
 
 
 class IntelligentCommerceChatService(ProfessionalCommerceChatService):
     """Professional commerce chat with deterministic conversation references."""
+
+    @staticmethod
+    def _is_ambiguous_deictic(message: str) -> bool:
+        normalized = re.sub(r"\s+", " ", message.casefold().strip())
+        tokens = set(normalized.split())
+        return bool(tokens & {
+            "eta", "etar", "ota", "otar", "oi", "it", "this", "that",
+            "this one", "that one", "এটা", "এটার", "ওটা", "ওটার", "ওই",
+            "ওইটা", "সেটা", "সেটার", "এইটা", "এইটার",
+        })
 
     def _get_referenced_product(self, store_id: str, session_id: str, message: str):
         context = self._load_product_context(session_id)
@@ -20,15 +32,19 @@ class IntelligentCommerceChatService(ProfessionalCommerceChatService):
 
         resolution = resolve_follow_up(message, product_ids)
         if not resolution.is_follow_up:
+            # The resolver intentionally treats a bare ambiguous deictic as
+            # unresolved. Do not fall back to the legacy "first product"
+            # behavior when several products are in context.
+            if len(product_ids) > 1 and self._is_ambiguous_deictic(message):
+                return None
             return super()._get_referenced_product(
                 store_id=store_id,
                 session_id=session_id,
                 message=message,
             )
 
-        # An ambiguous deictic reference (e.g. "eta" when several products
-        # are in context) deliberately returns no product. This prevents the
-        # legacy base implementation from silently guessing product #1.
+        # An ambiguous reference such as "eta dam koto" with several products
+        # deliberately returns no product instead of guessing product #1.
         if not resolution.product_ids:
             return None
 
@@ -65,6 +81,18 @@ class IntelligentCommerceChatService(ProfessionalCommerceChatService):
                         self.db,
                         self._serialize_products(products),
                     ),
+                    "sources": [],
+                }
+
+            if len(product_ids) > 1 and not resolution.product_ids and self._is_ambiguous_deictic(message):
+                self._save_message(session_id=session.id, role="user", content=message)
+                response_message = "কোন product-এর কথা বলছেন? তালিকার নম্বর বা product-এর নাম বলুন—আমি ঠিক সেটার তথ্য দেব।"
+                self._save_message(session_id=session.id, role="assistant", content=response_message)
+                return {
+                    "conversation_id": conversation_id,
+                    "type": "product_search",
+                    "message": response_message,
+                    "products": [],
                     "sources": [],
                 }
 
