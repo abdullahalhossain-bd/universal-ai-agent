@@ -26,18 +26,17 @@ class IntelligentCommerceChatService(ProfessionalCommerceChatService):
                 message=message,
             )
 
-        if resolution.product_ids:
-            products = self._get_products_by_ids(
-                store_id=store_id,
-                product_ids=list(resolution.product_ids),
-            )
-            if resolution.product_index is not None:
-                return products[0] if products else None
-            # A multi-product action such as compare is handled by the
-            # caller; returning None prevents accidental first-product guesses.
+        # An ambiguous deictic reference (e.g. "eta" when several products
+        # are in context) deliberately returns no product. This prevents the
+        # legacy base implementation from silently guessing product #1.
+        if not resolution.product_ids:
             return None
 
-        return None
+        products = self._get_products_by_ids(
+            store_id=store_id,
+            product_ids=list(resolution.product_ids),
+        )
+        return products[0] if len(products) == 1 else None
 
     async def handle(self, store_id: str, request):
         message = getattr(request, "message", "").strip()
