@@ -5,7 +5,6 @@ from sqlalchemy import and_, or_
 
 from app.chat.service import ChatService
 from app.db.models import Product
-from app.planner.models import Intent, ProductFilters
 from app.products.attribute_filters import apply_attribute_filters
 from app.products.recommendation import is_recommendation_query, rank_products
 from app.search.stopwords import STOPWORDS
@@ -73,38 +72,6 @@ class DynamicAttributeChatService(ChatService):
         if is_recommendation_query(message):
             return rank_products(results, message)[:10]
         return results
-
-    async def handle(self, store_id: str, request):
-        """Make bare recommendation/use-case questions product-search intents.
-
-        The base ChatService owns the complete conversation/budget/response
-        state machine. We only wrap its planner call for recommendation
-        queries, then restore it immediately so concurrent requests are not
-        left with a modified global function.
-        """
-        import app.chat.service as base_service
-
-        original_plan = base_service.plan
-
-        def recommendation_aware_plan(query, store_terms=None):
-            planned = original_plan(query, store_terms=store_terms)
-            if is_recommendation_query(query) and planned.intent not in {Intent.PRODUCT_SEARCH, Intent.MIXED}:
-                planned.intent = Intent.PRODUCT_SEARCH
-                planned.product_filters = ProductFilters(
-                    min_price=getattr(planned.product_filters, "min_price", None) if planned.product_filters else None,
-                    max_price=getattr(planned.product_filters, "max_price", None) if planned.product_filters else None,
-                    in_stock=getattr(planned.product_filters, "in_stock", False) if planned.product_filters else False,
-                    attributes=getattr(planned.product_filters, "attributes", {}) if planned.product_filters else {},
-                    product_name=None,
-                )
-                planned.confidence = max(planned.confidence, 0.82)
-            return planned
-
-        base_service.plan = recommendation_aware_plan
-        try:
-            return await super().handle(store_id=store_id, request=request)
-        finally:
-            base_service.plan = original_plan
 
     def _get_next_products(self, store_id, query_text, filters_data, previous_ids, batch_size=5):
         query = self.db.query(Product).filter(Product.store_id == store_id)
