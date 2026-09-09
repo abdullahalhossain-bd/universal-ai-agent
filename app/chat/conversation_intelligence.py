@@ -22,39 +22,24 @@ class FollowUpResolution:
     confidence: float = 0.0
 
 
-_LINK_TERMS = (
-    "link", "url", "website", "product page", "লিংক", "লিঙ্ক", "ওয়েবসাইট", "ওয়েবসাইট",
-)
-_IMAGE_TERMS = (
-    "image", "photo", "picture", "pic", "ছবি", "ইমেজ", "ফটো",
-)
-_PRICE_TERMS = (
-    "price", "cost", "dam", "দাম", "মূল্য", "কত টাকা", "koto taka",
-)
-_STOCK_TERMS = (
-    "stock", "available", "availability", "ase", "ache", "আছে", "আছে়", "স্টকে", "উপলব্ধ",
-)
-_COMPARE_TERMS = (
-    "compare", "comparison", "difference", "egula compare", "তুলনা", "পার্থক্য", "compare kore",
-)
+_LINK_TERMS = ("link", "url", "website", "product page", "লিংক", "লিঙ্ক", "ওয়েবসাইট", "ওয়েবসাইট")
+_IMAGE_TERMS = ("image", "photo", "picture", "pic", "ছবি", "ইমেজ", "ফটো")
+_PRICE_TERMS = ("price", "cost", "dam", "দাম", "মূল্য", "কত টাকা", "koto taka")
+_STOCK_TERMS = ("stock", "available", "availability", "ase", "ache", "আছে", "আছে়", "স্টকে", "উপলব্ধ")
+_COMPARE_TERMS = ("compare", "comparison", "difference", "egula compare", "তুলনা", "পার্থক্য", "compare kore")
 
 _GENERIC_ACTION_WORDS = {
     "the", "this", "that", "it", "one", "product", "please", "show", "give", "dao", "den",
     "দাও", "দেন", "দেখাও", "দেখান", "ওই", "ওটা", "এটা", "টার", "টা", "টি", "এর", "র",
-    "tar", "ta", "ti", "er", "r", "koro", "kor", "please", "egula", "egulo", "these", "those",
+    "tar", "ta", "ti", "er", "r", "koro", "kor", "egula", "egulo", "these", "those",
 }
 
 _ORDINALS = {
-    "first": 1, "1st": 1, "one": 1,
-    "second": 2, "2nd": 2, "two": 2,
-    "third": 3, "3rd": 3, "three": 3,
-    "fourth": 4, "4th": 4, "four": 4,
-    "fifth": 5, "5th": 5, "five": 5,
-    "sixth": 6, "6th": 6, "six": 6,
-    "seventh": 7, "7th": 7, "seven": 7,
-    "eighth": 8, "8th": 8, "eight": 8,
-    "ninth": 9, "9th": 9, "nine": 9,
-    "tenth": 10, "10th": 10, "ten": 10,
+    "first": 1, "1st": 1, "one": 1, "second": 2, "2nd": 2, "two": 2,
+    "third": 3, "3rd": 3, "three": 3, "fourth": 4, "4th": 4, "four": 4,
+    "fifth": 5, "5th": 5, "five": 5, "sixth": 6, "6th": 6, "six": 6,
+    "seventh": 7, "7th": 7, "seven": 7, "eighth": 8, "8th": 8, "eight": 8,
+    "ninth": 9, "9th": 9, "nine": 9, "tenth": 10, "10th": 10, "ten": 10,
     "প্রথম": 1, "দ্বিতীয়": 2, "দ্বিতীয়": 2, "তৃতীয়": 3, "তৃতীয়": 3,
     "চতুর্থ": 4, "পঞ্চম": 5, "ষষ্ঠ": 6, "সপ্তম": 7, "অষ্টম": 8, "নবম": 9, "দশম": 10,
 }
@@ -73,11 +58,10 @@ def extract_product_index(message: str) -> int | None:
     for token, index in sorted(_ORDINALS.items(), key=lambda item: len(item[0]), reverse=True):
         if re.search(rf"(?<!\w){re.escape(token)}(?!\w)", q):
             return index
-
     patterns = (
         r"\b(\d{1,2})\s*(?:st|nd|rd|th)\b",
         r"\b(\d{1,2})\s*(?:number|no\.?|num)\b",
-        r"(?:^|\s)(\d{1,2})\s*(?:নম্বর|নং|নম্বরের)(?:\s|$)",
+        r"(?:^|\s)(\d{1,2})\s*(?:নম্বর|নং|নম্বরের)(?:টা|টি|টার|টির)?(?:\s|$)",
     )
     for pattern in patterns:
         match = re.search(pattern, q, flags=re.IGNORECASE)
@@ -98,9 +82,7 @@ def _looks_like_context_reference(q: str) -> bool:
         return False
     if any(token in {"eta", "etar", "otar", "ota", "oi", "that", "this", "it", "ওই", "ওটা", "এটা", "সেটা", "সেটার", "তার", "ওইটার", "ওটার"} for token in tokens):
         return True
-    if extract_product_index(q) is not None:
-        return True
-    if _has_any(q, _COMPARE_TERMS):
+    if extract_product_index(q) is not None or _has_any(q, _COMPARE_TERMS):
         return True
     useful = [token for token in tokens if token not in _GENERIC_ACTION_WORDS]
     return not useful
@@ -144,23 +126,15 @@ def resolve_follow_up(message: str, products: Sequence[Mapping[str, Any]] | None
         action = "product_price"
     elif _has_any(q, _STOCK_TERMS):
         action = "product_stock"
-
-    if action is None and index is not None:
+    elif index is not None:
         action = "select_product"
 
     if action is None and len(previous) == 1:
         selected = ids
         action = "select_product"
-
     if action is None:
         return FollowUpResolution()
 
     confidence = 0.98 if index is not None else (0.94 if len(previous) == 1 else 0.88)
     resolved_ids = (selected or ids) if action == "compare_products" else selected
-    return FollowUpResolution(
-        action=action,
-        product_index=index,
-        product_ids=resolved_ids,
-        is_follow_up=True,
-        confidence=confidence,
-    )
+    return FollowUpResolution(action=action, product_index=index, product_ids=resolved_ids, is_follow_up=True, confidence=confidence)
