@@ -1,543 +1,104 @@
-/*!
- * Universal Commerce AI — embeddable chat widget.
- *
- * Merchant embed snippet:
- *   <script src="https://YOUR_API_HOST/widget.js"
- *           data-key="pk_live_xxxxxxxx"
- *           async></script>
- *
- * Optional attributes on the same <script> tag:
- *   data-api-base   override API origin (defaults to this script's own origin)
- *   data-color      accent color, any valid CSS color (default "#111827")
- *   data-greeting   first assistant bubble shown on open (default provided)
- *   data-position   "bottom-right" | "bottom-left" (default "bottom-right")
- *
- * Design notes:
- *   - Everything renders inside a Shadow DOM so the merchant's page
- *     CSS can never leak in and this widget's CSS can never leak out.
- *   - No build step, no dependencies. One file, IIFE, safe to load
- *     with `async` or `defer` on any page.
- *   - `data-key` is a public-facing key (meant to sit in page source
- *     on the open web) — it authenticates the chat endpoint only.
- *     Do NOT put a secret/admin key here.
- *   - conversation_id is kept in localStorage per store key so a
- *     returning visitor keeps their thread; if storage is unavailable
- *     (privacy mode, etc.) the widget falls back to an in-memory id
- *     and still works for the current page view.
- */
+/* Universal Commerce AI — embeddable customer chat widget. */
 (function () {
   "use strict";
 
-  // ---------------------------------
-  // Safe URL guard
-  // ---------------------------------
-  // Product/source URLs come from merchant databases and crawled
-  // content. Only http(s) links may become clickable hrefs — this
-  // blocks javascript:/data:/vbscript: XSS payloads from ever being
-  // injected into the host page via catalog data.
-  function isSafeWebUrl(url) {
-    if (typeof url !== "string") return false;
-    var trimmed = url.trim();
-    return /^https?:\/\//i.test(trimmed);
+  function safeUrl(url) {
+    if (typeof url !== "string") return "";
+    var value = url.trim();
+    return /^https?:\/\//i.test(value) ? value : "";
   }
 
-  // ---------------------------------
-  // Config from the <script> tag
-  // ---------------------------------
+  var script = document.currentScript || document.scripts[document.scripts.length - 1];
+  var API_KEY = script && script.getAttribute("data-key");
+  if (!API_KEY) return;
 
-  var thisScript =
-    document.currentScript ||
-    (function () {
-      var scripts = document.getElementsByTagName("script");
-      return scripts[scripts.length - 1];
-    })();
-
-  var API_KEY = thisScript.getAttribute("data-key");
-
-  if (!API_KEY) {
-    console.error(
-      "[widget] missing data-key attribute on the widget <script> tag — widget not started."
-    );
-    return;
-  }
-
-  var scriptOrigin = (function () {
-    try {
-      return new URL(thisScript.src, window.location.href).origin;
-    } catch (e) {
-      return window.location.origin;
-    }
-  })();
-
-  var API_BASE = (
-    thisScript.getAttribute("data-api-base") || scriptOrigin
-  ).replace(/\/$/, "");
-
-  var ACCENT = thisScript.getAttribute("data-color") || "#111827";
-  var POSITION =
-    thisScript.getAttribute("data-position") === "bottom-left"
-      ? "bottom-left"
-      : "bottom-right";
-  var GREETING =
-    thisScript.getAttribute("data-greeting") ||
-    "Hi! Ask me anything about our products.";
-
+  var API_BASE = ((script.getAttribute("data-api-base") || new URL(script.src, location.href).origin)).replace(/\/$/, "");
+  var ACCENT = script.getAttribute("data-color") || "#111827";
+  var GREETING = script.getAttribute("data-greeting") || "আসসালামু আলাইকুম! কীভাবে সাহায্য করতে পারি? পণ্য, দাম, স্টক বা product link সম্পর্কে জিজ্ঞেস করুন।";
+  var position = script.getAttribute("data-position") === "bottom-left" ? "left" : "right";
   var STORAGE_KEY = "ucai_widget_conv_" + API_KEY.slice(-8);
-
-  // ---------------------------------
-  // Small storage helper (fails silently)
-  // ---------------------------------
-
-  var memoryFallback = {};
-  function storageGet(key) {
-    try {
-      return window.localStorage.getItem(key);
-    } catch (e) {
-      return memoryFallback[key] || null;
-    }
-  }
-  function storageSet(key, value) {
-    try {
-      window.localStorage.setItem(key, value);
-    } catch (e) {
-      memoryFallback[key] = value;
-    }
-  }
-
-  // ---------------------------------
-  // Host element + Shadow DOM
-  // ---------------------------------
+  var conversationId = null;
+  try { conversationId = localStorage.getItem(STORAGE_KEY); } catch (_) {}
 
   var host = document.createElement("div");
-  host.id = "ucai-chat-widget-host";
-  // Keep the host itself out of page layout flow; everything
-  // inside is positioned by the shadow tree's own CSS.
-  host.style.all = "initial";
-  host.style.position = "fixed";
-  host.style.zIndex = "2147483647";
-  host.style[POSITION === "bottom-left" ? "left" : "right"] = "20px";
-  host.style.bottom = "20px";
-
+  host.style.cssText = "all:initial;position:fixed;z-index:2147483647;bottom:20px;" + position + ":20px;";
   document.body.appendChild(host);
-
   var shadow = host.attachShadow({ mode: "open" });
 
   var style = document.createElement("style");
   style.textContent =
-    ":host{all:initial;}" +
-    "*{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}" +
-    ".bubble{" +
-    "width:56px;height:56px;border-radius:50%;background:" +
-    ACCENT +
-    ";box-shadow:0 4px 14px rgba(0,0,0,.25);border:none;cursor:pointer;" +
-    "display:flex;align-items:center;justify-content:center;transition:transform .15s ease;}" +
-    ".bubble:hover{transform:scale(1.05);}" +
-    ".bubble svg{width:26px;height:26px;fill:#fff;}" +
-    ".panel{" +
-    "position:absolute;bottom:72px;" +
-    (POSITION === "bottom-left" ? "left:0;" : "right:0;") +
-    "width:360px;max-width:calc(100vw - 40px);height:520px;max-height:70vh;" +
-    "background:#fff;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.22);" +
-    "display:none;flex-direction:column;overflow:hidden;border:1px solid rgba(0,0,0,.06);}" +
-    ".panel.open{display:flex;}" +
-    ".header{background:" +
-    ACCENT +
-    ";color:#fff;padding:14px 16px;font-size:14px;font-weight:600;" +
-    "display:flex;align-items:center;justify-content:space-between;}" +
-    ".header button{background:transparent;border:none;color:#fff;cursor:pointer;font-size:18px;line-height:1;padding:4px;opacity:.85;}" +
-    ".header button:hover{opacity:1;}" +
-    ".messages{flex:1;overflow-y:auto;padding:14px;background:#f7f7f8;display:flex;flex-direction:column;gap:10px;}" +
-    ".msg{max-width:82%;padding:9px 12px;border-radius:12px;font-size:13.5px;line-height:1.45;white-space:pre-wrap;word-wrap:break-word;}" +
-    ".msg.user{align-self:flex-end;background:" +
-    ACCENT +
-    ";color:#fff;border-bottom-right-radius:3px;}" +
-    ".msg.assistant{align-self:flex-start;background:#fff;color:#1f2328;border:1px solid #e6e6e9;border-bottom-left-radius:3px;}" +
-    ".msg.error{align-self:flex-start;background:#fdecea;color:#7a1f1a;border:1px solid #f3c6c2;}" +
-    ".msg.typing{align-self:flex-start;color:#9a9aa0;font-style:italic;}" +
-    ".products{display:flex;flex-direction:column;gap:6px;margin-top:2px;max-width:82%;align-self:flex-start;}" +
-    ".product{border:1px solid #e6e6e9;background:#fff;border-radius:10px;padding:8px 10px;font-size:12.5px;text-decoration:none;color:#1f2328;display:block;}" +
-    ".product:hover{border-color:" +
-    ACCENT +
-    ";}" +
-    ".product .name{font-weight:600;display:block;}" +
-    ".product .price{color:#5a5a63;}" +
-    ".composer{display:flex;gap:8px;padding:10px;border-top:1px solid #eceef0;background:#fff;}" +
-    ".composer textarea{flex:1;resize:none;border:1px solid #dcdde0;border-radius:10px;padding:9px 10px;" +
-    "font-size:13.5px;line-height:1.4;max-height:90px;min-height:38px;outline:none;}" +
-    ".composer textarea:focus{border-color:" +
-    ACCENT +
-    ";}" +
-    ".composer button{border:none;background:" +
-    ACCENT +
-    ";color:#fff;border-radius:10px;padding:0 14px;cursor:pointer;font-size:13px;font-weight:600;}" +
-    ".composer button:disabled{opacity:.5;cursor:default;}" +
-    ".composer .imgbtn{background:transparent;border:1px solid #dcdde0;color:#5a5a63;" +
-    "border-radius:10px;width:38px;min-width:38px;padding:0;display:flex;align-items:center;justify-content:center;}" +
-    ".composer .imgbtn:hover{border-color:" +
-    ACCENT +
-    ";color:" +
-    ACCENT +
-    ";}" +
-    ".composer .imgbtn svg{width:18px;height:18px;fill:currentColor;}" +
-    ".img-preview{align-self:flex-end;max-width:60%;border-radius:12px;overflow:hidden;border:1px solid #e6e6e9;}" +
-    ".img-preview img{display:block;width:100%;max-height:160px;object-fit:cover;}" +
-    ".footer-note{font-size:10.5px;color:#b1b1b8;text-align:center;padding:4px 0 8px;}";
-
+    "*{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif}" +
+    ".bubble{width:58px;height:58px;border:0;border-radius:50%;background:" + ACCENT + ";color:#fff;box-shadow:0 8px 28px rgba(0,0,0,.22);cursor:pointer;display:grid;place-items:center}" +
+    ".bubble svg{width:27px;height:27px;fill:#fff}.panel{position:absolute;bottom:72px;" + position + ":0;width:390px;max-width:calc(100vw - 28px);height:610px;max-height:calc(100vh - 105px);background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 18px 55px rgba(0,0,0,.22);display:none;overflow:hidden;flex-direction:column}.panel.open{display:flex}" +
+    ".header{background:" + ACCENT + ";color:#fff;padding:15px 17px;display:flex;align-items:center;justify-content:space-between}.header strong{font-size:14px}.header small{display:block;opacity:.75;font-weight:400;margin-top:2px}.close{background:transparent;border:0;color:#fff;font-size:22px;cursor:pointer}" +
+    ".messages{flex:1;overflow:auto;padding:15px;background:#f8fafc;display:flex;flex-direction:column;gap:10px}.msg{max-width:86%;padding:10px 13px;border-radius:14px;font-size:13.5px;line-height:1.5;white-space:pre-wrap}.user{align-self:flex-end;background:" + ACCENT + ";color:#fff;border-bottom-right-radius:4px}.assistant{align-self:flex-start;background:#fff;color:#172033;border:1px solid #e5e7eb;border-bottom-left-radius:4px}.typing{color:#9ca3af;font-style:italic}" +
+    ".products{align-self:flex-start;width:min(100%,350px);display:grid;gap:10px}.product{background:#fff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;box-shadow:0 2px 8px rgba(15,23,42,.04)}.product-image{width:100%;height:155px;object-fit:cover;background:#f1f5f9;display:block}.product-body{padding:11px 12px}.product-name{font-weight:700;font-size:14px;color:#111827;line-height:1.35}.product-meta{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:7px}.price{font-size:15px;font-weight:800;color:#111827}.stock{font-size:11px;padding:3px 7px;border-radius:999px;background:#ecfdf5;color:#047857}.stock.out{background:#fef2f2;color:#b91c1c}.rating{font-size:11px;color:#64748b;margin-top:5px}.actions{display:flex;gap:7px;margin-top:10px}.action{flex:1;text-align:center;text-decoration:none;border:1px solid #dbe0e6;border-radius:9px;padding:7px 8px;font-size:11.5px;font-weight:600;color:#334155;background:#fff}.action.primary{background:" + ACCENT + ";border-color:" + ACCENT + ";color:#fff}.action.disabled{opacity:.5;pointer-events:none}" +
+    ".composer{display:flex;gap:7px;padding:10px;border-top:1px solid #e5e7eb;background:#fff}.composer textarea{flex:1;min-height:40px;max-height:90px;resize:none;border:1px solid #d8dde5;border-radius:11px;padding:9px 10px;outline:0;font-size:13.5px}.composer textarea:focus{border-color:" + ACCENT + ".composer button{border:0;background:" + ACCENT + ";color:#fff;border-radius:10px;padding:0 14px;font-weight:700;cursor:pointer}.composer button:disabled{opacity:.5}.footer{font-size:10px;text-align:center;color:#9ca3af;padding:4px 0 8px}";
   shadow.appendChild(style);
 
   var wrap = document.createElement("div");
-  wrap.style.position = "relative";
+  wrap.innerHTML =
+    '<button class="bubble" aria-label="Open chat" type="button"><svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.03 2 11c0 2.28 1 4.35 2.66 5.94L4 22l5.29-1.4A11.1 11.1 0 0 0 12 21c5.52 0 10-4.03 10-9S17.52 2 12 2z"/></svg></button>' +
+    '<div class="panel"><div class="header"><div><strong>AI Shopping Assistant</strong><small>Product, price, stock &amp; links</small></div><button class="close" type="button" aria-label="Close">×</button></div><div class="messages"></div><div class="composer"><textarea rows="1" maxlength="2000" placeholder="পণ্য, দাম বা link সম্পর্কে জিজ্ঞেস করুন…"></textarea><button class="send" type="button">Send</button></div><div class="footer">Powered by Universal Commerce AI</div></div>';
   shadow.appendChild(wrap);
 
-  wrap.innerHTML =
-    '<button class="bubble" aria-label="Open chat" type="button">' +
-    '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.03 2 11c0 2.28 1 4.35 2.66 5.94L4 22l5.29-1.4A11.1 11.1 0 0 0 12 21c5.52 0 10-4.03 10-9s-4.48-10-10-10z"/></svg>' +
-    "</button>" +
-    '<div class="panel">' +
-    '<div class="header"><span>Chat with us</span><button class="close" aria-label="Close chat" type="button">&times;</button></div>' +
-    '<div class="messages"></div>' +
-    '<div class="composer">' +
-    '<button class="imgbtn" type="button" aria-label="Send a photo" title="Send a photo">' +
-    '<svg viewBox="0 0 24 24"><path d="M9 3 7.17 5H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.17L15 3H9zm3 15a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-2a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/></svg>' +
-    "</button>" +
-    '<input class="imginput" type="file" accept="image/png,image/jpeg,image/webp" style="display:none" />' +
-    '<textarea rows="1" placeholder="Type a message…" maxlength="2000"></textarea>' +
-    '<button class="send" type="button">Send</button>' +
-    "</div>" +
-    '<div class="footer-note">Powered by Universal Commerce AI</div>' +
-    "</div>";
-
-  var bubbleEl = wrap.querySelector(".bubble");
-  var panelEl = wrap.querySelector(".panel");
-  var closeEl = wrap.querySelector(".close");
-  var messagesEl = wrap.querySelector(".messages");
-  var textareaEl = wrap.querySelector("textarea");
-  var sendEl = wrap.querySelector(".send");
-  var imgBtnEl = wrap.querySelector(".imgbtn");
-  var imgInputEl = wrap.querySelector(".imginput");
-
-  var opened = false;
-  var greeted = false;
+  var bubble = wrap.querySelector(".bubble");
+  var panel = wrap.querySelector(".panel");
+  var close = wrap.querySelector(".close");
+  var messages = wrap.querySelector(".messages");
+  var input = wrap.querySelector("textarea");
+  var send = wrap.querySelector(".send");
   var sending = false;
-  var conversationId = storageGet(STORAGE_KEY) || null;
+  var greeted = false;
 
-  // ---------------------------------
-  // Merchant reply polling
-  // ---------------------------------
-  // The chat panel only ever gets an AI reply synchronously from
-  // POST /v1/chat. When a merchant manually types a reply from the
-  // dashboard (POST /v1/messages/conversations/{id}/reply, saved
-  // with role="merchant"), nothing pushes it to this widget — so we
-  // poll GET /v1/messages/customer/{conversation_id} while the panel
-  // is open and render any merchant messages we haven't shown yet.
-
-  var POLL_INTERVAL_MS = 4000;
-  var pollTimer = null;
-  var shownMerchantIds = {};
-
-  function pollForMerchantReplies() {
-    if (!conversationId) return;
-
-    fetch(
-      API_BASE +
-        "/v1/messages/customer/" +
-        encodeURIComponent(conversationId),
-      { headers: { "x-api-key": API_KEY } }
-    )
-      .then(function (res) {
-        if (!res.ok) throw new Error("HTTP_" + res.status);
-        return res.json();
-      })
-      .then(function (data) {
-        var items = (data && data.messages) || [];
-        items.forEach(function (item) {
-          if (
-            item.role === "merchant" &&
-            !shownMerchantIds[item.id]
-          ) {
-            shownMerchantIds[item.id] = true;
-            addMessage("assistant", item.content);
-          }
-        });
-      })
-      .catch(function () {
-        // Background polling failure — never surface this to the
-        // visitor, it would look like a broken chat for no reason.
-      });
-  }
-
-  function startPolling() {
-    if (pollTimer || !conversationId) return;
-    pollForMerchantReplies();
-    pollTimer = setInterval(pollForMerchantReplies, POLL_INTERVAL_MS);
-  }
-
-  function stopPolling() {
-    if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-    }
-  }
-
-  function scrollToBottom() {
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }
-
-  function escapeHtml(s) {
-    var div = document.createElement("div");
-    div.textContent = s;
-    return div.innerHTML;
-  }
-
+  function scroll() { messages.scrollTop = messages.scrollHeight; }
   function addMessage(role, text) {
     var el = document.createElement("div");
     el.className = "msg " + role;
-    el.textContent = text;
-    messagesEl.appendChild(el);
-    scrollToBottom();
-    return el;
+    el.textContent = text || "";
+    messages.appendChild(el); scroll(); return el;
   }
-
-  function addImagePreview(objectUrl) {
-    var box = document.createElement("div");
-    box.className = "img-preview";
-    var img = document.createElement("img");
-    img.src = objectUrl;
-    box.appendChild(img);
-    messagesEl.appendChild(box);
-    scrollToBottom();
+  function money(value) {
+    if (value === null || value === undefined || value === "") return "Price on request";
+    var n = Number(value);
+    return Number.isFinite(n) ? "৳" + n.toLocaleString("en-BD", { maximumFractionDigits: 0 }) : "৳" + String(value);
   }
-
   function addProducts(products) {
-    if (!products || !products.length) return;
-
-    var box = document.createElement("div");
-    box.className = "products";
-
-    products.slice(0, 5).forEach(function (p) {
-      var name = p.name || p.title || "Product";
-      var price =
-        p.price !== undefined && p.price !== null
-          ? typeof p.price === "number"
-            ? "$" + p.price.toFixed(2)
-            : String(p.price)
-          : "";
-      var url = p.url || p.link || "#";
-
-      var a = document.createElement("a");
-      a.className = "product";
-      a.href = isSafeWebUrl(url) ? url : "#";
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      a.innerHTML =
-        '<span class="name">' +
-        escapeHtml(name) +
-        "</span>" +
-        (price ? '<span class="price">' + escapeHtml(price) + "</span>" : "");
-      box.appendChild(a);
+    if (!Array.isArray(products) || !products.length) return;
+    var box = document.createElement("div"); box.className = "products";
+    products.slice(0, 10).forEach(function (p) {
+      var card = document.createElement("article"); card.className = "product";
+      var image = safeUrl(p.image_url || p.image || p.main_image);
+      if (image) { var img = document.createElement("img"); img.className = "product-image"; img.src = image; img.alt = p.name || "Product"; img.loading = "lazy"; card.appendChild(img); }
+      var body = document.createElement("div"); body.className = "product-body";
+      var name = document.createElement("div"); name.className = "product-name"; name.textContent = p.name || p.title || "Product"; body.appendChild(name);
+      var meta = document.createElement("div"); meta.className = "product-meta";
+      var price = document.createElement("span"); price.className = "price"; price.textContent = money(p.price); meta.appendChild(price);
+      if (p.stock !== undefined && p.stock !== null) { var stock = document.createElement("span"); stock.className = "stock" + (Number(p.stock) <= 0 ? " out" : ""); stock.textContent = Number(p.stock) > 0 ? "In stock" : "Out of stock"; meta.appendChild(stock); }
+      body.appendChild(meta);
+      if (p.rating !== null && p.rating !== undefined) { var rating = document.createElement("div"); rating.className = "rating"; rating.textContent = "★ " + Number(p.rating).toFixed(1) + (p.review_count ? " · " + Number(p.review_count).toLocaleString() + " reviews" : ""); body.appendChild(rating); }
+      var actions = document.createElement("div"); actions.className = "actions";
+      var url = safeUrl(p.product_url || p.url || p.link);
+      var link = document.createElement("a"); link.className = "action primary" + (url ? "" : " disabled"); link.textContent = url ? "View product" : "Link unavailable"; if (url) { link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer"; } actions.appendChild(link);
+      var ask = document.createElement("button"); ask.className = "action"; ask.type = "button"; ask.textContent = "Ask about it"; ask.addEventListener("click", function () { input.value = (p.name || "this product") + " সম্পর্কে details চাই"; input.focus(); }); actions.appendChild(ask);
+      body.appendChild(actions); card.appendChild(body); box.appendChild(card);
     });
-
-    messagesEl.appendChild(box);
-    scrollToBottom();
+    messages.appendChild(box); scroll();
   }
-
-  function setSending(state) {
-    sending = state;
-    sendEl.disabled = state;
-    textareaEl.disabled = state;
-    imgBtnEl.disabled = state;
+  function setSending(value) { sending = value; send.disabled = value; input.disabled = value; }
+  function sendMessage() {
+    var text = input.value.trim(); if (!text || sending) return;
+    addMessage("user", text); input.value = ""; input.style.height = "auto"; setSending(true);
+    var typing = addMessage("typing", "Thinking…");
+    fetch(API_BASE + "/v1/chat", { method: "POST", headers: { "content-type": "application/json", "x-api-key": API_KEY }, body: JSON.stringify({ message: text, conversation_id: conversationId }) })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP_" + r.status); return r.json(); })
+      .then(function (data) { typing.remove(); if (data.conversation_id) { conversationId = data.conversation_id; try { localStorage.setItem(STORAGE_KEY, conversationId); } catch (_) {} } addMessage("assistant", data.message || ""); addProducts(data.products); })
+      .catch(function () { typing.remove(); addMessage("assistant", "দুঃখিত, এখন উত্তর দিতে সমস্যা হচ্ছে। একটু পরে আবার চেষ্টা করুন।"); })
+      .finally(function () { setSending(false); input.focus(); });
   }
-
-  function openPanel() {
-    opened = true;
-    panelEl.classList.add("open");
-    if (!greeted) {
-      greeted = true;
-      addMessage("assistant", GREETING);
-    }
-    startPolling();
-    textareaEl.focus();
-  }
-
-  function closePanel() {
-    opened = false;
-    panelEl.classList.remove("open");
-    stopPolling();
-  }
-
-  bubbleEl.addEventListener("click", function () {
-    opened ? closePanel() : openPanel();
-  });
-  closeEl.addEventListener("click", closePanel);
-
-  textareaEl.addEventListener("input", function () {
-    textareaEl.style.height = "auto";
-    textareaEl.style.height = Math.min(textareaEl.scrollHeight, 90) + "px";
-  });
-
-  textareaEl.addEventListener("keydown", function (e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  });
-
-  sendEl.addEventListener("click", handleSend);
-
-  imgBtnEl.addEventListener("click", function () {
-    if (sending) return;
-    imgInputEl.click();
-  });
-
-  imgInputEl.addEventListener("change", function () {
-    var file = imgInputEl.files && imgInputEl.files[0];
-    imgInputEl.value = "";
-    if (file) handleImageSend(file);
-  });
-
-  function handleImageSend(file) {
-    if (sending) return;
-
-    var MAX_BYTES = 10 * 1024 * 1024;
-    if (file.size > MAX_BYTES) {
-      addMessage("error", "That photo is too large (max 10MB).");
-      return;
-    }
-
-    addImagePreview(URL.createObjectURL(file));
-    setSending(true);
-
-    var typingEl = addMessage("typing", "…");
-    typingEl.classList.add("typing");
-
-    var formData = new FormData();
-    formData.append("file", file);
-    if (conversationId) formData.append("conversation_id", conversationId);
-
-    fetch(API_BASE + "/v1/images", {
-      method: "POST",
-      headers: { "x-api-key": API_KEY },
-      body: formData,
-    })
-      .then(function (res) {
-        if (res.status === 429) {
-          var retryAfter = res.headers.get("Retry-After");
-          throw new Error(
-            "RATE_LIMIT:" + (retryAfter || "a few seconds")
-          );
-        }
-        if (!res.ok) throw new Error("HTTP_" + res.status);
-        return res.json();
-      })
-      .then(function (uploaded) {
-        return fetch(
-          API_BASE + "/v1/images/" + uploaded.image_id + "/analyze",
-          {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "x-api-key": API_KEY,
-            },
-            body: JSON.stringify({
-              conversation_id: conversationId,
-            }),
-          }
-        );
-      })
-      .then(function (res) {
-        if (!res.ok) throw new Error("HTTP_" + res.status);
-        return res.json();
-      })
-      .then(function (data) {
-        typingEl.remove();
-
-        if (data.conversation_id) {
-          conversationId = data.conversation_id;
-          storageSet(STORAGE_KEY, conversationId);
-          startPolling();
-        }
-
-        addMessage("assistant", data.message || "…");
-        addProducts(data.products);
-      })
-      .catch(function (err) {
-        typingEl.remove();
-
-        var msg = "Sorry, I couldn't analyze that photo. Please try again.";
-        if (String(err.message || "").indexOf("RATE_LIMIT:") === 0) {
-          msg =
-            "We're getting a lot of messages right now — please try again in " +
-            err.message.split("RATE_LIMIT:")[1] +
-            ".";
-        }
-        addMessage("error", msg);
-      })
-      .finally(function () {
-        setSending(false);
-      });
-  }
-
-  function handleSend() {
-    var text = textareaEl.value.trim();
-    if (!text || sending) return;
-
-    addMessage("user", text);
-    textareaEl.value = "";
-    textareaEl.style.height = "auto";
-    setSending(true);
-
-    var typingEl = addMessage("typing", "…");
-    typingEl.classList.add("typing");
-
-    fetch(API_BASE + "/v1/chat", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": API_KEY,
-      },
-      body: JSON.stringify({
-        message: text,
-        conversation_id: conversationId,
-      }),
-    })
-      .then(function (res) {
-        if (res.status === 429) {
-          var retryAfter = res.headers.get("Retry-After");
-          throw new Error(
-            "RATE_LIMIT:" + (retryAfter || "a few seconds")
-          );
-        }
-        if (!res.ok) {
-          throw new Error("HTTP_" + res.status);
-        }
-        return res.json();
-      })
-      .then(function (data) {
-        typingEl.remove();
-
-        if (data.conversation_id) {
-          conversationId = data.conversation_id;
-          storageSet(STORAGE_KEY, conversationId);
-          startPolling();
-        }
-
-        addMessage("assistant", data.message || "…");
-        addProducts(data.products);
-      })
-      .catch(function (err) {
-        typingEl.remove();
-
-        var msg = "Sorry, something went wrong. Please try again.";
-        if (String(err.message || "").indexOf("RATE_LIMIT:") === 0) {
-          msg =
-            "We're getting a lot of messages right now — please try again in " +
-            err.message.split("RATE_LIMIT:")[1] +
-            ".";
-        }
-        addMessage("error", msg);
-      })
-      .finally(function () {
-        setSending(false);
-      });
-  }
+  bubble.addEventListener("click", function () { panel.classList.toggle("open"); if (!greeted) { greeted = true; addMessage("assistant", GREETING); } if (panel.classList.contains("open")) input.focus(); });
+  close.addEventListener("click", function () { panel.classList.remove("open"); });
+  send.addEventListener("click", sendMessage);
+  input.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+  input.addEventListener("input", function () { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 90) + "px"; });
 })();
