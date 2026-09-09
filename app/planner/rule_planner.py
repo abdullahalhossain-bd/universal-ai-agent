@@ -109,16 +109,60 @@ def _extract_min_price(text: str) -> float | None:
 
 
 def _extract_in_stock(text: str) -> bool:
-    lowered = text.lower()
-    # Do not treat generic Bengali/Banglish existence words such as
-    # "ase"/"ache" as stock filters. They are ordinary language and are
-    # already handled by the shared stopword vocabulary.
-    explicit_phrases = {
-        "available", "in stock", "stock আছে", "স্টকে আছে", "স্টক আছে",
-        "available আছে", "stock ase", "stock ache", "available ase",
-        "available ache",
-    }
-    return any(phrase in lowered for phrase in explicit_phrases)
+    """Detect explicit availability intent, not bare existence words.
+
+    `ase`/`ache` are ordinary Bengali/Banglish existence/copula words and
+    therefore cannot be treated as stock signals by themselves. They only
+    become an availability signal when the surrounding sentence has an
+    availability-question structure, e.g. "mobile ase?" or
+    "tomar kase ki mobile ase?". Descriptive predicates such as
+    "mobile ta kemon ase?" are deliberately excluded.
+    """
+    normalized = _normalize_entity_text(text)
+    if not normalized:
+        return False
+
+    # Explicit stock/availability terminology is unambiguous.
+    explicit_patterns = [
+        r"\bavailable\b",
+        r"\bin\s+stock\b",
+        r"\bstock\b",
+        r"স্টক",
+        r"স্টকে",
+        r"স্টকটা",
+        r"উপলব্ধ",
+        r"মজুদ",
+    ]
+    if any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in explicit_patterns):
+        return True
+
+    # Existence words require sentence-level availability framing.
+    has_existence = bool(re.search(r"\b(?:ase|ache|আছে|আছে়|রয়েছে|রয়েছে)\b", normalized))
+    if not has_existence:
+        return False
+
+    # "kemon/emon ... ase/ache" describes state/quality, not availability.
+    if re.search(r"\b(?:kemon|emon|কেমন|এমন|কীভাবে|কিভাবে)\b.*\b(?:ase|ache|আছে|রয়েছে|রয়েছে)\b", normalized):
+        return False
+
+    # Availability-question constructions: "ki ... ase", "... ase?",
+    # "tomar kase ki ... ase", and their Bengali/Banglish variants.
+    availability_question_patterns = [
+        r"\bki\b.*\b(?:ase|ache)\b",
+        r"\b(?:ase|ache)\s*\??$",
+        r"\b(?:আছে|রয়েছে|রয়েছে)\s*\??$",
+        r"\bকী\b.*\b(?:আছে|রয়েছে|রয়েছে)\b",
+        r"\bকি\b.*\b(?:আছে|রয়েছে|রয়েছে)\b",
+    ]
+    if any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in availability_question_patterns):
+        return True
+
+    # A direct product/entity + existence construction ending in ase/ache
+    # is naturally an availability question when phrased as a short query.
+    if re.search(r"\b[\w\u0980-\u09ff.-]+\s+(?:ase|ache|আছে|রয়েছে|রয়েছে)\s*\??$", normalized):
+        return True
+
+    return False
 
 
 def _clean_search_terms(
@@ -144,9 +188,6 @@ def _clean_search_terms(
             continue
         useful.append(token)
 
-    # When merchant vocabulary is available, prefer actual catalog entities
-    # over arbitrary query words. This is the key boundary between generic
-    # language and merchant-specific search semantics.
     if store_terms:
         normalized_terms = {
             str(term).strip().lower()
@@ -170,15 +211,6 @@ def _normalize_entity_text(value: str) -> str:
 
 
 def _resolve_store_entities(query: str, store_terms: set[str] | None) -> list[str]:
-    """Resolve query text against the merchant's live catalog vocabulary.
-
-    Matching is deliberately domain-agnostic:
-    - exact multi-word catalog terms first
-    - token/phrase containment next
-    - conservative fuzzy matching for typos/transliterations
-
-    No product type (laptop/phone/shoe/etc.) is assumed by the planner.
-    """
     if not store_terms:
         return []
 
@@ -208,9 +240,6 @@ def _resolve_store_entities(query: str, store_terms: set[str] | None) -> list[st
     if exact:
         return exact[:8]
 
-    # Conservative fuzzy matching: only compare meaningful query tokens
-    # and only accept a strong similarity. This helps "samsng" -> "samsung"
-    # without turning arbitrary customer language into a product entity.
     fuzzy = []
     for token in query_tokens:
         if len(token) < 3 or token in STOP_WORDS:
@@ -236,8 +265,6 @@ def _catalog_browse_intent(text: str, store_entities: list[str]) -> bool:
     if any(cue in lowered for cue in CATALOG_BROWSE_CUES):
         return True
 
-    # Generic requests such as "show me all", "what's available" or
-    # equivalent language can be recognized without knowing any product type.
     generic_patterns = [
         r"\b(show|list|display)\s+(me\s+)?(all|everything)\b",
         r"\bwhat\s+(do\s+you\s+have|do\s+you\s+sell)\b",
@@ -246,8 +273,6 @@ def _catalog_browse_intent(text: str, store_entities: list[str]) -> bool:
     if any(re.search(pattern, lowered) for pattern in generic_patterns):
         return True
 
-    # If the query resolves to a merchant entity and asks for plural/multiple
-    # items, the catalog itself determines what is being browsed.
     return bool(store_entities) and any(
         marker in lowered
         for marker in ("সব", "কি কি", "all", "multiple", "options", "items", "products")
@@ -258,8 +283,6 @@ def plan(query: str, store_terms: set[str] | None = None):
     text = query.lower()
     store_entities = _resolve_store_entities(query, store_terms)
 
-    # Merchant vocabulary is the primary product signal. Hard-coded product
-    # categories are intentionally absent, so any merchant can be supported.
     product_score = min(1.0, 0.55 + 0.10 * len(store_entities)) if store_entities else 0.0
     knowledge_score = sum(word in text for word in KNOWLEDGE_WORDS)
 
@@ -339,7 +362,4 @@ def plan(query: str, store_terms: set[str] | None = None):
             confidence=0.80,
         )
 
-    # Unknown/domain-new language is intentionally left low-confidence so a
-    # semantic LLM planner can handle it instead of guessing from a static
-    # product dictionary.
     return PlannedAction(intent=Intent.UNKNOWN, confidence=0.20)
