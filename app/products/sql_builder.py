@@ -13,7 +13,12 @@ class ProductSQLBuilder:
         table = self.dialect.quote(self.mapping["table"])
         columns = []
         for field, column in self.mapping.items():
-            if field != "table" and column and column not in columns:
+            if field == "table" or field == "attributes":
+                continue
+            if column and column not in columns:
+                columns.append(column)
+        for column in (self.mapping.get("attributes") or {}).values():
+            if column and column not in columns:
                 columns.append(column)
 
         select_sql = ", ".join(self.dialect.quote(column) for column in columns)
@@ -29,6 +34,7 @@ class ProductSQLBuilder:
         self._add_exact_filter(conditions, params, request.size, "size")
         self._add_exact_filter(conditions, params, request.material, "material")
         self._add_price_filter(conditions, params, request.min_price, request.max_price)
+        self._add_dynamic_attribute_filters(conditions, params, request.attributes)
 
         if request.in_stock_only and self.mapping.get("stock"):
             conditions.append(f'{self.dialect.quote(self.mapping["stock"])} > :stock_min')
@@ -81,6 +87,38 @@ class ProductSQLBuilder:
         if clauses:
             conditions.append("(" + " OR ".join(clauses) + ")")
 
+    def _add_dynamic_attribute_filters(self, conditions, params, attributes):
+        """Apply merchant-defined attributes without a platform-wide field list.
+
+        Supported values:
+          {"ram": "16GB"}
+          {"width": {"value": 6, "op": ">="}}
+
+        The attribute key is safe because it can only resolve to a validated
+        datasource column from mapping["attributes"]. Values remain parameters.
+        """
+        if not attributes:
+            return
+        mapping = self.mapping.get("attributes") or {}
+        allowed_ops = {"=", "!=", ">", ">=", "<", "<="}
+
+        for index, (attribute, raw_value) in enumerate(attributes.items()):
+            column = mapping.get(attribute)
+            if not column:
+                continue
+            operator = "="
+            value = raw_value
+            if isinstance(raw_value, dict):
+                value = raw_value.get("value")
+                operator = str(raw_value.get("op", "=")).strip()
+            if value is None or operator not in allowed_ops:
+                continue
+
+            parameter = f"attribute_{index}"
+            quoted = self.dialect.quote(column)
+            conditions.append(f"{quoted} {operator} :{parameter}")
+            params[parameter] = value
+
     def _add_price_filter(self, conditions, params, minimum, maximum):
         column = self.mapping.get("price")
         if not column:
@@ -103,6 +141,7 @@ class ProductSQLBuilder:
                 "tags", "color", "size", "material", "variant", "sku", "barcode",
             )
         ]
+        searchable += list((self.mapping.get("attributes") or {}).values())
         searchable = list(dict.fromkeys(column for column in searchable if column))
         if not searchable:
             return
