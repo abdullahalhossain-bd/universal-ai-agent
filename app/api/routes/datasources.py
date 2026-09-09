@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.datasources.redaction import public_datasource_dict, redact_url
 from app.datasources.service import DataSourceService, SUPPORTED_SYNC_TYPES
 from app.db.database import get_db
-from app.db.models import Store
+from app.db.models import Product, Store
 from app.sync.queue import SyncQueue
 router=APIRouter(prefix="/v1/datasources",tags=["datasources"])
 class CreateDataSourceRequest(BaseModel):
@@ -51,6 +51,39 @@ def get_datasource(datasource_id:str,db:Session=Depends(get_db),store:Store=Depe
  require_feature(store,FEATURE_DATABASE_SYNC);ds=DataSourceService(db).get(store.id,datasource_id)
  if ds is None:raise HTTPException(404,detail="datasource not found")
  return public_datasource_dict(ds)
+@router.get("/{datasource_id}/quality")
+def get_sync_quality(datasource_id:str,db:Session=Depends(get_db),store:Store=Depends(get_current_store)):
+ """Return field-level product data quality for a merchant datasource."""
+ require_feature(store,FEATURE_DATABASE_SYNC)
+ ds=DataSourceService(db).get(store.id,datasource_id)
+ if ds is None:raise HTTPException(404,detail="datasource not found")
+ query=db.query(Product).filter(Product.store_id==store.id)
+ query=query.filter(Product.source_datasource_id==datasource_id)
+ products=query.all()
+ total=len(products)
+ fields={}
+ for field in ("name","price","image_url","product_url"):
+  present=sum(1 for product in products if getattr(product,field,None) not in (None,""))
+  fields[field]={
+   "present":present,
+   "missing":total-present,
+   "coverage_percent":round((present/total)*100,2) if total else 0.0,
+  }
+ return {
+  "datasource_id":datasource_id,
+  "store_id":store.id,
+  "products":total,
+  "fields":fields,
+  "summary":{
+   "name":fields["name"]["present"],
+   "price":fields["price"]["present"],
+   "image":fields["image_url"]["present"],
+   "url":fields["product_url"]["present"],
+   "missing_price":fields["price"]["missing"],
+   "missing_image":fields["image_url"]["missing"],
+   "missing_url":fields["product_url"]["missing"],
+  },
+ }
 @router.patch("/{datasource_id}")
 def update_datasource(datasource_id:str,payload:UpdateDataSourceRequest,db:Session=Depends(get_db),store:Store=Depends(get_current_store)):
  require_feature(store,FEATURE_DATABASE_SYNC)
