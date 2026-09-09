@@ -35,13 +35,13 @@ _STOCK_TERMS = (
     "stock", "available", "availability", "ase", "ache", "আছে", "আছে়", "স্টকে", "উপলব্ধ",
 )
 _COMPARE_TERMS = (
-    "compare", "comparison", "difference", "তুলনা", "পার্থক্য", "compare kore",
+    "compare", "comparison", "difference", "egula compare", "তুলনা", "পার্থক্য", "compare kore",
 )
 
 _GENERIC_ACTION_WORDS = {
     "the", "this", "that", "it", "one", "product", "please", "show", "give", "dao", "den",
     "দাও", "দেন", "দেখাও", "দেখান", "ওই", "ওটা", "এটা", "টার", "টা", "টি", "এর", "র",
-    "tar", "ta", "ti", "er", "r", "koro", "kor", "please",
+    "tar", "ta", "ti", "er", "r", "koro", "kor", "please", "egula", "egulo", "these", "those",
 }
 
 _ORDINALS = {
@@ -74,7 +74,6 @@ def extract_product_index(message: str) -> int | None:
         if re.search(rf"(?<!\w){re.escape(token)}(?!\w)", q):
             return index
 
-    # Arabic numerals used with English/Bangla ordinal suffixes.
     patterns = (
         r"\b(\d{1,2})\s*(?:st|nd|rd|th)\b",
         r"\b(\d{1,2})\s*(?:number|no\.?|num)\b",
@@ -97,12 +96,13 @@ def _looks_like_context_reference(q: str) -> bool:
     tokens = q.split()
     if not tokens:
         return False
-    if any(token in {"eta", "otar", "ota", "oi", "that", "this", "it", "ওই", "ওটা", "এটা", "সেটা", "সেটার", "তার", "ওইটার"} for token in tokens):
+    if any(token in {"eta", "etar", "otar", "ota", "oi", "that", "this", "it", "ওই", "ওটা", "এটা", "সেটা", "সেটার", "তার", "ওইটার", "ওটার"} for token in tokens):
         return True
     if extract_product_index(q) is not None:
         return True
+    if _has_any(q, _COMPARE_TERMS):
+        return True
     useful = [token for token in tokens if token not in _GENERIC_ACTION_WORDS]
-    # Short action-only messages are normally continuations of the previous product set.
     return not useful
 
 
@@ -148,9 +148,6 @@ def resolve_follow_up(message: str, products: Sequence[Mapping[str, Any]] | None
     if action is None and index is not None:
         action = "select_product"
 
-    # A bare deictic follow-up (e.g. 'eta', 'oiটার') selects the latest/single
-    # context item only when there is exactly one previous product. For multiple
-    # products we refuse to guess.
     if action is None and len(previous) == 1:
         selected = ids
         action = "select_product"
@@ -159,10 +156,11 @@ def resolve_follow_up(message: str, products: Sequence[Mapping[str, Any]] | None
         return FollowUpResolution()
 
     confidence = 0.98 if index is not None else (0.94 if len(previous) == 1 else 0.88)
+    resolved_ids = (selected or ids) if action == "compare_products" else selected
     return FollowUpResolution(
         action=action,
         product_index=index,
-        product_ids=selected or ids if action == "compare_products" else selected,
+        product_ids=resolved_ids,
         is_follow_up=True,
         confidence=confidence,
     )
