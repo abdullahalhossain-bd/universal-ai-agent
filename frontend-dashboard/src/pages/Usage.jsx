@@ -11,7 +11,7 @@ export default function Usage() {
   useEffect(() => {
     Promise.allSettled([
       api.get('/v1/billing/summary'),
-      api.get('/v1/admin/usage?limit=10'),
+      api.get('/v1/billing/usage?limit=10'),
     ]).then(([billing, usageResult]) => {
       if (billing.status === 'fulfilled') setSummary(billing.value)
       if (usageResult.status === 'fulfilled') setUsage(usageResult.value)
