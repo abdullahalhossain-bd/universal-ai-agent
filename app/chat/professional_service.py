@@ -7,16 +7,55 @@ from app.chat.dynamic_service import DynamicAttributeChatService
 
 
 class ProfessionalCommerceChatService(DynamicAttributeChatService):
-    """Keep recommendation follow-ups grounded in actual product context."""
+    """Keep commerce conversations grounded, useful and customer-facing."""
+
+    @staticmethod
+    def _enrich_product_payload(store_id: str, db, products: list[dict]) -> list[dict]:
+        """Guarantee frontend-safe image/link fields for product cards."""
+        ids = [str(item.get("id")) for item in products if item.get("id")]
+        if not ids:
+            return products
+
+        objects = (
+            db.query(__import__("app.db.models", fromlist=["Product"]).Product)
+            .filter(
+                __import__("app.db.models", fromlist=["Product"]).Product.store_id == store_id,
+                __import__("app.db.models", fromlist=["Product"]).Product.id.in_(ids),
+            )
+            .all()
+        )
+        by_id = {str(product.id): product for product in objects}
+
+        enriched = []
+        for item in products:
+            product = by_id.get(str(item.get("id")))
+            payload = dict(item)
+            if product is not None:
+                payload["image_url"] = getattr(product, "image_url", None)
+                payload["product_url"] = getattr(product, "product_url", None)
+                payload["url"] = getattr(product, "product_url", None)
+                payload["stock"] = getattr(product, "stock", item.get("stock"))
+                payload["rating"] = getattr(product, "rating", item.get("rating"))
+                payload["review_count"] = getattr(product, "review_count", item.get("review_count"))
+            enriched.append(payload)
+        return enriched
+
+    @staticmethod
+    def _professional_result_message(message: str, products: list[dict]) -> str:
+        count = len(products)
+        if count == 1:
+            product = products[0]
+            name = product.get("name") or product.get("title") or "Product"
+            return f"{name}-এর details নিচে দেখুন। Price, stock, image এবং product page link available থাকলে card-এ দেখানো হবে।"
+        return (
+            f"আপনার query অনুযায়ী {count}টি matching product পাওয়া গেছে। "
+            "নিচে প্রতিটি product-এর price, stock, image এবং available product page link দেখুন।"
+        )
 
     async def handle(self, store_id: str, request):
         message = getattr(request, "message", "").strip()
         conversation_id = getattr(request, "conversation_id", None)
 
-        # A bare recommendation such as "best konta?" is meaningful only
-        # when the conversation already has a persisted product result.
-        # Looking at chat history alone is unsafe because greetings or
-        # unrelated questions would make the request look contextual.
         if conversation_id and self._is_bare_recommendation(message):
             session = self._get_or_create_session(store_id, conversation_id)
             context = self._load_product_context(session.id)
@@ -27,12 +66,7 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
                     "যেমন: laptop, phone, বা অন্য কোনো product।"
                 )
                 self._save_message(session_id=session.id, role="assistant", content=response_message)
-                self._log_analytics_event(
-                    store_id=store_id,
-                    message=message,
-                    intent="recommendation",
-                    result_count=0,
-                )
+                self._log_analytics_event(store_id=store_id, message=message, intent="recommendation", result_count=0)
                 return {
                     "conversation_id": conversation_id,
                     "type": "product_search",
@@ -41,9 +75,6 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
                     "sources": [],
                 }
 
-        # No conversation ID means there is no prior product context. Let
-        # the dynamic service create the conversation and apply its normal
-        # bare-recommendation guard.
         if not conversation_id and self._is_bare_recommendation(message):
             conversation_id = str(uuid.uuid4())
             request.conversation_id = conversation_id
@@ -54,12 +85,7 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
                 "যেমন: laptop, phone, বা অন্য কোনো product।"
             )
             self._save_message(session_id=session.id, role="assistant", content=response_message)
-            self._log_analytics_event(
-                store_id=store_id,
-                message=message,
-                intent="recommendation",
-                result_count=0,
-            )
+            self._log_analytics_event(store_id=store_id, message=message, intent="recommendation", result_count=0)
             return {
                 "conversation_id": conversation_id,
                 "type": "product_search",
@@ -68,4 +94,16 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
                 "sources": [],
             }
 
-        return await super().handle(store_id=store_id, request=request)
+        result = await super().handle(store_id=store_id, request=request)
+        if not isinstance(result, dict):
+            return result
+
+        products = result.get("products") or []
+        products = self._enrich_product_payload(store_id, self.db, products)
+        result["products"] = products
+
+        # Replace terse/internal result-count copy with customer-facing copy.
+        if products and result.get("type") == "product_search":
+            result["message"] = self._professional_result_message(message, products)
+
+        return result
