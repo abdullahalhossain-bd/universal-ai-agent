@@ -40,8 +40,6 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       AUTO_CREATE_TABLES: "true"
       GROQ_API_KEY_1: test-key
-      # Test-only Fernet key — matches tests/conftest.py. Never reuse
-      # a committed key like this for a real environment.
       CREDENTIAL_ENCRYPTION_KEY: 1Q5CMAJ3S3iemRmjauMWsPLeJmpY-VPO0J_9jHijTxs=
 
     steps:
@@ -57,11 +55,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
 
+      - name: Validate Alembic graph
+        run: |
+          heads="$(alembic heads)"
+          printf '%s\n' "$heads"
+          test "$(printf '%s\n' "$heads" | grep -c '(head)')" -eq 1
+
       - name: Run Alembic migrations
         run: alembic upgrade head
 
       - name: Run tests
         run: pytest -v
+
+      - name: Compile Python sources
+        run: python -m compileall -q app tests
 
       - name: Check for stray secrets
         run: |
