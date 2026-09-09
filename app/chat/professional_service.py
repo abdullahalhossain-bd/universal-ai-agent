@@ -13,13 +13,43 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
     """Keep commerce conversations grounded, useful and customer-facing."""
 
     def _extract_product_index(self, message: str) -> int | None:
-        index = super()._extract_product_index(message)
-        if index is not None:
-            return index
-        normalized = re.sub(r"\s+", " ", message.casefold().strip())
-        aliases = {"তৃতীয়": 3, "তৃতীয়টা": 3, "তৃতীয়টির": 3, "তৃতীয়টার": 3, "তৃতিয়": 3, "তৃতিয়টা": 3, "তৃতিয়টির": 3, "তৃতিয়টার": 3, "তৃতীয়টি": 3, "তৃতিয়টি": 3, "চতুর্থ": 4, "চতুর্থটা": 4, "চতুর্থটির": 4, "চতুর্থটার": 4, "পঞ্চম": 5, "পঞ্চমটা": 5, "পঞ্চমটির": 5, "পঞ্চমটার": 5}
+        """Extract an index only when the user explicitly references a list position.
+
+        Bare numbers are intentionally ignored. This prevents a model/product number
+        such as ``iPhone 13`` or ``SSD 3`` from being mistaken for "product #3".
+        """
+        text = re.sub(r"\s+", " ", message.casefold().strip())
+        text = text.translate(str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789"))
+
+        explicit_patterns = (
+            (r"(?:product\s*)?#\s*(\d+)\b", 1),
+            (r"(?:product\s*)?(\d+)\s*(?:number|no\.?|নম্বর|নং)\b", 1),
+            (r"(?:number|no\.?|নম্বর|নং)\s*(\d+)\b", 1),
+            (r"(\d+)(?:st|nd|rd|th)\s+(?:one|product|item)\b", 1),
+            (r"(?:one|product|item)\s*(?:number|no\.?)\s*(\d+)\b", 1),
+        )
+        for pattern, group in explicit_patterns:
+            match = re.search(pattern, text)
+            if match:
+                value = int(match.group(group))
+                if 1 <= value <= 100:
+                    return value
+
+        aliases = {
+            "প্রথম": 1, "প্রথমটা": 1, "প্রথমটির": 1, "প্রথমটার": 1,
+            "দ্বিতীয়": 2, "দ্বিতীয়টা": 2, "দ্বিতীয়টির": 2, "দ্বিতীয়টার": 2,
+            "দ্বিতীয়": 2, "দ্বিতীয়টা": 2, "দ্বিতীয়টির": 2, "দ্বিতীয়টার": 2,
+            "তৃতীয়": 3, "তৃতীয়টা": 3, "তৃতীয়টির": 3, "তৃতীয়টার": 3,
+            "তৃতিয়": 3, "তৃতিয়টা": 3, "তৃতিয়টির": 3, "তৃতিয়টার": 3,
+            "তৃতীয়": 3, "তৃতীয়টা": 3, "তৃতীয়টির": 3, "তৃতীয়টার": 3,
+            "চতুর্থ": 4, "চতুর্থটা": 4, "চতুর্থটির": 4, "চতুর্থটার": 4,
+            "পঞ্চম": 5, "পঞ্চমটা": 5, "পঞ্চমটির": 5, "পঞ্চমটার": 5,
+            "first": 1, "first one": 1, "second": 2, "second one": 2,
+            "third": 3, "third one": 3, "fourth": 4, "fourth one": 4,
+            "fifth": 5, "fifth one": 5,
+        }
         for phrase, value in aliases.items():
-            if phrase in normalized:
+            if re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text):
                 return value
         return None
 
@@ -39,24 +69,35 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
 
     @staticmethod
     def _enrich_product_payload(store_id: str, db, products: list[dict]) -> list[dict]:
+        """Enrich every payload from the DB row with the exact same product ID.
+
+        The DB lookup is constrained by both store_id and Product.id. For a product
+        that exists in the DB, media fields come ONLY from that exact DB row. We do
+        not fall back to another payload's URL/image, because that could silently
+        attach the wrong merchant product page to a contextual follow-up.
+        """
         from app.db.models import Product, Store
+
         ids = [str(item.get("id")) for item in products if item.get("id")]
         if not ids:
             return products
+
         store = db.query(Store).filter(Store.id == store_id).first()
         base_url = getattr(store, "website_url", None) if store is not None else None
         objects = db.query(Product).filter(Product.store_id == store_id, Product.id.in_(ids)).all()
         by_id = {str(product.id): product for product in objects}
+
         enriched = []
         for item in products:
-            product = by_id.get(str(item.get("id")))
+            product_id = str(item.get("id")) if item.get("id") is not None else None
+            product = by_id.get(product_id) if product_id else None
             payload = dict(item)
             if product is not None:
-                # Preserve a usable payload value if the DB row is currently empty.
                 db_image = getattr(product, "image_url", None)
                 db_product_url = getattr(product, "product_url", None)
-                payload["image_url"] = ProfessionalCommerceChatService._resolve_media_url(db_image or item.get("image_url"), base_url)
-                payload["product_url"] = ProfessionalCommerceChatService._resolve_media_url(db_product_url or item.get("product_url") or item.get("url"), base_url)
+                payload["id"] = str(product.id)
+                payload["image_url"] = ProfessionalCommerceChatService._resolve_media_url(db_image, base_url)
+                payload["product_url"] = ProfessionalCommerceChatService._resolve_media_url(db_product_url, base_url)
                 payload["url"] = payload["product_url"]
                 payload["stock"] = getattr(product, "stock", item.get("stock"))
                 payload["rating"] = getattr(product, "rating", item.get("rating"))
