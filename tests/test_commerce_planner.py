@@ -1,30 +1,39 @@
 from app.chat.dynamic_service import DynamicAttributeChatService
 from app.chat.professional_service import ProfessionalCommerceChatService
-from app.planner.models import Intent
+from app.planner.models import Intent, ProductFilters
 from app.planner.rule_planner import plan
 from app.products.recommendation import is_recommendation_query
 from app.products.semantic_attributes import deterministic_extract
+from app.chat.intelligent_service import IntelligentCommerceChatService
 
 
 STORE_TERMS = {"Iphone12", "Laptop", "Asus Gaming", "Dell Intel i9"}
 
 
-def test_phone_existence_resolves_to_iphone_product():
+def test_phone_existence_resolves_to_iphone_product_without_stock_filter():
     for query in ("I phone ase?", "Phone ase?", "Iphone ase?", "ফোন আছে?"):
         action = plan(query, STORE_TERMS)
         assert action.intent == Intent.PRODUCT_SEARCH
         assert action.product_filters is not None
-        assert action.product_filters.in_stock is True
+        assert action.product_filters.in_stock is False
         assert action.product_filters.product_name == "iphone12"
 
 
-def test_product_existence_queries_set_in_stock():
+def test_product_existence_queries_do_not_force_in_stock_filter():
     for query in ("laptop ase", "laptop ache", "ল্যাপটপ আছে", "laptop available"):
         action = plan(query, {"Laptop"})
         assert action.intent == Intent.PRODUCT_SEARCH
         assert action.product_filters is not None
-        assert action.product_filters.in_stock is True
+        assert action.product_filters.in_stock is ("available" in query.casefold())
         assert action.product_filters.product_name == "laptop"
+
+
+def test_explicit_inventory_queries_set_in_stock():
+    for query in ("laptop in stock", "laptop stock ache", "available laptop", "স্টকে laptop"):
+        action = plan(query, {"Laptop"})
+        assert action.intent == Intent.PRODUCT_SEARCH
+        assert action.product_filters is not None
+        assert action.product_filters.in_stock is True
 
 
 def test_existence_query_is_not_mistaken_for_recommendation():
@@ -127,12 +136,9 @@ def test_generic_product_search_does_not_require_store_vocabulary():
 
 def test_dynamic_continuation_is_not_a_confirmation_phrase_allowlist():
     class DBStub:
-        def query(self, model):
-            return self
-        def filter(self, *args, **kwargs):
-            return self
-        def first(self):
-            return None
+        def query(self, model): return self
+        def filter(self, *args, **kwargs): return self
+        def first(self): return None
 
     service = DynamicAttributeChatService.__new__(DynamicAttributeChatService)
     service.db = DBStub()
@@ -142,20 +148,43 @@ def test_dynamic_continuation_is_not_a_confirmation_phrase_allowlist():
 
 
 def test_dynamic_attributes_use_adjacent_value_not_next_attribute():
-    schema = {
-        "ram": ["ram"],
-        "color": ["color"],
-        "size": ["size"],
-    }
+    schema = {"ram": ["ram"], "color": ["color"], "size": ["size"]}
     extracted = deterministic_extract("16GB RAM black color XL size", schema)
     assert extracted == {"ram": "16gb", "color": "black", "size": "xl"}
 
 
 def test_dynamic_attribute_schema_supports_aliases():
-    schema = {
-        "finish": ["finish", "color", "colour"],
-        "memory": ["memory", "ram"],
-    }
+    schema = {"finish": ["finish", "color", "colour"], "memory": ["memory", "ram"]}
     extracted = deterministic_extract("black colour 16GB RAM", schema)
     assert extracted["finish"] == "black"
     assert extracted["memory"] == "16gb"
+
+
+def test_conversation_filter_merge_preserves_previous_constraints_and_current_overrides():
+    previous = {
+        "product_name": "laptop",
+        "min_price": None,
+        "max_price": 80000,
+        "in_stock": False,
+        "recommendation": False,
+        "attributes": {"color": "black", "ram": "8gb"},
+    }
+    current = ProductFilters(attributes={"color": "blue"})
+    merged = IntelligentCommerceChatService._merge_filters(previous, current)
+    assert merged["product_name"] == "laptop"
+    assert merged["max_price"] == 80000
+    assert merged["attributes"] == {"color": "blue", "ram": "8gb"}
+
+
+def test_conversation_filter_merge_is_schema_neutral():
+    previous = {
+        "product_name": "chair",
+        "min_price": None,
+        "max_price": None,
+        "in_stock": False,
+        "recommendation": False,
+        "attributes": {"fabric": "linen", "capacity": "4"},
+    }
+    current = ProductFilters(attributes={"finish": "oak"})
+    merged = IntelligentCommerceChatService._merge_filters(previous, current)
+    assert merged["attributes"] == {"fabric": "linen", "capacity": "4", "finish": "oak"}
