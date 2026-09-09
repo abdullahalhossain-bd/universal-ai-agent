@@ -149,7 +149,7 @@ def plan(query: str, store_terms: set[str] | None = None):
     attributes = _extract_attributes(query, store_terms)
     attribute_exclusions = _attribute_search_exclusions(attributes, store_terms)
     schema = getattr(store_terms, "attribute_schema", None) or {}
-    store_entities = [entity for entity in _resolve_store_entities(query, store_terms) if entity not in attribute_exclusions and not any(entity == alias or entity in aliases for aliases in schema.values())]
+    store_entities = [entity for entity in _resolve_store_entities(query, store_terms) if entity not in attribute_exclusions and not any(entity in aliases for aliases in schema.values())]
     recommendation = _is_recommendation_query(query)
     product_score = min(1.0, 0.55 + 0.10 * len(store_entities)) if store_entities else (0.70 if attributes else (0.65 if recommendation else 0.0))
     knowledge_score = sum(word in text for word in KNOWLEDGE_WORDS)
