@@ -16,7 +16,7 @@ from app.chat.models import (
     ChatSession,
 )
 
-from app.db.models import Product, QueryEvent
+from app.db.models import Product, QueryEvent, Store
 from app.planner.rule_planner import plan, _looks_like_model_number
 from app.search.store_vocabulary import get_store_vocabulary
 from app.search.synonyms import expand_terms
@@ -166,6 +166,24 @@ class ChatService:
         self.stock_service = StockService(
             self.db
         )
+
+        # Per-instance cache so repeated products from the same store in one
+        # request don't each re-query the stores table for the fallback
+        # currency (see _store_currency / _serialize_products below).
+        self._store_currency_cache: dict[str, str] = {}
+
+    def _store_currency(self, store_id: str) -> str:
+        """Fallback ISO currency code for a store, used when a product row
+        has none of its own (e.g. the merchant's source has no currency
+        column). Defaults to "USD" only if the store itself has no
+        default_currency set, never hardcoded per-product.
+        """
+        if store_id in self._store_currency_cache:
+            return self._store_currency_cache[store_id]
+        store = self.db.query(Store).filter(Store.id == store_id).first()
+        currency = (getattr(store, "default_currency", None) or "USD") if store else "USD"
+        self._store_currency_cache[store_id] = currency
+        return currency
 
     # ---------------------------------
     # Conversation helpers
@@ -1956,6 +1974,12 @@ class ChatService:
                         float(product.price)
                         if product.price is not None
                         else None
+                    ),
+                    # The product's own currency wins; otherwise fall back
+                    # to the store's default rather than assuming USD/"$".
+                    "currency": (
+                        product.currency
+                        or self._store_currency(product.store_id)
                     ),
                     "stock": (
                         float(product.stock)
