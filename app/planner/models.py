@@ -5,7 +5,6 @@ from pydantic import BaseModel, Field
 
 class Intent(str, Enum):
     PRODUCT_SEARCH = "product_search"
-    RECOMMENDATION = "recommendation"
     KNOWLEDGE_SEARCH = "knowledge_search"
     MIXED = "mixed"
     CATALOG_BROWSE = "catalog_browse"
