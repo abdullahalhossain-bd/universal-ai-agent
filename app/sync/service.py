@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from itertools import chain
 from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
@@ -52,7 +53,10 @@ class ProductSyncService:
             result.mapping_validation = validation
             if not validation["ok"]:
                 missing = ", ".join(validation["missing_required"])
-                message = f"schema mapping validation failed; missing required fields: {missing}"
+                message = (
+                    "schema mapping validation failed; "
+                    f"missing required fields: {missing}"
+                )
                 result.errors.append(message)
                 logger.error("%s (store=%s)", message, store_id)
                 return result
@@ -62,8 +66,7 @@ class ProductSyncService:
                 if column and not effective_mapping.get(field):
                     effective_mapping[field] = column
 
-            rows = (raw for raw in (first_raw, *raw_iter))
-            for raw in rows:
+            for raw in chain((first_raw,), raw_iter):
                 try:
                     normalized = normalize_row(raw, effective_mapping)
                 except Exception as exc:
@@ -226,7 +229,8 @@ class ProductSyncService:
         if not validation["ok"]:
             missing = ", ".join(validation["missing_required"])
             result.errors.append(
-                f"schema mapping validation failed; missing required fields: {missing}"
+                "schema mapping validation failed; "
+                f"missing required fields: {missing}"
             )
             return result
 
@@ -236,7 +240,7 @@ class ProductSyncService:
                 effective_mapping[field] = column
 
         batch = []
-        for raw in (item for item in (first_raw, *raw_iter)):
+        for raw in chain((first_raw,), raw_iter):
             try:
                 normalized = normalize_row(raw, effective_mapping)
             except Exception as exc:
