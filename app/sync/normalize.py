@@ -5,6 +5,7 @@ entries may be strings or ``{"column": ..., "aliases": [...]}`` objects.
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -13,12 +14,24 @@ _CURRENCY_AND_GROUPING = re.compile(r"[^0-9+\-.,]")
 
 
 def _resolve_column(mapping: dict, field: str) -> str | None:
-    entry = mapping.get(field)
-    if entry is None:
-        entry = mapping.get({"image_url": "image", "product_url": "url"}.get(field, ""))
-    if isinstance(entry, dict):
-        return entry.get("column")
-    return entry
+    # Prefer explicit canonical fields, then support common singular/plural
+    # aliases produced by automatic datasource mapping.
+    aliases = {
+        "image_url": ("image_url", "image", "images"),
+        "product_url": ("product_url", "url"),
+    }
+
+    for key in aliases.get(field, (field,)):
+        entry = mapping.get(key)
+        if entry is None:
+            continue
+        if isinstance(entry, dict):
+            column = entry.get("column")
+        else:
+            column = entry
+        if isinstance(column, str) and column.strip():
+            return column
+    return None
 
 
 def _get(raw: dict, mapping: dict, field: str) -> Any:
@@ -59,6 +72,44 @@ def _as_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _first_image_url(value: Any) -> str | None:
+    """Extract the first image URL from scalar, list, dict, or JSON gallery data."""
+    if value is None:
+        return None
+
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            found = _first_image_url(item)
+            if found:
+                return found
+        return None
+
+    if isinstance(value, dict):
+        for key in ("url", "src", "image_url", "image", "thumbnail"):
+            if key in value:
+                found = _first_image_url(value[key])
+                if found:
+                    return found
+        return None
+
+    text = _as_str(value)
+    if not text:
+        return None
+
+    # Some merchant databases store a gallery as JSON text in one column.
+    if text[:1] in "[{":
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed = None
+        if parsed is not None:
+            found = _first_image_url(parsed)
+            if found:
+                return found
+
+    return text
 
 
 def _normalize_attribute_value(value: Any) -> Any:
@@ -105,7 +156,7 @@ def normalize_row(raw: dict, mapping: dict) -> dict | None:
         "price": _as_float(_get(raw, mapping, "price")),
         "stock": _as_float(_get(raw, mapping, "stock")),
         "category": _as_str(_get(raw, mapping, "category")),
-        "image_url": _as_str(_get(raw, mapping, "image_url")),
+        "image_url": _first_image_url(_get(raw, mapping, "image_url")),
         "product_url": _as_str(_get(raw, mapping, "product_url")),
         "attributes": _extract_attributes(raw, mapping),
     }
