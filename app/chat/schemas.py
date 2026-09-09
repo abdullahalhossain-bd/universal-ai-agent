@@ -23,6 +23,8 @@ class ChatResponse(BaseModel):
 
     sources: list[dict] = []
 
+    interaction_id: str | None = None
+
 
 class ImageUploadResponse(BaseModel):
 
