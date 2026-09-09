@@ -1,25 +1,45 @@
 """Deterministic, merchant-data-driven recommendation ranking."""
 from __future__ import annotations
 
+import difflib
 import re
 from typing import Iterable, Mapping
 
 _BEST_CUES = {"best", "top", "recommend", "recommended", "suggest", "suggestion", "ভালো", "সেরা", "ভাল", "সর্বোত্তম", "সাজেস্ট", "রিকমেন্ড"}
 _PERFORMANCE_CUES = {"performance", "powerful", "fast", "speed", "পারফরম্যান্স", "শক্তিশালী", "দ্রুত"}
-_VALUE_CUES = {"value", "worth", "budget", "affordable", "দাম", "বাজেট", "সাশ্রয়ী", "সাশ্রয়ী"}
-_PREMIUM_CUES = {"premium", "flagship", "luxury", "প্রিমিয়াম", "প্রিমিয়াম"}
-_POPULAR_CUES = {"popular", "bestseller", "best-seller", "বেস্টসেলার", "জনপ্রিয়", "জনপ্রিয়"}
+_VALUE_CUES = {"value", "worth", "budget", "affordable", "দাম", "বাজেট", "সাশ্রয়ী"}
+_PREMIUM_CUES = {"premium", "flagship", "luxury", "প্রিমিয়াম"}
+_POPULAR_CUES = {"popular", "bestseller", "best-seller", "বেস্টসেলার", "জনপ্রিয়"}
+_ALL_CUES = _BEST_CUES | _PERFORMANCE_CUES | _VALUE_CUES | _PREMIUM_CUES | _POPULAR_CUES
 
 
 def _tokens(text: str) -> list[str]:
     return [t for t in re.split(r"[^\w\u0980-\u09ff.+#%-]+", text.casefold()) if len(t) > 1]
 
 
+def _fuzzy_cue_matches(tokens, cues: set[str]) -> set[str]:
+    """Match tokens against known cue words, tolerating small typos or
+    garbled mixed-script input (e.g. a stray Latin letter inside an
+    otherwise Bengali word from phonetic-keyboard input), not just exact
+    membership.
+    """
+    matched: set[str] = set()
+    for token in tokens:
+        if token in cues:
+            matched.add(token)
+            continue
+        close = difflib.get_close_matches(token, cues, n=1, cutoff=0.7)
+        if close:
+            matched.add(token)
+    return matched
+
+
 def is_recommendation_query(query: str) -> bool:
     q = query.casefold()
-    tokens = set(_tokens(q))
-    return bool(tokens & (_BEST_CUES | _PERFORMANCE_CUES | _VALUE_CUES | _PREMIUM_CUES | _POPULAR_CUES) or any(x in q for x in ("best seller", "best-seller", "সবচেয়ে ভালো", "সবচেয়ে ভালো")))
-
+    tokens = _tokens(q)
+    if _fuzzy_cue_matches(tokens, _ALL_CUES):
+        return True
+    return any(x in q for x in ("best seller", "best-seller", "সবচেয়ে ভালো"))
 
 def _attribute_text(product) -> str:
     attrs = getattr(product, "attributes", None) or {}
@@ -129,6 +149,6 @@ def rank_products(products: Iterable, query: str, behavior_scores: Mapping[str, 
 
         quality_signal = rating_signal.get(id(p), 0.0)
         evidence_signal = max(quality_signal, popularity_evidence)
-        return relevance * .42 + evidence_signal * .23 + behavior * .15 + price_value(p) * .12 + completeness * .06 + stock_signal * .02
+        return relevance * .55 + evidence_signal * .20 + behavior * .12 + price_value(p) * .06 + completeness * .05 + stock_signal * .02
 
     return sorted(items, key=lambda p: (-score(p), str(getattr(p, "name", "")).casefold()))
