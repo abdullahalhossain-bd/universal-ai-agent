@@ -76,14 +76,7 @@
     opts = opts || {};
     var interactionId = opts.interaction_id || (lastInteraction && lastInteraction.interaction_id);
     if (!interactionId) return false;
-    var payload = {
-      interaction_id: interactionId,
-      event_type: eventType,
-      product_id: opts.product_id || (lastInteraction && lastInteraction.product_ids && lastInteraction.product_ids[0]) || null,
-      conversation_id: opts.conversation_id || (lastInteraction && lastInteraction.conversation_id) || conversationId || null,
-      value: typeof opts.value === "number" ? opts.value : null,
-      metadata: opts.metadata || {},
-    };
+    var payload = { interaction_id: interactionId, event_type: eventType, product_id: opts.product_id || (lastInteraction && lastInteraction.product_ids && lastInteraction.product_ids[0]) || null, conversation_id: opts.conversation_id || (lastInteraction && lastInteraction.conversation_id) || conversationId || null, value: typeof opts.value === "number" ? opts.value : null, metadata: opts.metadata || {} };
     try { fetch(API_BASE + "/v1/behavior/events", { method: "POST", headers: { "content-type": "application/json", "x-api-key": API_KEY }, body: JSON.stringify(payload), keepalive: true }).catch(function () {}); } catch (_) {}
     return true;
   }
@@ -104,32 +97,19 @@
       var card = document.createElement("article"); card.className = "product";
       var image = safeUrl(p.image_url || p.image || p.main_image || p.thumbnail);
       if (image) {
-        var img = document.createElement("img");
-        img.className = "product-image"; img.src = image; img.alt = p.name || "Product"; img.loading = "lazy";
-        img.addEventListener("error", function () { var fallback = document.createElement("div"); fallback.className = "product-image-fallback"; fallback.textContent = "ছবি পাওয়া যাচ্ছে না"; img.replaceWith(fallback); });
-        card.appendChild(img);
-      } else {
-        var fallback = document.createElement("div"); fallback.className = "product-image-fallback"; fallback.textContent = "ছবি পাওয়া যাচ্ছে না"; card.appendChild(fallback);
-      }
+        var img = document.createElement("img"); img.className = "product-image"; img.src = image; img.alt = p.name || "Product"; img.loading = "lazy";
+        img.addEventListener("error", function () { var fallback = document.createElement("div"); fallback.className = "product-image-fallback"; fallback.textContent = "ছবি পাওয়া যাচ্ছে না"; img.replaceWith(fallback); }); card.appendChild(img);
+      } else { var fallback = document.createElement("div"); fallback.className = "product-image-fallback"; fallback.textContent = "ছবি পাওয়া যাচ্ছে না"; card.appendChild(fallback); }
       var body = document.createElement("div"); body.className = "product-body";
       var option = document.createElement("button"); option.className = "product-option"; option.type = "button"; option.setAttribute("aria-label", "এই product সম্পর্কে জানতে চাই");
       var row = document.createElement("span"); row.className = "product-option-row";
       var number = document.createElement("span"); number.className = "product-number"; number.textContent = String(index + 1); row.appendChild(number);
       var name = document.createElement("span"); name.className = "product-name"; name.textContent = p.name || p.title || "Product"; row.appendChild(name);
-      option.appendChild(row); option.addEventListener("click", function () { askAboutProduct(p); });
-      body.appendChild(option);
+      option.appendChild(row); option.addEventListener("click", function () { askAboutProduct(p); }); body.appendChild(option);
       var meta = document.createElement("div"); meta.className = "product-meta";
       var price = document.createElement("span"); price.className = "price"; price.textContent = money(p.price, p.currency_symbol || p.currency_code || p.currency); meta.appendChild(price);
-      var stock = document.createElement("span");
-      var stockNumber = Number(p.stock);
-      stock.className = "stock" + (p.stock !== null && p.stock !== undefined && Number.isFinite(stockNumber) && stockNumber <= 0 ? " out" : " unknown");
-      stock.textContent = p.stock === null || p.stock === undefined || !Number.isFinite(stockNumber) ? "স্টক জানা নেই" : (stockNumber > 0 ? "স্টকে আছে" : "স্টক শেষ");
-      meta.appendChild(stock); body.appendChild(meta);
-      if (p.rating !== null && p.rating !== undefined) {
-        var ratingValue = Number(p.rating); var rating = document.createElement("div"); rating.className = "rating";
-        rating.textContent = "★ " + (Number.isFinite(ratingValue) ? ratingValue.toFixed(1) : String(p.rating)) + (p.review_count ? " · " + Number(p.review_count).toLocaleString(undefined) + "টি review" : "");
-        body.appendChild(rating);
-      }
+      var stock = document.createElement("span"); var stockNumber = Number(p.stock); stock.className = "stock" + (p.stock !== null && p.stock !== undefined && Number.isFinite(stockNumber) && stockNumber <= 0 ? " out" : " unknown"); stock.textContent = p.stock === null || p.stock === undefined || !Number.isFinite(stockNumber) ? "স্টক জানা নেই" : (stockNumber > 0 ? "স্টকে আছে" : "স্টক শেষ"); meta.appendChild(stock); body.appendChild(meta);
+      if (p.rating !== null && p.rating !== undefined) { var ratingValue = Number(p.rating); var rating = document.createElement("div"); rating.className = "rating"; rating.textContent = "★ " + (Number.isFinite(ratingValue) ? ratingValue.toFixed(1) : String(p.rating)) + (p.review_count ? " · " + Number(p.review_count).toLocaleString(undefined) + "টি review" : ""); body.appendChild(rating); }
       var actions = document.createElement("div"); actions.className = "actions";
       var url = safeUrl(p.product_url || p.url || p.link);
       var link = document.createElement("a"); link.className = "action primary" + (url ? "" : " disabled"); link.textContent = url ? "Product দেখুন" : "Link নেই";
@@ -146,7 +126,8 @@
   function friendlyError(status) { if (status === 401 || status === 403) return "দুঃখিত, এই serviceটি এখন আপনার store-এর জন্য available নেই।"; if (status === 413) return "ছবিটি একটু বড় হয়েছে। ছোট একটি image পাঠান।"; if (status === 429) return "একটু বেশি request হয়ে গেছে 😊 কিছুক্ষণ পর আবার চেষ্টা করুন।"; if (status >= 500) return "দুঃখিত, আমাদের service-এ সাময়িক সমস্যা হচ্ছে। একটু পরে আবার চেষ্টা করুন।"; return "দুঃখিত, এখন উত্তর দিতে সমস্যা হচ্ছে। একটু পরে আবার চেষ্টা করুন।"; }
 
   function uploadImage(file) {
-    if (!file || sending) return; setSending(true); preview.classList.add("show"); previewName.textContent = "ছবি আপলোড হচ্ছে…";
+    if (!file || sending) return;
+    setSending(true); preview.classList.add("show"); previewName.textContent = "ছবি আপলোড হচ্ছে…";
     var form = new FormData(); form.append("file", file); if (conversationId) form.append("conversation_id", conversationId);
     fetch(API_BASE + "/v1/images", { method: "POST", headers: { "x-api-key": API_KEY }, body: form })
       .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
@@ -159,7 +140,12 @@
 
   function startPolling() {
     if (!conversationId || pollingTimer) return;
-    pollingTimer = setInterval(function () { fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversationId), { headers: { "x-api-key": API_KEY } }).then(function (r) { if (!r.ok) return null; return r.json(); }).then(function (data) { if (!data || !Array.isArray(data.messages)) return; data.messages.forEach(function (m) { if (m.role !== "merchant" || !m.id || m.id === lastMerchantMessageId) return; lastMerchantMessageId = m.id; addMessage("merchant", "Store team: " + (m.content || "")); }); }).catch(function () {}); }, 5000);
+    pollingTimer = setInterval(function () {
+      fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversationId), { headers: { "x-api-key": API_KEY } })
+        .then(function (r) { if (!r.ok) return null; return r.json(); })
+        .then(function (data) { if (!data || !Array.isArray(data.messages)) return; data.messages.forEach(function (m) { if (m.role !== "merchant" || !m.id || m.id === lastMerchantMessageId) return; lastMerchantMessageId = m.id; addMessage("merchant", "Store team: " + (m.content || "")); }); })
+        .catch(function () {});
+    }, 5000);
   }
   function stopPolling() { if (pollingTimer) { clearInterval(pollingTimer); pollingTimer = null; } }
 
