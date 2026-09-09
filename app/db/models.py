@@ -123,7 +123,16 @@ class QueryEvent(Base):
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)
-    session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    query: Mapped[str] = mapped_column(Text, nullable=False)
-    intent: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    message: Mapped[str] = mapped_column(String(500), nullable=False)
+    intent: Mapped[str] = mapped_column(String(30), nullable=False)
+    matched_term: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    result_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    had_results: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+
+class LearnedVocabulary(Base):
+    __tablename__ = "learned_vocabulary"
+    term: Mapped[str] = mapped_column(String(120), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    resolved_value: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
