@@ -19,6 +19,12 @@ class ProductQueryService:
             column = self.mapping.get(field)
             return row.get(column) if column else None
 
+        attributes = {}
+        for semantic_name, column in (self.mapping.get("attributes") or {}).items():
+            value = row.get(column)
+            if value is not None:
+                attributes[semantic_name] = value
+
         return UniversalProduct(
             id=str(get("id")),
             name=str(get("name")),
@@ -47,5 +53,6 @@ class ProductQueryService:
             images=get("images"),
             created_at=get("created_at"),
             updated_at=get("updated_at"),
+            attributes=attributes,
             raw_data=dict(row),
         )
