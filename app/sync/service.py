@@ -71,11 +71,14 @@ class ProductSyncService:
                     normalized = normalize_row(raw, effective_mapping)
                 except Exception as exc:
                     result.skipped += 1
+                    result.record_quality(None)
                     result.errors.append(f"normalize failed: {exc}")
                     continue
                 if normalized is None:
                     result.skipped += 1
+                    result.record_quality(None)
                     continue
+                result.record_quality(normalized)
                 seen.add(normalized["id"])
                 batch.append(normalized)
                 if len(batch) >= self.batch_size:
@@ -245,11 +248,14 @@ class ProductSyncService:
                 normalized = normalize_row(raw, effective_mapping)
             except Exception as exc:
                 result.skipped += 1
+                result.record_quality(None)
                 result.errors.append(f"normalize failed: {exc}")
                 continue
             if normalized is None:
                 result.skipped += 1
+                result.record_quality(None)
                 continue
+            result.record_quality(normalized)
             batch.append(normalized)
             if len(batch) >= self.batch_size:
                 self._stock_only_upsert(store_id, batch, result)
