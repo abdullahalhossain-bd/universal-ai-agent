@@ -1,10 +1,4 @@
-"""Per-store catalog vocabulary, including merchant-defined attributes.
-
-This is a fallback/search-optimization layer, not the source of semantic
-understanding. Attribute keys and observed values are harvested from each
-merchant's own catalog so new fields such as RAM, fabric, warranty or width
-do not require platform code changes.
-"""
+"""Per-store catalog vocabulary and merchant-defined attribute schema."""
 from __future__ import annotations
 
 import json
@@ -14,15 +8,22 @@ from sqlalchemy import distinct, text
 from sqlalchemy.orm import Session
 
 from app.core.redis import redis_client
-from app.db.models import Product
+from app.db.models import DataSource, Product
 
 _CACHE_TTL_SECONDS = 6 * 60 * 60
 _CACHE_KEY_PREFIX = "store_vocab"
 _MIN_TOKEN_LEN = 2
 _GENERIC_NAME_NOISE = {
     "the", "and", "for", "with", "new", "pcs", "pack", "set", "combo",
-    "item", "items", "size", "color", "colour", "model",
 }
+
+
+class StoreVocabulary(set):
+    """Set-compatible vocabulary carrying schema metadata for the planner."""
+
+    def __init__(self, values=(), attribute_schema=None):
+        super().__init__(values)
+        self.attribute_schema = attribute_schema or {}
 
 
 def _tokenize(text_value: str | None) -> set[str]:
@@ -40,7 +41,44 @@ def _cache_key(store_id: str) -> str:
     return f"{_CACHE_KEY_PREFIX}:{store_id}"
 
 
-def _collect_from_db(db: Session, store_id: str) -> set[str]:
+def _normalize_attribute_schema(mapping: dict | None) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for key, definition in ((mapping or {}).get("attributes") or {}).items():
+        name = str(key).strip().lower()
+        if not name:
+            continue
+        column = definition.get("column") if isinstance(definition, dict) else definition
+        aliases = definition.get("aliases", []) if isinstance(definition, dict) else []
+        if isinstance(aliases, str):
+            aliases = [aliases]
+        candidates = [name, str(column or "").strip()]
+        candidates.extend(str(alias).strip() for alias in aliases if str(alias).strip())
+        result[name] = list(dict.fromkeys(
+            candidate.casefold() for candidate in candidates if candidate
+        ))
+    return result
+
+
+def _collect_schema(db: Session, store_id: str) -> dict[str, list[str]]:
+    schema: dict[str, list[str]] = {}
+    try:
+        sources = (
+            db.query(DataSource.mapping)
+            .filter(
+                DataSource.store_id == store_id,
+                DataSource.active.is_(True),
+            )
+            .all()
+        )
+        for (mapping,) in sources:
+            for key, aliases in _normalize_attribute_schema(mapping).items():
+                schema[key] = list(dict.fromkeys(schema.get(key, []) + aliases))
+    except Exception:
+        pass
+    return schema
+
+
+def _collect_from_db(db: Session, store_id: str, schema: dict[str, list[str]]) -> set[str]:
     vocabulary: set[str] = set()
 
     categories = (
@@ -55,9 +93,10 @@ def _collect_from_db(db: Session, store_id: str) -> set[str]:
     for (name,) in names:
         vocabulary.update(_tokenize(name))
 
-    # Dynamic attributes are stored as JSON. Read them with a raw SELECT so
-    # this vocabulary layer remains compatible with databases/migrations
-    # where the ORM model is being rolled out independently.
+    for aliases in schema.values():
+        for alias in aliases:
+            vocabulary.update(_tokenize(alias))
+
     try:
         rows = db.execute(
             text("SELECT attributes FROM products WHERE store_id = :store_id"),
@@ -77,28 +116,36 @@ def _collect_from_db(db: Session, store_id: str) -> set[str]:
                 if isinstance(value, (str, int, float, bool)):
                     vocabulary.update(_tokenize(str(value)))
     except Exception:
-        # Older databases without the migration still get normal catalog
-        # vocabulary; dynamic attributes simply remain unavailable.
         pass
 
     return vocabulary
 
 
-async def get_store_vocabulary(db: Session, store_id: str) -> set[str]:
+async def get_store_vocabulary(db: Session, store_id: str) -> StoreVocabulary:
     key = _cache_key(store_id)
     try:
         cached = await redis_client.get(key)
         if cached is not None:
-            return set(json.loads(cached))
+            payload = json.loads(cached)
+            if isinstance(payload, dict):
+                return StoreVocabulary(payload.get("terms", []), payload.get("schema", {}))
+            # Backward-compatible cache created by older versions.
+            if isinstance(payload, list):
+                return StoreVocabulary(payload)
     except Exception:
         pass
 
-    vocabulary = _collect_from_db(db, store_id)
+    schema = _collect_schema(db, store_id)
+    vocabulary = _collect_from_db(db, store_id, schema)
     try:
-        await redis_client.set(key, json.dumps(sorted(vocabulary), ensure_ascii=False), ex=_CACHE_TTL_SECONDS)
+        await redis_client.set(
+            key,
+            json.dumps({"terms": sorted(vocabulary), "schema": schema}, ensure_ascii=False),
+            ex=_CACHE_TTL_SECONDS,
+        )
     except Exception:
         pass
-    return vocabulary
+    return StoreVocabulary(vocabulary, schema)
 
 
 async def invalidate_store_vocabulary(store_id: str) -> None:
