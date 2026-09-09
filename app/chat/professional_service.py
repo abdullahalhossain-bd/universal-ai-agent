@@ -6,6 +6,7 @@ import uuid
 from urllib.parse import urljoin
 
 from app.chat.dynamic_service import DynamicAttributeChatService
+from app.chat.intent_semantics import classify_product_link_request, parse_llm_link_intent
 from app.products.recommendation import is_recommendation_query
 
 
@@ -49,6 +50,35 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
                 return value
         return None
 
+    async def _detect_product_link_request(self, message: str, has_product_context: bool) -> bool:
+        """Use cheap semantic signals first and the existing LLM stack only when ambiguous."""
+        local = classify_product_link_request(message)
+        if local is not None:
+            return local
+        if not has_product_context:
+            return False
+        try:
+            response_service = self._shared_llm_stack()
+            generator = getattr(response_service, "llm_generator", None)
+            router = getattr(generator, "provider_router", None)
+            if router is None:
+                return False
+            result = await router.generate(messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Classify whether the user is asking for the purchase/product page, "
+                        "buying location, ordering destination, or product URL of a product. "
+                        "Return only TRUE or FALSE. Do not classify store office/location, shipping, "
+                        "delivery, return, refund, or generic knowledge questions as TRUE."
+                    ),
+                },
+                {"role": "user", "content": message[:1000]},
+            ])
+            return parse_llm_link_intent(str(result.get("text", ""))) is True
+        except Exception:
+            return False
+
     @staticmethod
     def _resolve_media_url(value, base_url: str | None = None) -> str | None:
         """Return a browser-loadable absolute HTTP(S) media URL when possible."""
@@ -83,8 +113,6 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
             product = by_id.get(product_id) if product_id else None
             payload = dict(item)
             if product is not None:
-                # Once the exact DB row is found, media comes only from that row.
-                # Never borrow another product's image or URL.
                 db_image = getattr(product, "image_url", None)
                 db_product_url = getattr(product, "product_url", None)
                 payload["id"] = str(product.id)
@@ -106,7 +134,6 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
 
     @staticmethod
     def _professional_result_message(products: list[dict]) -> str:
-        """Generate a short natural response without pretending to be a person."""
         names = [str(p.get("name") or p.get("title") or "product") for p in products[:3]]
         if len(products) == 1:
             return f"জি 😊 {names[0]} পাওয়া যাচ্ছে। নিচের card-এ দাম, stock আর product page-এর option দেখুন।"
@@ -200,7 +227,7 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
                 return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": self._enrich_product_payload(store_id, self.db, self._serialize_products(products)), "sources": []}
             referenced_product = self._get_referenced_product(store_id=store_id, session_id=session.id, message=message)
 
-        is_link = self._is_link_request(message)
+        is_link = await self._detect_product_link_request(message, bool(conversation_id and (referenced_product or self._load_product_context(session.id).get("product_ids"))))
         is_image = self._is_image_request(message)
         is_explanation = self._is_recommendation_explanation(message)
 
