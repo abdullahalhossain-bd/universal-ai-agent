@@ -87,15 +87,6 @@ def _extract_attributes(raw: dict, mapping: dict) -> dict[str, Any]:
     return result
 
 
-def _attribute_search_text(attributes: dict[str, Any]) -> str:
-    parts = []
-    for key, value in attributes.items():
-        parts.append(str(key))
-        if isinstance(value, (str, int, float, bool)):
-            parts.append(str(value))
-    return " | ".join(parts)
-
-
 def normalize_row(raw: dict, mapping: dict) -> dict | None:
     raw_id = _get(raw, mapping, "id")
     raw_name = _get(raw, mapping, "name")
@@ -107,20 +98,14 @@ def normalize_row(raw: dict, mapping: dict) -> dict | None:
     if not product_id or not name:
         return None
 
-    attributes = _extract_attributes(raw, mapping)
-    description = _as_str(_get(raw, mapping, "description"))
-    attribute_text = _attribute_search_text(attributes)
-    if attribute_text:
-        description = f"{description} | {attribute_text}" if description else attribute_text
-
     return {
         "id": product_id,
         "name": name,
-        "description": description,
+        "description": _as_str(_get(raw, mapping, "description")),
         "price": _as_float(_get(raw, mapping, "price")),
         "stock": _as_float(_get(raw, mapping, "stock")),
         "category": _as_str(_get(raw, mapping, "category")),
         "image_url": _as_str(_get(raw, mapping, "image_url")),
         "product_url": _as_str(_get(raw, mapping, "product_url")),
-        "attributes": attributes,
+        "attributes": _extract_attributes(raw, mapping),
     }
