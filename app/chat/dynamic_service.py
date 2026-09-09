@@ -42,8 +42,6 @@ class DynamicAttributeChatService(ChatService):
         return groups
 
     def _save_product_context(self, session_id, products, query, filters=None, offset=0):
-        # Base ChatService persists filter metadata for pagination. Ensure
-        # dynamic attributes are included in that metadata as well.
         if filters is not None and not isinstance(filters, dict):
             filters = {
                 "min_price": getattr(filters, "min_price", None),
@@ -79,17 +77,12 @@ class DynamicAttributeChatService(ChatService):
         if filters.in_stock:
             query = query.filter(or_(Product.stock.is_(None), Product.stock > 0))
 
-        # Every requested merchant-defined attribute is an AND predicate.
         query = apply_attribute_filters(query, attributes, Product.attributes)
 
-        # Product/category terms remain normal text search and are AND-ed
-        # with the structured attribute predicates.
         groups = self._build_product_text_conditions(filters.product_name)
         if groups:
             query = query.filter(and_(*groups))
 
-        # Attribute constraints are authoritative; never broaden to a
-        # text-only query that could violate a customer's requested specs.
         return query.order_by(Product.name.asc()).limit(10).all()
 
     def _get_next_products(self, store_id, query_text, filters_data, previous_ids, batch_size=5):
@@ -109,10 +102,14 @@ class DynamicAttributeChatService(ChatService):
         if isinstance(attributes, dict):
             query = apply_attribute_filters(query, attributes, Product.attributes)
 
+        # Attribute-only searches must not fall back to the original natural
+        # language query as text search; doing so would turn "8GB memory"
+        # into a name/description constraint and defeat structured filtering.
         product_name = filters_data.get("product_name")
-        groups = self._build_product_text_conditions(product_name or query_text)
-        if groups:
-            query = query.filter(and_(*groups))
+        if product_name:
+            groups = self._build_product_text_conditions(product_name)
+            if groups:
+                query = query.filter(and_(*groups))
 
         if previous_ids:
             query = query.filter(~Product.id.in_(previous_ids))
