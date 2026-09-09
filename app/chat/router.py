@@ -1,9 +1,10 @@
 from uuid import uuid4
+import logging
+import uuid
 
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
-from app.auth.models import APIKey
 from app.chat.intelligent_service import IntelligentCommerceChatService
 from app.chat.dynamic_service import DynamicAttributeChatService
 from app.chat.schemas import ChatRequest, ChatResponse
@@ -15,16 +16,14 @@ from app.db.database import get_db
 from app.db.models import QueryEvent, Store
 
 router = APIRouter(prefix="/v1/chat", tags=["Chat"])
+logger = logging.getLogger("app.chat.analytics")
 
 
 def _log_query_event(db: Session, store_id: str, message: str, result: dict) -> None:
-    """Record exactly one customer chat query without affecting the response."""
-    import logging
-    import uuid
-    logger = logging.getLogger("app.chat.analytics")
+    """Record a query only for chat branches that did not already log one."""
     try:
-        products = result.get("products") or [] if isinstance(result, dict) else []
-        intent = "product_search" if products else (result.get("type") if isinstance(result, dict) else None) or "general_question"
+        products = (result.get("products") or []) if isinstance(result, dict) else []
+        intent = (result.get("type") if isinstance(result, dict) else None) or ("product_search" if products else "general_question")
         db.add(QueryEvent(
             id=str(uuid.uuid4()),
             store_id=store_id,
@@ -81,6 +80,6 @@ async def chat(
 
     service = IntelligentCommerceChatService(db=db)
     result = await service.handle(store_id=store.id, request=request)
-    if isinstance(result, dict):
+    if isinstance(result, dict) and not result.get("interaction_id"):
         _log_query_event(db, store.id, original_message, result)
     return result
