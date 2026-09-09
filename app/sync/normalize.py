@@ -74,6 +74,21 @@ def _as_str(value: Any) -> str | None:
     return text or None
 
 
+def _as_currency(value: Any) -> str | None:
+    """Normalize a merchant currency column to an ISO-4217-shaped code.
+
+    Accepts "usd", " BDT ", "$" style symbols are rejected (too ambiguous
+    to map reliably) — only alphabetic codes are kept, uppercased.
+    """
+    text = _as_str(value)
+    if not text:
+        return None
+    text = text.strip().upper()
+    if not text.isalpha() or not (2 <= len(text) <= 10):
+        return None
+    return text
+
+
 def _first_image_url(value: Any) -> str | None:
     """Extract the first image URL from scalar, list, dict, or JSON gallery data."""
     if value is None:
@@ -158,5 +173,6 @@ def normalize_row(raw: dict, mapping: dict) -> dict | None:
         "category": _as_str(_get(raw, mapping, "category")),
         "image_url": _first_image_url(_get(raw, mapping, "image_url")),
         "product_url": _as_str(_get(raw, mapping, "product_url")),
+        "currency": _as_currency(_get(raw, mapping, "currency")),
         "attributes": _extract_attributes(raw, mapping),
     }
