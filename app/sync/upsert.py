@@ -10,7 +10,7 @@ from app.db.models import Product
 from app.sync.result import SyncResult
 
 _TRACKED_FIELDS = (
-    "name", "description", "category", "price", "stock", "image_url",
+    "name", "description", "category", "price", "currency", "stock", "image_url",
     "product_url", "source_datasource_id", "attributes",
 )
 
@@ -70,6 +70,7 @@ def upsert_products(db: Session, store_id, products, *, batch_size=100, result=N
                 description=data.get("description"),
                 category=data.get("category"),
                 price=data.get("price"),
+                currency=data.get("currency"),
                 stock=data.get("stock"),
                 image_url=data.get("image_url"),
                 product_url=data.get("product_url"),
