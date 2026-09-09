@@ -48,19 +48,29 @@ class ProductSyncService:
                 first_raw = next(raw_iter)
             except StopIteration:
                 result.mapping_validation = {"ok": True, "mapping": {}, "missing_required": [], "mapped_fields": [], "validated": False, "reason": "no rows to validate"}
+                result._issue("source", {"reason": "connector returned zero rows"}, issue_type="empty_source")
                 return result
             validation = validate_mapping(first_raw, mapping); result.mapping_validation = validation
             if not validation["ok"]:
-                result.errors.append("schema mapping validation failed; missing required fields: " + ", ".join(validation["missing_required"])); return result
+                result.errors.append("schema mapping validation failed; missing required fields: " + ", ".join(validation["missing_required"]))
+                result._issue("schema", {"reason": "mapping validation failed", "missing_required": validation["missing_required"]}, issue_type="mapping_validation")
+                return result
             effective_mapping = dict(mapping or {})
             effective_mapping.update({f: c for f, c in validation["mapping"].items() if c and not effective_mapping.get(f)})
             for raw in chain((first_raw,), raw_iter):
                 try:
                     normalized = normalize_row(raw, effective_mapping)
                 except Exception as exc:
-                    result.skipped += 1; result.record_quality(None); result.errors.append(f"normalize failed: {exc}"); continue
+                    result.skipped += 1
+                    result.data_quality["skipped_rows"] += 1
+                    result._issue("normalization", {"reason": str(exc), "source_row": str(raw)[:4000]}, issue_type="normalization_error")
+                    result.errors.append(f"normalize failed: {exc}")
+                    continue
                 if normalized is None:
-                    result.skipped += 1; result.record_quality(None); continue
+                    result.skipped += 1
+                    result.data_quality["skipped_rows"] += 1
+                    result._issue("normalization", {"reason": "row could not be normalized", "source_row": str(raw)[:4000]}, issue_type="normalization_skipped")
+                    continue
                 pid = str(normalized["id"])
                 if pid in seen:
                     result.data_quality["source_rows"] += 1; result.record_duplicate(pid); result.skipped += 1; continue
@@ -76,18 +86,32 @@ class ProductSyncService:
 
             source_rows = int(result.data_quality.get("source_rows", 0))
             existing_count = 0
+            policy = mapping.get("_sync_policy") if isinstance(mapping, dict) else {}
+            policy = policy if isinstance(policy, dict) else {}
+            try:
+                threshold = min(1.0, max(0.0, float(policy.get("completeness_threshold", 0.50))))
+            except (TypeError, ValueError):
+                threshold = 0.50
+            try:
+                minimum_size = max(0, int(policy.get("completeness_minimum_size", 20)))
+            except (TypeError, ValueError):
+                minimum_size = 20
+            guard_enabled = bool(policy.get("completeness_guard_enabled", True))
             if full_sync and source_datasource_id:
                 existing_count = int(self.db.query(Product).filter(
                     Product.store_id == store_id,
                     Product.source_datasource_id == source_datasource_id,
                     Product.is_active.is_(True),
                 ).count())
-            guard_blocked = bool(full_sync and existing_count >= 20 and source_rows < int(existing_count * 0.50))
+            guard_blocked = bool(guard_enabled and full_sync and existing_count >= minimum_size and source_rows < int(existing_count * threshold))
             result.data_quality["completeness_guard"] = {
+                "enabled": guard_enabled,
                 "blocked": guard_blocked,
+                "threshold": threshold,
+                "minimum_catalog_size": minimum_size,
                 "source_rows": source_rows,
                 "previous_active_products": existing_count,
-                "minimum_expected_rows": int(existing_count * 0.50) if existing_count else 0,
+                "minimum_expected_rows": int(existing_count * threshold) if existing_count else 0,
                 "reason": "source returned an unexpectedly small dataset; destructive stale/stock actions were skipped" if guard_blocked else None,
             }
             if full_sync and not guard_blocked:
@@ -130,14 +154,22 @@ class ProductSyncService:
     def refresh_stock(self, store_id, stock_rows, mapping):
         result = SyncResult(store_id=store_id, issue_sink=self._issue_sink()); raw_iter = iter(stock_rows)
         try: first_raw = next(raw_iter)
-        except StopIteration: return result
+        except StopIteration:
+            result._issue("source", {"reason": "connector returned zero stock rows"}, issue_type="empty_source")
+            return result
         validation = validate_mapping(first_raw, mapping); result.mapping_validation = validation
         if not validation["ok"]:
-            result.errors.append("schema mapping validation failed; missing required fields: " + ", ".join(validation["missing_required"])); return result
+            result.errors.append("schema mapping validation failed; missing required fields: " + ", ".join(validation["missing_required"]))
+            result._issue("schema", {"reason": "stock mapping validation failed", "missing_required": validation["missing_required"]}, issue_type="mapping_validation")
+            return result
         effective_mapping = dict(mapping or {}); effective_mapping.update({f: c for f, c in validation["mapping"].items() if c and not effective_mapping.get(f)}); batch = []
         for raw in chain((first_raw,), raw_iter):
-            normalized = normalize_row(raw, effective_mapping)
-            if normalized is None: result.skipped += 1; continue
+            try:
+                normalized = normalize_row(raw, effective_mapping)
+            except Exception as exc:
+                result.skipped += 1; result._issue("normalization", {"reason": str(exc), "source_row": str(raw)[:4000]}, issue_type="normalization_error"); continue
+            if normalized is None:
+                result.skipped += 1; result._issue("normalization", {"reason": "row could not be normalized", "source_row": str(raw)[:4000]}, issue_type="normalization_skipped"); continue
             result.record_quality(normalized); batch.append(normalized)
             if len(batch) >= self.batch_size: self._stock_only_upsert(store_id, batch, result); batch = []
         if batch: self._stock_only_upsert(store_id, batch, result)
@@ -147,7 +179,8 @@ class ProductSyncService:
         ids = [p["id"] for p in products]; existing = self.db.query(Product).filter(Product.store_id == store_id, Product.id.in_(ids)).all(); by_id = {r.id: r for r in existing}
         for data in products:
             row = by_id.get(data["id"])
-            if row is None: result.skipped += 1; continue
+            if row is None:
+                result.skipped += 1; result._issue("stock_refresh", {"id": data["id"], "name": data.get("name"), "reason": "product not found in local catalog"}, issue_type="stock_refresh_missing_product"); continue
             if row.stock != data.get("stock"):
                 old = row.stock; row.stock = data.get("stock"); result.updated += 1; result.record_stock_change(row.id, row.name, old, row.stock)
             else: result.unchanged += 1

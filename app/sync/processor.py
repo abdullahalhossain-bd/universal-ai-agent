@@ -184,6 +184,8 @@ async def process_sync(job):
     async def attempt_once():
         attempt[0] += 1; payload = dict(job); payload["_retry_group_id"] = group_id; payload["_retry_attempt"] = attempt[0]; return await _process_once(payload)
     try:
-        return await run_with_retry(attempt_once, attempts=4, base_delay=1.0, max_delay=15.0, logger=logger)
+        # Queue is the authoritative retry layer. Keeping this call to one
+        # execution prevents processor+queue retry multiplication.
+        return await run_with_retry(attempt_once, attempts=1, base_delay=1.0, max_delay=15.0, logger=logger)
     except Exception as exc:
         store_id = job.get("store_id") or job.get("tenant_id") or ""; result = SyncResult(store_id=store_id); result.errors.append(str(exc)); result.data_quality["retry"] = {"retry_group_id": group_id, "attempts": attempt[0], "exhausted": True}; return result

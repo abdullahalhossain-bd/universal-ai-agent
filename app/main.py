@@ -25,6 +25,8 @@ from app.usage.models import UsageRecord
 from app.api.routes.products import router as products_router
 from app.api.routes.datasources import router as datasources_router
 from app.api.routes.sync_issues import router as sync_issues_router
+from app.api.routes.sync_quality import router as sync_quality_router
+from app.api.routes.sync_diff import router as sync_diff_router
 from app.api.routes.stores import router as stores_router
 from app.api.v1.knowledge import router as knowledge_router
 from app.chat.router import router as chat_router
@@ -64,11 +66,6 @@ def _ensure_alembic_baseline():
         if missing_tables: details.append(f"tables={missing_tables}")
         if missing_columns: details.append(f"columns={missing_columns}")
         raise RuntimeError("Alembic version table is missing and the existing schema does not match the active ORM schema; refusing to stamp head: " + "; ".join(details))
-    # Never silently mark an existing database as fully migrated. A missing
-    # alembic_version table is ambiguous: the schema may have skipped data-
-    # changing migrations that the ORM cannot detect (indexes, vector types,
-    # constraints, triggers, etc.). Baseline stamping is an explicit operator
-    # action only.
     if os.getenv("ALLOW_ALEMBIC_BASELINE_STAMP") != "1":
         raise RuntimeError("alembic_version is missing. Run `alembic upgrade head` or explicitly set ALLOW_ALEMBIC_BASELINE_STAMP=1 only after an operator has verified the entire schema.")
     from alembic import command
@@ -121,6 +118,10 @@ app.include_router(billing_router)
 app.include_router(admin_router)
 app.include_router(admin_analytics_router)
 app.include_router(products_router)
+# Register optimized quality/diff routes before the legacy datasource router so
+# the old unbounded quality handler cannot shadow the bounded implementation.
+app.include_router(sync_quality_router)
+app.include_router(sync_diff_router)
 app.include_router(datasources_router)
 app.include_router(sync_issues_router)
 app.include_router(knowledge_router)
