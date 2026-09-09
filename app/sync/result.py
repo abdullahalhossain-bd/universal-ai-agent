@@ -14,6 +14,7 @@ class SyncResult:
     stock_zeroed: int = 0
     skipped: int = 0
     errors: list[str] = field(default_factory=list)
+    mapping_validation: dict | None = None
 
     @property
     def success(self) -> bool:
@@ -30,5 +31,6 @@ class SyncResult:
             "stock_zeroed": self.stock_zeroed,
             "skipped": self.skipped,
             "errors": list(self.errors),
+            "mapping_validation": self.mapping_validation,
             "success": self.success,
         }
