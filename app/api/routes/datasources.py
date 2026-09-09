@@ -1,31 +1,31 @@
-"""Merchant datasource onboarding API."""
+"""Merchant datasource onboarding and sync observability API."""
 from __future__ import annotations
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter,Depends,HTTPException,Query
+from pydantic import BaseModel,Field
 from sqlalchemy.orm import Session
 from app.core.tenant import get_current_store
-from app.core.features import FEATURE_DATABASE_SYNC, require_feature
+from app.core.features import FEATURE_DATABASE_SYNC,require_feature
 from app.core.config import settings
-from app.datasources.redaction import public_datasource_dict, redact_url
-from app.datasources.service import DataSourceService, SUPPORTED_SYNC_TYPES
+from app.datasources.redaction import public_datasource_dict,redact_url
+from app.datasources.service import DataSourceService,SUPPORTED_SYNC_TYPES
 from app.db.database import get_db
-from app.db.models import Product, Store, SyncRun
+from app.db.models import Product,Store,SyncRun
 from app.sync.queue import SyncQueue
 from app.sync.quality import valid_http_url
 from app.sync.url_health import verify_product_urls
 router=APIRouter(prefix="/v1/datasources",tags=["datasources"])
 class CreateDataSourceRequest(BaseModel):
- name:str="default"; connector_type:str; connection_url:str|None=None; api_base_url:str|None=None; table_name:str|None=None; mapping:dict[str,Any]|None=None; active:bool=True; full_sync:bool=True; skip_connection_test:bool=False
+ name:str="default";connector_type:str;connection_url:str|None=None;api_base_url:str|None=None;table_name:str|None=None;mapping:dict[str,Any]|None=None;active:bool=True;full_sync:bool=True;skip_connection_test:bool=False
 class UpdateDataSourceRequest(BaseModel):
- name:str|None=None; connection_url:str|None=None; api_base_url:str|None=None; table_name:str|None=None; mapping:dict[str,Any]|None=None; active:bool|None=None; full_sync:bool|None=None
-class TestConnectionRequest(BaseModel): connector_type:str; connection_url:str|None=None; api_base_url:str|None=None
-class DiscoverRequest(BaseModel): connection_url:str=Field(min_length=1); connector_type:str="postgresql"
+ name:str|None=None;connection_url:str|None=None;api_base_url:str|None=None;table_name:str|None=None;mapping:dict[str,Any]|None=None;active:bool|None=None;full_sync:bool|None=None
+class TestConnectionRequest(BaseModel):connector_type:str;connection_url:str|None=None;api_base_url:str|None=None
+class DiscoverRequest(BaseModel):connection_url:str=Field(min_length=1);connector_type:str="postgresql"
 @router.post("")
 async def create_datasource(payload:CreateDataSourceRequest,db:Session=Depends(get_db),store:Store=Depends(get_current_store)):
  require_feature(store,FEATURE_DATABASE_SYNC)
- try: ds=DataSourceService(db).create(store.id,name=payload.name,connector_type=payload.connector_type,connection_url=payload.connection_url,api_base_url=payload.api_base_url,table_name=payload.table_name,mapping=payload.mapping,active=payload.active,full_sync=payload.full_sync,validate_connection=not payload.skip_connection_test)
- except (ValueError,ConnectionError) as exc:raise HTTPException(400,detail=str(exc)) from exc
+ try:ds=DataSourceService(db).create(store.id,name=payload.name,connector_type=payload.connector_type,connection_url=payload.connection_url,api_base_url=payload.api_base_url,table_name=payload.table_name,mapping=payload.mapping,active=payload.active,full_sync=payload.full_sync,validate_connection=not payload.skip_connection_test)
+ except(ValueError,ConnectionError) as exc:raise HTTPException(400,detail=str(exc)) from exc
  return public_datasource_dict(ds)
 @router.get("")
 def list_datasources(db:Session=Depends(get_db),store:Store=Depends(get_current_store)):
@@ -58,18 +58,17 @@ async def get_sync_quality(datasource_id:str,db:Session=Depends(get_db),store:St
  require_feature(store,FEATURE_DATABASE_SYNC);ds=DataSourceService(db).get(store.id,datasource_id)
  if ds is None:raise HTTPException(404,detail="datasource not found")
  products=db.query(Product).filter(Product.store_id==store.id,Product.source_datasource_id==datasource_id,Product.is_active.is_(True)).all();total=len(products);fields={}
- for field in ("name","price","image_url","product_url"):
-  present=sum(1 for product in products if getattr(product,field,None) not in (None,""));fields[field]={"present":present,"missing":total-present,"coverage_percent":round((present/total)*100,2) if total else 0.0}
- urls=[p.product_url for p in products if p.product_url and valid_http_url(p.product_url)]
- verified=await verify_product_urls(urls[:500],concurrency=20)
- broken=sum(1 for ok in verified.values() if not ok); valid=sum(1 for ok in verified.values() if ok)
- return {"datasource_id":datasource_id,"store_id":store.id,"products":total,"fields":fields,"url_health":{"missing":fields["product_url"]["missing"],"valid_verified":valid,"broken_verified":broken,"verified_sample_size":len(verified),"sample_capped":len(urls)>500},"summary":{"name":fields["name"]["present"],"price":fields["price"]["present"],"image":fields["image_url"]["present"],"url":fields["product_url"]["present"],"missing_price":fields["price"]["missing"],"missing_image":fields["image_url"]["missing"],"missing_url":fields["product_url"]["missing"]}}
+ for f in ("name","price","image_url","product_url"):
+  present=sum(1 for p in products if getattr(p,f,None) not in(None,""));fields[f]={"present":present,"missing":total-present,"coverage_percent":round(present/total*100,2) if total else 0.0}
+ urls=[p.product_url for p in products if p.product_url and valid_http_url(p.product_url)];verified=await verify_product_urls(urls[:500],concurrency=20);broken=sum(not ok for ok in verified.values());valid=sum(bool(ok) for ok in verified.values())
+ latest=db.query(SyncRun).filter(SyncRun.store_id==store.id,SyncRun.datasource_id==datasource_id).order_by(SyncRun.started_at.desc()).first();report=(latest.quality_report if latest else {}) or {};duplicates=((report.get("data_quality") or {}).get("duplicates") or {});invalid=((report.get("data_quality") or {}).get("invalid_data") or {})
+ base=(fields["name"]["coverage_percent"]*.30+fields["price"]["coverage_percent"]*.25+fields["image_url"]["coverage_percent"]*.20+fields["product_url"]["coverage_percent"]*.25);health=max(0,min(100,round(base-min(10,broken*.25)-min(8,duplicates.get("duplicate_id_count",0)*.5+duplicates.get("duplicate_sku_count",0)*.4)-min(10,sum(len(v) for v in invalid.values() if isinstance(v,list))*.2))))
+ return {"datasource_id":datasource_id,"store_id":store.id,"products":total,"health_score":health,"rating":"Excellent" if health>=90 else "Good" if health>=75 else "Fair" if health>=60 else "Poor","fields":fields,"url_health":{"missing":fields["product_url"]["missing"],"valid_verified":valid,"broken_verified":broken,"verified_sample_size":len(verified),"sample_capped":len(urls)>500},"duplicates":duplicates,"invalid_data":invalid,"latest_sync":{"id":latest.id,"status":latest.status,"sync_mode":latest.sync_mode,"created":latest.created,"updated":latest.updated,"unchanged":latest.unchanged,"skipped":latest.skipped,"stale":report.get("stale",{}),"price_changes":report.get("price_changes",{}),"stock_changes":report.get("stock_changes",{}),"schema_drift":report.get("schema_drift",[]),"repair_suggestions":report.get("repair_suggestions",[])} if latest else None}
 @router.get("/{datasource_id}/sync-runs")
 def list_sync_runs(datasource_id:str,limit:int=Query(20,ge=1,le=100),offset:int=Query(0,ge=0),db:Session=Depends(get_db),store:Store=Depends(get_current_store)):
  require_feature(store,FEATURE_DATABASE_SYNC)
  if DataSourceService(db).get(store.id,datasource_id) is None:raise HTTPException(404,detail="datasource not found")
- q=db.query(SyncRun).filter(SyncRun.store_id==store.id,SyncRun.datasource_id==datasource_id).order_by(SyncRun.started_at.desc());total=q.count();items=q.offset(offset).limit(limit).all()
- return {"datasource_id":datasource_id,"count":total,"limit":limit,"offset":offset,"items":[{"id":r.id,"status":r.status,"sync_mode":r.sync_mode,"started_at":r.started_at,"finished_at":r.finished_at,"duration_ms":r.duration_ms,"products_seen":r.products_seen,"created":r.created,"updated":r.updated,"unchanged":r.unchanged,"skipped":r.skipped,"health_score":r.health_score,"reconciliation":r.reconciliation,"error":r.error} for r in items]}
+ q=db.query(SyncRun).filter(SyncRun.store_id==store.id,SyncRun.datasource_id==datasource_id).order_by(SyncRun.started_at.desc());total=q.count();items=q.offset(offset).limit(limit).all();return {"datasource_id":datasource_id,"count":total,"limit":limit,"offset":offset,"items":[{"id":r.id,"status":r.status,"sync_mode":r.sync_mode,"started_at":r.started_at,"finished_at":r.finished_at,"duration_ms":r.duration_ms,"products_seen":r.products_seen,"created":r.created,"updated":r.updated,"unchanged":r.unchanged,"skipped":r.skipped,"health_score":r.health_score,"reconciliation":r.reconciliation,"error":r.error} for r in items]}
 @router.get("/{datasource_id}/sync-runs/{run_id}")
 def get_sync_run(datasource_id:str,run_id:str,db:Session=Depends(get_db),store:Store=Depends(get_current_store)):
  require_feature(store,FEATURE_DATABASE_SYNC);run=db.query(SyncRun).filter(SyncRun.id==run_id,SyncRun.store_id==store.id,SyncRun.datasource_id==datasource_id).first()
@@ -80,7 +79,7 @@ def update_datasource(datasource_id:str,payload:UpdateDataSourceRequest,db:Sessi
  require_feature(store,FEATURE_DATABASE_SYNC)
  try:ds=DataSourceService(db).update(store.id,datasource_id,**payload.model_dump(exclude_unset=True))
  except LookupError as exc:raise HTTPException(404,detail=str(exc)) from exc
- except (ConnectionError,ValueError) as exc:raise HTTPException(400,detail=str(exc)) from exc
+ except(ConnectionError,ValueError) as exc:raise HTTPException(400,detail=str(exc)) from exc
  return public_datasource_dict(ds)
 @router.delete("/{datasource_id}")
 def delete_datasource(datasource_id:str,db:Session=Depends(get_db),store:Store=Depends(get_current_store)):
@@ -108,10 +107,7 @@ async def trigger_sync(datasource_id:str,db:Session=Depends(get_db),store:Store=
  if ds.connector_type!="rest" and not ds.connection_url:raise HTTPException(400,detail="no connection_url configured")
  if ds.connector_type=="rest" and not ds.api_base_url:raise HTTPException(400,detail="no api_base_url configured")
  queue=SyncQueue(settings.redis_url)
- try:
-  message_id=await queue.enqueue(service.build_sync_job(ds))
-  if message_id is None:return {"datasource_id":ds.id,"store_id":store.id,"status":"already_queued","message":"a sync for this datasource is already queued or running"}
+ try:message_id=await queue.enqueue(service.build_sync_job(ds));
  except Exception as exc:raise HTTPException(503,detail="sync queue unavailable") from exc
  finally:await queue.close()
- ds.last_sync_status="queued";ds.last_sync_error=None;db.commit()
- return {"datasource_id":ds.id,"store_id":store.id,"status":"queued","message":"sync queued for durable background processing","queue_message_id":message_id}
+ ds.last_sync_status="queued";ds.last_sync_error=None;db.commit();return {"datasource_id":ds.id,"store_id":store.id,"status":"queued","message":"sync queued for durable background processing","queue_message_id":message_id}
