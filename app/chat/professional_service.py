@@ -17,13 +17,7 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
         if index is not None:
             return index
         normalized = re.sub(r"\s+", " ", message.casefold().strip())
-        aliases = {
-            "তৃতীয়": 3, "তৃতীয়টা": 3, "তৃতীয়টির": 3, "তৃতীয়টার": 3,
-            "তৃতিয়": 3, "তৃতিয়টা": 3, "তৃতিয়টির": 3, "তৃতিয়টার": 3,
-            "তৃতীয়টি": 3, "তৃতিয়টি": 3,
-            "চতুর্থ": 4, "চতুর্থটা": 4, "চতুর্থটির": 4, "চতুর্থটার": 4,
-            "পঞ্চম": 5, "পঞ্চমটা": 5, "পঞ্চমটির": 5, "পঞ্চমটার": 5,
-        }
+        aliases = {"তৃতীয়": 3, "তৃতীয়টা": 3, "তৃতীয়টির": 3, "তৃতীয়টার": 3, "তৃতিয়": 3, "তৃতিয়টা": 3, "তৃতিয়টির": 3, "তৃতিয়টার": 3, "তৃতীয়টি": 3, "তৃতিয়টি": 3, "চতুর্থ": 4, "চতুর্থটা": 4, "চতুর্থটির": 4, "চতুর্থটার": 4, "পঞ্চম": 5, "পঞ্চমটা": 5, "পঞ্চমটির": 5, "পঞ্চমটার": 5}
         for phrase, value in aliases.items():
             if phrase in normalized:
                 return value
@@ -58,15 +52,11 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
             product = by_id.get(str(item.get("id")))
             payload = dict(item)
             if product is not None:
+                # Preserve a usable payload value if the DB row is currently empty.
                 db_image = getattr(product, "image_url", None)
                 db_product_url = getattr(product, "product_url", None)
-                # Do not overwrite a usable search payload with a null/empty DB value.
-                payload["image_url"] = ProfessionalCommerceChatService._resolve_media_url(
-                    db_image or item.get("image_url"), base_url
-                )
-                payload["product_url"] = ProfessionalCommerceChatService._resolve_media_url(
-                    db_product_url or item.get("product_url") or item.get("url"), base_url
-                )
+                payload["image_url"] = ProfessionalCommerceChatService._resolve_media_url(db_image or item.get("image_url"), base_url)
+                payload["product_url"] = ProfessionalCommerceChatService._resolve_media_url(db_product_url or item.get("product_url") or item.get("url"), base_url)
                 payload["url"] = payload["product_url"]
                 payload["stock"] = getattr(product, "stock", item.get("stock"))
                 payload["rating"] = getattr(product, "rating", item.get("rating"))
@@ -94,10 +84,7 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
     @staticmethod
     def _recommendation_has_support(products: list[dict]) -> bool:
         for product in products:
-            rating = product.get("rating")
-            reviews = product.get("review_count")
-            sales = product.get("sales_count")
-            bestseller = product.get("bestseller_score")
+            rating, reviews, sales, bestseller = product.get("rating"), product.get("review_count"), product.get("sales_count"), product.get("bestseller_score")
             try:
                 if rating is not None and float(rating) >= 4.0 and reviews is not None and int(reviews) > 0:
                     return True
@@ -120,14 +107,8 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
         q = re.sub(r"\s+", " ", message.casefold().strip())
         if not q:
             return False
-        question = any(term in q for term in (
-            "ki ki", "what all", "what does", "which", "kon", "konta", "which one",
-            "কি কি", "কী কী", "কোন", "কোনটা", "কোনটায়", "কোনটাতে",
-        ))
-        availability = any(term in q for term in (
-            "ase", "ache", "available", "availability", "features", "feature", "spec", "specs",
-            "আছে", "অ্যাভেইলেবল", "ফিচার", "স্পেসিফিকেশন",
-        ))
+        question = any(term in q for term in ("ki ki", "what all", "what does", "which", "kon", "konta", "which one", "কি কি", "কী কী", "কোন", "কোনটা", "কোনটায়", "কোনটাতে"))
+        availability = any(term in q for term in ("ase", "ache", "available", "availability", "features", "feature", "spec", "specs", "আছে", "অ্যাভেইলেবল", "ফিচার", "স্পেসিফিকেশন"))
         return question and availability
 
     @staticmethod
@@ -143,15 +124,83 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
                 for key, value in attrs.items():
                     if value is None or value == "":
                         continue
-                    label = str(key).replace("_", " ").strip()
-                    parts.append(f"{label}: {value}")
+                    parts.append(f"{str(key).replace('_', ' ').strip()}: {value}")
                     if len(parts) >= 5:
                         break
-            if parts:
-                lines.append(f"{index}. {name} — " + ", ".join(parts))
-            else:
-                lines.append(f"{index}. {name} — বিস্তারিত feature data নেই")
+            lines.append(f"{index}. {name} — " + ", ".join(parts) if parts else f"{index}. {name} — বিস্তারিত feature data নেই")
         return "\n".join(lines)
 
     async def handle(self, store_id: str, request):
-        return await super().handle(store_id, request)
+        message = getattr(request, "message", "").strip()
+        conversation_id = getattr(request, "conversation_id", None)
+
+        if conversation_id and self._is_bare_recommendation(message):
+            session = self._get_or_create_session(store_id, conversation_id)
+            context = self._load_product_context(session.id)
+            if not (context.get("product_ids") or []):
+                self._save_message(session_id=session.id, role="user", content=message)
+                response_message = "অবশ্যই 😊 কোন product বা category-এর মধ্যে best option চান? নামটা বললেই আমি options দেখে দিচ্ছি।"
+                self._save_message(session_id=session.id, role="assistant", content=response_message)
+                self._log_analytics_event(store_id=store_id, message=message, intent="recommendation", result_count=0)
+                return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": [], "sources": []}
+
+        if not conversation_id and self._is_bare_recommendation(message):
+            conversation_id = str(uuid.uuid4())
+            request.conversation_id = conversation_id
+            session = self._get_or_create_session(store_id, conversation_id)
+            self._save_message(session_id=session.id, role="user", content=message)
+            response_message = "অবশ্যই 😊 কোন product বা category-এর মধ্যে best option চান? নামটা বললেই আমি options দেখে দিচ্ছি।"
+            self._save_message(session_id=session.id, role="assistant", content=response_message)
+            self._log_analytics_event(store_id=store_id, message=message, intent="recommendation", result_count=0)
+            return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": [], "sources": []}
+
+        session = None
+        referenced_product = None
+        if conversation_id:
+            session = self._get_or_create_session(store_id, conversation_id)
+            context = self._load_product_context(session.id)
+            if context.get("product_ids") and self._is_catalog_attribute_question(message):
+                products = self._context_products(store_id, session.id)
+                self._save_message(session_id=session.id, role="user", content=message)
+                response_message = self._catalog_attribute_message(products)
+                self._save_message(session_id=session.id, role="assistant", content=response_message)
+                return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": self._enrich_product_payload(store_id, self.db, self._serialize_products(products)), "sources": []}
+            referenced_product = self._get_referenced_product(store_id=store_id, session_id=session.id, message=message)
+
+        is_link = self._is_link_request(message)
+        is_image = self._is_image_request(message)
+        is_explanation = self._is_recommendation_explanation(message)
+
+        if (is_link or is_image or is_explanation) and referenced_product is None:
+            if session is not None:
+                self._save_message(session_id=session.id, role="user", content=message)
+            response_message = "অবশ্যই 😊 কোন product-এর কথা বলছেন? নাম বা আগের list-এর নম্বরটা বললেই ঠিক সেটার তথ্য দেখাচ্ছি।"
+            if session is not None:
+                self._save_message(session_id=session.id, role="assistant", content=response_message)
+            return {"conversation_id": conversation_id or str(uuid.uuid4()), "type": "product_search", "message": response_message, "products": [], "sources": []}
+
+        if session is not None and referenced_product is not None and (is_link or is_image or is_explanation):
+            self._save_message(session_id=session.id, role="user", content=message)
+            name = self._format_product_name(referenced_product)
+            if is_image:
+                response_message = f"অবশ্যই 😊 {name}-এর image নিচে দিলাম।" if getattr(referenced_product, "image_url", None) else f"দুঃখিত, {name}-এর image এখন available নেই।"
+            elif is_link:
+                response_message = f"অবশ্যই 😊 {name}-এর product page-এর link নিচের card-এ দিলাম।" if getattr(referenced_product, "product_url", None) else f"দুঃখিত, {name}-এর product link এখন available নেই।"
+            else:
+                context_products = self._context_products(store_id, session.id)
+                response_message = self._recommendation_explanation(referenced_product, context_products or [referenced_product])
+            self._save_message(session_id=session.id, role="assistant", content=response_message)
+            return {"conversation_id": conversation_id, "type": "product_search", "message": response_message, "products": self._enrich_product_payload(store_id, self.db, self._serialize_products([referenced_product])), "sources": []}
+
+        result = await super().handle(store_id=store_id, request=request)
+        if not isinstance(result, dict):
+            return result
+        products = self._enrich_product_payload(store_id, self.db, result.get("products") or [])
+        result["products"] = products
+        is_recommendation = is_recommendation_query(message)
+        is_followup = is_link or is_image or is_explanation
+        if products and result.get("type") == "product_search" and not is_recommendation and not is_followup:
+            result["message"] = self._professional_result_message(products)
+        elif is_recommendation and products and not self._recommendation_has_support(products):
+            result["message"] = "এই optionsগুলোর মধ্যে reliable rating, review বা sales evidence যথেষ্ট নেই। তাই অনুমান করে কোনো একটাকে best বলছি না 😊 চাইলে price, stock বা available features অনুযায়ী তুলনা করে দিতে পারি।"
+        return result
