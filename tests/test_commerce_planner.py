@@ -2,6 +2,7 @@ from app.chat.dynamic_service import DynamicAttributeChatService
 from app.chat.professional_service import ProfessionalCommerceChatService
 from app.planner.models import Intent
 from app.planner.rule_planner import plan
+from app.products.recommendation import is_recommendation_query
 from app.products.semantic_attributes import deterministic_extract
 
 
@@ -24,6 +25,11 @@ def test_product_existence_queries_set_in_stock():
         assert action.product_filters is not None
         assert action.product_filters.in_stock is True
         assert action.product_filters.product_name == "laptop"
+
+
+def test_existence_query_is_not_mistaken_for_recommendation():
+    for query in ("laptop ase", "laptop ache", "ল্যাপটপ আছে", "phone available"):
+        assert not is_recommendation_query(query)
 
 
 def test_knowledge_question_is_not_forced_into_product_search_or_mixed():
@@ -117,6 +123,22 @@ def test_generic_product_search_does_not_require_store_vocabulary():
         action = plan(query, None)
         assert action.intent == Intent.PRODUCT_SEARCH
         assert action.product_filters is not None
+
+
+def test_dynamic_continuation_is_not_a_confirmation_phrase_allowlist():
+    class DBStub:
+        def query(self, model):
+            return self
+        def filter(self, *args, **kwargs):
+            return self
+        def first(self):
+            return None
+
+    service = DynamicAttributeChatService.__new__(DynamicAttributeChatService)
+    service.db = DBStub()
+    assert not service._message_has_product_match("assa dao")
+    assert not service._message_has_product_match("accha, kore dao")
+    assert not service._message_has_product_match("okay please")
 
 
 def test_dynamic_attributes_use_adjacent_value_not_next_attribute():
