@@ -17,11 +17,18 @@
   var GREETING = script.getAttribute("data-greeting") || "আসসালামু আলাইকুম! কীভাবে সাহায্য করতে পারি? পণ্য, দাম, স্টক বা product link সম্পর্কে জিজ্ঞেস করুন।";
   var position = script.getAttribute("data-position") === "bottom-left" ? "left" : "right";
   var STORAGE_KEY = "ucai_widget_conv_" + API_KEY.slice(-8);
+  var INTERACTION_KEY = "ucai_widget_interaction_" + API_KEY.slice(-8);
+  var INTERACTION_TTL_MS = 24 * 60 * 60 * 1000; // chat-assisted conversions attribute for 24h after the chat turn
   var conversationId = null;
   var pollingTimer = null;
   var lastMerchantMessageId = null;
+  var lastInteraction = null; // {interaction_id, conversation_id, product_ids, ts} — also mirrored to localStorage
 
   try { conversationId = localStorage.getItem(STORAGE_KEY); } catch (_) {}
+  try {
+    var storedInteraction = JSON.parse(localStorage.getItem(INTERACTION_KEY) || "null");
+    if (storedInteraction && Date.now() - Number(storedInteraction.ts || 0) < INTERACTION_TTL_MS) lastInteraction = storedInteraction;
+  } catch (_) {}
 
   var host = document.createElement("div");
   host.style.cssText = "all:initial;position:fixed;z-index:2147483647;bottom:20px;" + position + ":20px;";
@@ -59,8 +66,45 @@
   function addMessage(role, text) { var el = document.createElement("div"); el.className = "msg " + role; el.textContent = text || ""; messages.appendChild(el); scroll(); return el; }
   function money(value) { if (value === null || value === undefined || value === "") return "দাম জানতে যোগাযোগ করুন"; var n = Number(value); return Number.isFinite(n) ? "৳" + n.toLocaleString("en-BD", { maximumFractionDigits: 0 }) : "৳" + String(value); }
 
-  function addProducts(products) {
+  // --- Conversion tracking -------------------------------------------------
+  // Every chat turn that returns products carries an `interaction_id`.
+  // Remembering it (in memory + localStorage) lets us attribute a click on a
+  // product card, and later an add-to-cart/purchase on the merchant's own
+  // site, back to the chat conversation that recommended it.
+  function rememberInteraction(interactionId, convId, productIds) {
+    if (!interactionId) return;
+    lastInteraction = { interaction_id: interactionId, conversation_id: convId || null, product_ids: productIds || [], ts: Date.now() };
+    try { localStorage.setItem(INTERACTION_KEY, JSON.stringify(lastInteraction)); } catch (_) {}
+  }
+
+  function trackEvent(eventType, opts) {
+    opts = opts || {};
+    var interactionId = opts.interaction_id || (lastInteraction && lastInteraction.interaction_id);
+    if (!interactionId) return false; // nothing to attribute this to — no prior chat interaction
+    var payload = {
+      interaction_id: interactionId,
+      event_type: eventType,
+      product_id: opts.product_id || (lastInteraction && lastInteraction.product_ids && lastInteraction.product_ids[0]) || null,
+      conversation_id: opts.conversation_id || (lastInteraction && lastInteraction.conversation_id) || conversationId || null,
+      value: typeof opts.value === "number" ? opts.value : null,
+      metadata: opts.metadata || {},
+    };
+    var body = JSON.stringify(payload);
+    var url = API_BASE + "/v1/behavior/events";
+    // `keepalive` lets this request survive the page navigating away right
+    // after the call (product link opening, checkout redirect) — unlike
+    // navigator.sendBeacon, fetch keepalive still sends the real x-api-key
+    // header instead of needing the key exposed as a URL query param.
+    try {
+      fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-api-key": API_KEY }, body: body, keepalive: true }).catch(function () {});
+    } catch (_) {}
+    return true;
+  }
+
+  function addProducts(products, interactionId, convId) {
     if (!Array.isArray(products) || !products.length) return;
+    var productIds = products.map(function (p) { return p && p.id; }).filter(Boolean);
+    rememberInteraction(interactionId, convId, productIds);
     var box = document.createElement("div"); box.className = "products";
     products.slice(0, 10).forEach(function (p) {
       var card = document.createElement("article"); card.className = "product";
@@ -92,7 +136,10 @@
       var actions = document.createElement("div"); actions.className = "actions";
       var url = safeUrl(p.product_url || p.url || p.link);
       var link = document.createElement("a"); link.className = "action primary" + (url ? "" : " disabled"); link.textContent = url ? "Product দেখুন" : "Link নেই";
-      if (url) { link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer"; }
+      if (url) {
+        link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer";
+        link.addEventListener("click", function () { trackEvent("click", { product_id: p.id, interaction_id: interactionId, conversation_id: convId }); });
+      }
       actions.appendChild(link);
       var ask = document.createElement("button"); ask.className = "action"; ask.type = "button"; ask.textContent = "এটি সম্পর্কে জিজ্ঞেস করুন";
       ask.addEventListener("click", function () { input.value = (p.name || "এই product") + " সম্পর্কে details চাই"; input.focus(); });
@@ -125,7 +172,7 @@
         return fetch(API_BASE + "/v1/images/" + encodeURIComponent(selectedImageId) + "/analyze", { method: "POST", headers: { "content-type": "application/json", "x-api-key": API_KEY }, body: JSON.stringify({ conversation_id: conversationId, question: input.value.trim() || null }) });
       })
       .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
-      .then(function (data) { if (data.conversation_id) { conversationId = data.conversation_id; try { localStorage.setItem(STORAGE_KEY, conversationId); } catch (_) {} } addMessage("assistant", data.message || "ছবিটি দেখেছি।"); addProducts(data.products); clearImage(); })
+      .then(function (data) { if (data.conversation_id) { conversationId = data.conversation_id; try { localStorage.setItem(STORAGE_KEY, conversationId); } catch (_) {} } addMessage("assistant", data.message || "ছবিটি দেখেছি।"); addProducts(data.products, data.interaction_id, data.conversation_id); clearImage(); })
       .catch(function (err) { previewName.textContent = "ছবি পাঠানো যায়নি"; addMessage("assistant", friendlyError(Number(err.message))); })
       .finally(function () { setSending(false); input.focus(); });
   }
@@ -149,7 +196,7 @@
     var typing = addMessage("typing", "একটু দেখছি…");
     fetch(API_BASE + "/v1/chat", { method: "POST", headers: { "content-type": "application/json", "x-api-key": API_KEY }, body: JSON.stringify({ message: text, conversation_id: conversationId }) })
       .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
-      .then(function (data) { typing.remove(); if (data.conversation_id) { conversationId = data.conversation_id; try { localStorage.setItem(STORAGE_KEY, conversationId); } catch (_) {} } addMessage("assistant", data.message || ""); addProducts(data.products); startPolling(); })
+      .then(function (data) { typing.remove(); if (data.conversation_id) { conversationId = data.conversation_id; try { localStorage.setItem(STORAGE_KEY, conversationId); } catch (_) {} } addMessage("assistant", data.message || ""); addProducts(data.products, data.interaction_id, data.conversation_id); startPolling(); })
       .catch(function (err) { typing.remove(); addMessage("assistant", friendlyError(Number(err.message))); })
       .finally(function () { setSending(false); input.focus(); });
   }
@@ -168,4 +215,28 @@
   input.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
   input.addEventListener("input", function () { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 90) + "px"; });
   window.addEventListener("beforeunload", stopPolling);
+
+  // --- Public conversion API -------------------------------------------
+  // The chat widget can see clicks on the products it recommends, but only
+  // the merchant's own site knows when a customer actually adds an item to
+  // their cart or completes checkout. Merchants call this from that page
+  // (e.g. their "Added to cart" handler or order-confirmation page) to
+  // attribute the sale back to the chat conversation that drove it:
+  //
+  //   UniversalCommerceAI.trackAddToCart(productId, price);
+  //   UniversalCommerceAI.trackPurchase(orderTotal, productId);
+  //
+  // Both fall back gracefully (no-op, return false) if this visitor never
+  // interacted with the chat widget within the last 24h — no fabricated
+  // attribution.
+  window.UniversalCommerceAI = window.UniversalCommerceAI || {};
+  window.UniversalCommerceAI.trackConversion = function (eventType, opts) {
+    return trackEvent(eventType, opts);
+  };
+  window.UniversalCommerceAI.trackAddToCart = function (productId, value) {
+    return trackEvent("add_to_cart", { product_id: productId, value: value });
+  };
+  window.UniversalCommerceAI.trackPurchase = function (value, productId) {
+    return trackEvent("purchase", { product_id: productId, value: value });
+  };
 })();
