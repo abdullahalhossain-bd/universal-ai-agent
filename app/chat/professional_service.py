@@ -13,25 +13,21 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
     """Keep commerce conversations grounded, useful and customer-facing."""
 
     def _extract_product_index(self, message: str) -> int | None:
-        """Extract an index only when the user explicitly references a list position.
-
-        Bare numbers are intentionally ignored. This prevents a model/product number
-        such as ``iPhone 13`` or ``SSD 3`` from being mistaken for "product #3".
-        """
+        """Extract an index only when the user explicitly references a list position."""
         text = re.sub(r"\s+", " ", message.casefold().strip())
         text = text.translate(str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789"))
 
         explicit_patterns = (
-            (r"(?:product\s*)?#\s*(\d+)\b", 1),
-            (r"(?:product\s*)?(\d+)\s*(?:number|no\.?|নম্বর|নং)\b", 1),
-            (r"(?:number|no\.?|নম্বর|নং)\s*(\d+)\b", 1),
-            (r"(\d+)(?:st|nd|rd|th)\s+(?:one|product|item)\b", 1),
-            (r"(?:one|product|item)\s*(?:number|no\.?)\s*(\d+)\b", 1),
+            r"(?:product\s*)?#\s*(\d+)\b",
+            r"(?:product\s*)?(\d+)\s*(?:number|no\.?|নম্বর|নং)",
+            r"(?:number|no\.?|নম্বর|নং)\s*(\d+)\b",
+            r"(\d+)(?:st|nd|rd|th)\s+(?:one|product|item)\b",
+            r"(?:one|product|item)\s*(?:number|no\.?)\s*(\d+)\b",
         )
-        for pattern, group in explicit_patterns:
+        for pattern in explicit_patterns:
             match = re.search(pattern, text)
             if match:
-                value = int(match.group(group))
+                value = int(match.group(1))
                 if 1 <= value <= 100:
                     return value
 
@@ -69,13 +65,7 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
 
     @staticmethod
     def _enrich_product_payload(store_id: str, db, products: list[dict]) -> list[dict]:
-        """Enrich every payload from the DB row with the exact same product ID.
-
-        The DB lookup is constrained by both store_id and Product.id. For a product
-        that exists in the DB, media fields come ONLY from that exact DB row. We do
-        not fall back to another payload's URL/image, because that could silently
-        attach the wrong merchant product page to a contextual follow-up.
-        """
+        """Enrich payloads from the DB row with the exact same product ID."""
         from app.db.models import Product, Store
 
         ids = [str(item.get("id")) for item in products if item.get("id")]
@@ -93,6 +83,8 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
             product = by_id.get(product_id) if product_id else None
             payload = dict(item)
             if product is not None:
+                # Once the exact DB row is found, media comes only from that row.
+                # Never borrow another product's image or URL.
                 db_image = getattr(product, "image_url", None)
                 db_product_url = getattr(product, "product_url", None)
                 payload["id"] = str(product.id)
