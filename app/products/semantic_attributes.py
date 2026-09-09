@@ -45,32 +45,82 @@ def normalize_schema(mapping: dict | None) -> dict[str, list[str]]:
     return result
 
 
+def _value_is_attribute_alias(value: str, aliases_by_key: dict[str, list[str]]) -> bool:
+    normalized = _norm(value)
+    return any(normalized in aliases for aliases in aliases_by_key.values())
+
+
+def _candidate_value(text: str, start: int, end: int, aliases_by_key: dict[str, list[str]]) -> str | None:
+    """Choose a value next to an attribute alias without consuming another key.
+
+    Queries commonly arrive as either ``RAM 16GB`` or ``16GB RAM``.  The old
+    extractor always accepted the first token after an alias, so
+    ``16GB RAM black color XL size`` could incorrectly become RAM=black and
+    color=XL.  We inspect both sides and prefer a value that is not itself
+    another declared attribute alias.
+    """
+    left = text[:start].strip().split()
+    right = text[end:].strip().split()
+    candidates: list[str] = []
+    if left:
+        candidates.append(left[-1])
+    if right:
+        candidates.append(right[0])
+
+    for candidate in candidates:
+        candidate = candidate.strip(" ,.;:!?\"'")
+        if not candidate:
+            continue
+        if _value_is_attribute_alias(candidate, aliases_by_key):
+            continue
+        return candidate
+    return None
+
+
 def deterministic_extract(query: str, schema: dict[str, list[str]]) -> dict[str, Any]:
     """Extract obvious key/value phrases without a fixed global attribute list."""
     text = _norm(query)
     result: dict[str, Any] = {}
-    for key, aliases in schema.items():
-        for alias in aliases:
-            escaped = re.escape(alias)
-            patterns = [
-                rf"(?:^|\s){escaped}\s*(?:is|=|:|of|er|এর|হলো|হয়|হয়)?\s*([\w\u0980-\u09ff.+#%\"'-]+(?:\s+(?:gb|tb|kg|g|cm|mm|inch|in|ft|year|years|বছর))?)",
-                rf"([\w\u0980-\u09ff.+#%\"'-]+(?:\s+(?:gb|tb|kg|g|cm|mm|inch|in|ft|year|years|বছর))?)\s+{escaped}(?:\s|$)",
-            ]
-            for pattern in patterns:
-                match = re.search(pattern, text, flags=re.IGNORECASE)
-                if match:
-                    value = match.group(1).strip(" ,.;:!?\"")
-                    if value and value.casefold() not in {a.casefold() for a in aliases}:
-                        result[key] = value
-                        break
-            if key in result:
-                break
+    aliases_by_key = {key: aliases for key, aliases in schema.items()}
+
+    # Longest aliases first prevents a short alias from stealing a phrase from
+    # a more specific merchant-defined alias.
+    alias_pairs = sorted(
+        ((key, alias) for key, aliases in schema.items() for alias in aliases),
+        key=lambda item: len(item[1]),
+        reverse=True,
+    )
+
+    for key, alias in alias_pairs:
+        if key in result:
+            continue
+        pattern = re.compile(rf"(?<!\w){re.escape(alias)}(?!\w)", re.IGNORECASE)
+        match = pattern.search(text)
+        if not match:
+            continue
+
+        # First support the natural "value key" form.  This is important for
+        # compact multi-attribute queries such as "16GB RAM black color XL size".
+        before = text[:match.start()].rstrip().split()
+        if before:
+            candidate = before[-1].strip(" ,.;:!?\"'")
+            if candidate and not _value_is_attribute_alias(candidate, aliases_by_key):
+                result[key] = candidate
+                continue
+
+        # Then support "key value".  Keep the value to one token here; unit
+        # normalization (16GB, 5kg, 2 years, etc.) is preserved by _norm().
+        after = text[match.end():].lstrip()
+        if after:
+            candidate = after.split()[0].strip(" ,.;:!?\"'")
+            if candidate and not _value_is_attribute_alias(candidate, aliases_by_key):
+                result[key] = candidate
+
     return result
 
 
 def _cache_key(query: str, schema: dict[str, list[str]]) -> str:
     schema_text = json.dumps(schema, sort_keys=True, ensure_ascii=False)
-    # Stable enough for Redis and avoids storing raw merchant data in the key.
     import hashlib
     digest = hashlib.sha256(schema_text.encode()).hexdigest()[:16]
     qdigest = hashlib.sha256(_norm(query).encode()).hexdigest()[:32]
@@ -101,9 +151,7 @@ async def extract_semantic_attributes(
     except Exception:
         pass
 
-    schema_for_prompt = {
-        key: aliases for key, aliases in schema.items()
-    }
+    schema_for_prompt = {key: aliases for key, aliases in schema.items()}
     messages = [
         {
             "role": "system",
