@@ -5,9 +5,8 @@ from sqlalchemy.orm import Session
 from app.auth.api_key import get_api_key
 from app.auth.models import APIKey
 from app.core.tenant import get_current_store
-from app.db.database import get_db
-from app.db.agent_config import AgentConfig
 from app.chat.models import ChatSession, ChatMessage
+from app.db.database import get_db
 from app.db.models import Store
 
 router = APIRouter(prefix="/v1/messages", tags=["messages"])
@@ -15,6 +14,11 @@ router = APIRouter(prefix="/v1/messages", tags=["messages"])
 
 class ReplyRequest(BaseModel):
     message: str = Field(min_length=1, max_length=5000)
+
+
+class CustomerMessageRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=5000)
+    visitor_id: str = Field(default="anonymous", min_length=1, max_length=100)
 
 
 def _message_row(message: ChatMessage):
@@ -37,6 +41,14 @@ def _conversation_row(session: ChatSession, messages: list[ChatMessage]):
         "last_message": _message_row(last) if last else None,
         "messages": [_message_row(item) for item in messages],
     }
+
+
+def _authorized_customer(api_key: APIKey, x_api_key: str | None) -> str:
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="API key required")
+    if api_key.store_id is None:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return api_key.store_id
 
 
 @router.get("/conversations")
@@ -119,19 +131,16 @@ def merchant_reply(
 
 
 @router.get("/customer/{conversation_id}")
-async def customer_messages(
+def customer_messages(
     conversation_id: str,
     x_api_key: str | None = Header(default=None, alias="x-api-key"),
     api_key: APIKey = Depends(get_api_key),
     db: Session = Depends(get_db),
 ):
-    if not x_api_key:
-        raise HTTPException(status_code=401, detail="API key required")
-    if api_key.store_id is None:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+    store_id = _authorized_customer(api_key, x_api_key)
     session = (
         db.query(ChatSession)
-        .filter(ChatSession.store_id == api_key.store_id, ChatSession.conversation_key == conversation_id)
+        .filter(ChatSession.store_id == store_id, ChatSession.conversation_key == conversation_id)
         .first()
     )
     if session is None:
@@ -143,3 +152,48 @@ async def customer_messages(
         .all()
     )
     return {"conversation_id": conversation_id, "messages": [_message_row(item) for item in messages]}
+
+
+@router.post("/customer/{conversation_id}")
+def customer_message(
+    conversation_id: str,
+    payload: CustomerMessageRequest,
+    x_api_key: str | None = Header(default=None, alias="x-api-key"),
+    api_key: APIKey = Depends(get_api_key),
+    db: Session = Depends(get_db),
+):
+    """Store a customer message for a human merchant conversation.
+
+    This endpoint intentionally does not invoke the AI pipeline. It lets the
+    widget switch into human mode while keeping the same conversation visible
+    in the merchant inbox.
+    """
+    store_id = _authorized_customer(api_key, x_api_key)
+    conversation_id = conversation_id.strip()
+    if not conversation_id or len(conversation_id) > 200:
+        raise HTTPException(status_code=400, detail="Invalid conversation id")
+
+    session = (
+        db.query(ChatSession)
+        .filter(ChatSession.store_id == store_id, ChatSession.conversation_key == conversation_id)
+        .first()
+    )
+    if session is None:
+        session = ChatSession(
+            store_id=store_id,
+            conversation_key=conversation_id,
+            visitor_id=payload.visitor_id.strip() or "anonymous",
+        )
+        db.add(session)
+        db.flush()
+
+    message = ChatMessage(
+        session_id=session.id,
+        role="user",
+        content=payload.message.strip(),
+    )
+    db.add(message)
+    session.visitor_id = payload.visitor_id.strip() or session.visitor_id or "anonymous"
+    db.commit()
+    db.refresh(message)
+    return _message_row(message)
