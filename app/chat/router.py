@@ -204,3 +204,6 @@ async def chat(
     if isinstance(result, dict) and not result.get("interaction_id"):
         _log_query_event(db, store.id, original_message, result)
     return result
+
+# Audit checkpoint: keep the takeover guard explicitly documented so future
+# changes do not remove the post-generation concurrency check accidentally.
