@@ -62,11 +62,14 @@ def _dedupe_products(items: list[dict]) -> list[dict]:
     unique = []
     seen = set()
     for item in items:
-        sku = str(item.get("sku") or "").strip().casefold()
+        # Prefer the canonical product URL when available. A semantic parent
+        # node and its nested product card can otherwise have different SKU
+        # availability while representing the exact same catalog item.
         url = str(item.get("url") or "").strip().casefold()
+        sku = str(item.get("sku") or "").strip().casefold()
         name = str(item.get("name") or "").strip().casefold()
-        key = sku or url or name
-        if not key or key in seen:
+        key = ("url", url) if url else (("sku", sku) if sku else ("name", name))
+        if not key[1] or key in seen:
             continue
         seen.add(key)
         unique.append(item)
