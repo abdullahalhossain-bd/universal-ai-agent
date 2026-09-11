@@ -16,19 +16,65 @@
   var ACCENT = script.getAttribute("data-color") || "#111827";
   var GREETING = script.getAttribute("data-greeting") || "আসসালামু আলাইকুম! কীভাবে সাহায্য করতে পারি? পণ্য, দাম, স্টক বা product link সম্পর্কে জিজ্ঞেস করুন।";
   var position = script.getAttribute("data-position") === "bottom-left" ? "left" : "right";
-  var STORAGE_KEY = "ucai_widget_conv_" + API_KEY.slice(-8);
+  var STORAGE_PREFIX = "ucai_widget_" + API_KEY.slice(-8);
+  var STORAGE_KEY = STORAGE_PREFIX + "_conv";
+  var TOKEN_KEY = STORAGE_PREFIX + "_conv_token";
+  var VISITOR_KEY = STORAGE_PREFIX + "_visitor";
   var INTERACTION_KEY = "ucai_widget_interaction_" + API_KEY.slice(-8);
   var INTERACTION_TTL_MS = 24 * 60 * 60 * 1000;
   var conversationId = null;
+  var conversationToken = null;
+  var visitorId = null;
   var pollingTimer = null;
   var lastMerchantMessageId = null;
   var lastInteraction = null;
 
+  function makeVisitorId() {
+    try {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
+    } catch (_) {}
+    var bytes = new Uint8Array(16);
+    try { if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(bytes); } catch (_) {}
+    if (!bytes.some(function (b) { return b !== 0; })) {
+      for (var i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    var hex = Array.prototype.map.call(bytes, function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+    return "v_" + hex;
+  }
+
   try { conversationId = localStorage.getItem(STORAGE_KEY); } catch (_) {}
+  try { conversationToken = localStorage.getItem(TOKEN_KEY); } catch (_) {}
+  try {
+    visitorId = localStorage.getItem(VISITOR_KEY);
+    if (!visitorId) { visitorId = makeVisitorId(); localStorage.setItem(VISITOR_KEY, visitorId); }
+  } catch (_) { visitorId = makeVisitorId(); }
   try {
     var storedInteraction = JSON.parse(localStorage.getItem(INTERACTION_KEY) || "null");
     if (storedInteraction && Date.now() - Number(storedInteraction.ts || 0) < INTERACTION_TTL_MS) lastInteraction = storedInteraction;
   } catch (_) {}
+
+  function persistConversation(data) {
+    if (!data) return;
+    if (data.conversation_id) conversationId = String(data.conversation_id);
+    if (data.conversation_token) conversationToken = String(data.conversation_token);
+    try {
+      if (conversationId) localStorage.setItem(STORAGE_KEY, conversationId);
+      if (conversationToken) localStorage.setItem(TOKEN_KEY, conversationToken);
+    } catch (_) {}
+  }
+
+  function clearConversation() {
+    conversationId = null;
+    conversationToken = null;
+    lastMerchantMessageId = null;
+    try { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(TOKEN_KEY); } catch (_) {}
+  }
+
+  function conversationHeaders(extra) {
+    var headers = extra || {};
+    if (conversationToken) headers["x-conversation-token"] = conversationToken;
+    return headers;
+  }
 
   var host = document.createElement("div");
   host.style.cssText = "all:initial;position:fixed;z-index:2147483647;bottom:20px;" + position + ":20px;";
@@ -123,7 +169,7 @@
 
   function setSending(value) { sending = value; send.disabled = value; input.disabled = value; imageButton.disabled = value; }
   function clearImage() { selectedImageId = null; imageInput.value = ""; preview.classList.remove("show"); previewName.textContent = ""; }
-  function friendlyError(status) { if (status === 401 || status === 403) return "দুঃখিত, এই serviceটি এখন আপনার store-এর জন্য available নেই।"; if (status === 413) return "ছবিটি একটু বড় হয়েছে। ছোট একটি image পাঠান।"; if (status === 429) return "একটু বেশি request হয়ে গেছে 😊 কিছুক্ষণ পর আবার চেষ্টা করুন।"; if (status >= 500) return "দুঃখিত, আমাদের service-এ সাময়িক সমস্যা হচ্ছে। একটু পরে আবার চেষ্টা করুন।"; return "দুঃখিত, এখন উত্তর দিতে সমস্যা হচ্ছে। একটু পরে আবার চেষ্টা করুন।"; }
+  function friendlyError(status) { if (status === 401 || status === 403) return "দুঃখিত, এই conversationটি আর access করা যাচ্ছে না। নতুন conversation শুরু করছি—আবার পাঠান।"; if (status === 409) return "এই conversation-এর visitor identity মেলেনি। নতুন conversation শুরু করে আবার চেষ্টা করুন।"; if (status === 413) return "ছবিটি একটু বড় হয়েছে। ছোট একটি image পাঠান।"; if (status === 429) return "একটু বেশি request হয়ে গেছে 😊 কিছুক্ষণ পর আবার চেষ্টা করুন।"; if (status >= 500) return "দুঃখিত, আমাদের service-এ সাময়িক সমস্যা হচ্ছে। একটু পরে আবার চেষ্টা করুন।"; return "দুঃখিত, এখন উত্তর দিতে সমস্যা হচ্ছে। একটু পরে আবার চেষ্টা করুন।"; }
 
   function uploadImage(file) {
     if (!file || sending) return;
@@ -133,16 +179,20 @@
       .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
       .then(function (data) { selectedImageId = data.image_id; previewName.textContent = "ছবি প্রস্তুত: " + (file.name || "image"); addMessage("user", "📷 " + (file.name || "ছবি") + " পাঠিয়েছি."); return fetch(API_BASE + "/v1/images/" + encodeURIComponent(selectedImageId) + "/analyze", { method: "POST", headers: { "content-type": "application/json", "x-api-key": API_KEY }, body: JSON.stringify({ conversation_id: conversationId, question: input.value.trim() || null }) }); })
       .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
-      .then(function (data) { if (data.conversation_id) { conversationId = data.conversation_id; try { localStorage.setItem(STORAGE_KEY, conversationId); } catch (_) {} } addMessage("assistant", data.message || "ছবিটি দেখেছি।"); addProducts(data.products, data.interaction_id, data.conversation_id); clearImage(); })
+      .then(function (data) { persistConversation(data); addMessage("assistant", data.message || "ছবিটি দেখেছি。"); addProducts(data.products, data.interaction_id, data.conversation_id); clearImage(); startPolling(); })
       .catch(function (err) { previewName.textContent = "ছবি পাঠানো যায়নি"; addMessage("assistant", friendlyError(Number(err.message))); })
       .finally(function () { setSending(false); input.focus(); });
   }
 
   function startPolling() {
-    if (!conversationId || pollingTimer) return;
+    if (!conversationId || !conversationToken || pollingTimer) return;
     pollingTimer = setInterval(function () {
-      fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversationId), { headers: { "x-api-key": API_KEY } })
-        .then(function (r) { if (!r.ok) return null; return r.json(); })
+      fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversationId), { headers: conversationHeaders({ "x-api-key": API_KEY }) })
+        .then(function (r) {
+          if (r.status === 401 || r.status === 403) { stopPolling(); clearConversation(); return null; }
+          if (!r.ok) return null;
+          return r.json();
+        })
         .then(function (data) { if (!data || !Array.isArray(data.messages)) return; data.messages.forEach(function (m) { if (m.role !== "merchant" || !m.id || m.id === lastMerchantMessageId) return; lastMerchantMessageId = m.id; addMessage("merchant", "Store team: " + (m.content || "")); }); })
         .catch(function () {});
     }, 5000);
@@ -153,10 +203,17 @@
     var text = input.value.trim(); if (!text || sending) return;
     addMessage("user", text); input.value = ""; input.style.height = "auto"; setSending(true);
     var typing = addMessage("typing", "একটু দেখছি…");
-    fetch(API_BASE + "/v1/chat", { method: "POST", headers: { "content-type": "application/json", "x-api-key": API_KEY }, body: JSON.stringify({ message: text, conversation_id: conversationId }) })
-      .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
-      .then(function (data) { typing.remove(); if (data.conversation_id) { conversationId = data.conversation_id; try { localStorage.setItem(STORAGE_KEY, conversationId); } catch (_) {} } addMessage("assistant", data.message || ""); addProducts(data.products, data.interaction_id, data.conversation_id); startPolling(); })
-      .catch(function (err) { typing.remove(); addMessage("assistant", friendlyError(Number(err.message))); })
+    var body = { message: text, conversation_id: conversationId, visitor_id: visitorId };
+    var headers = conversationHeaders({ "content-type": "application/json", "x-api-key": API_KEY });
+    fetch(API_BASE + "/v1/chat", { method: "POST", headers: headers, body: JSON.stringify(body) })
+      .then(function (r) {
+        if (r.status === 401 || r.status === 403) { clearConversation(); throw new Error(String(r.status)); }
+        if (r.status === 409) { clearConversation(); throw new Error("409"); }
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
+      .then(function (data) { typing.remove(); persistConversation(data); addMessage("assistant", data.message || ""); addProducts(data.products, data.interaction_id, data.conversation_id); startPolling(); })
+      .catch(function (err) { typing.remove(); addMessage("assistant", friendlyError(Number(err.message)) || "দুঃখিত, এখন উত্তর দিতে সমস্যা হচ্ছে।"); })
       .finally(function () { setSending(false); input.focus(); });
   }
 
