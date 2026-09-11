@@ -1,14 +1,17 @@
 """Dashboard auth dependency — Authorization: Bearer <JWT>."""
 
 from __future__ import annotations
+
 from fastapi import Depends, HTTPException, Header
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
+
 from app.auth.jwt_session import InvalidSessionToken, decode_access_token
 from app.db.database import get_db
 from app.db.models import Store, User
 
 bearer_scheme = HTTPBearer(auto_error=False)
+
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
@@ -35,10 +38,14 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Invalid or revoked session")
     return user
 
+
 async def get_current_user_and_store(
-    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> tuple[User, Store]:
     store = db.query(Store).filter(Store.id == user.store_id).first()
     if store is None:
         raise HTTPException(status_code=401, detail="Store not found")
+    if store.status == "suspended":
+        raise HTTPException(status_code=403, detail="This store has been suspended. Contact support.")
     return user, store
