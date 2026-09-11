@@ -50,20 +50,26 @@ def _value_is_attribute_alias(value: str, aliases_by_key: dict[str, list[str]]) 
     return any(normalized in aliases for aliases in aliases_by_key.values())
 
 
+def _looks_like_model_token(value: str) -> bool:
+    value = str(value or "")
+    return any(ch.isalpha() for ch in value) and any(ch.isdigit() for ch in value)
+
+
 def _candidate_value(text: str, start: int, end: int, aliases_by_key: dict[str, list[str]]) -> str | None:
     """Choose a value next to an attribute alias without consuming another key.
 
-    Queries commonly arrive as either ``RAM 16GB`` or ``16GB RAM``.  The old
-    extractor always accepted the first token after an alias, so
-    ``16GB RAM black color XL size`` could incorrectly become RAM=black and
-    color=XL.  We inspect both sides and prefer a value that is not itself
-    another declared attribute alias.
+    Queries commonly arrive as either ``RAM 16GB`` or ``16GB RAM``. A product
+    model such as ``Aurora X9 material aluminum`` must not be mistaken for the
+    material value, so an alphanumeric model token is skipped when it is the
+    final token of a multi-word product name and a value exists on the right.
     """
     left = text[:start].strip().split()
     right = text[end:].strip().split()
     candidates: list[str] = []
     if left:
-        candidates.append(left[-1])
+        left_candidate = left[-1]
+        if not (_looks_like_model_token(left_candidate) and len(left) >= 2 and right):
+            candidates.append(left_candidate)
     if right:
         candidates.append(right[0])
 
@@ -99,22 +105,9 @@ def deterministic_extract(query: str, schema: dict[str, list[str]]) -> dict[str,
         if not match:
             continue
 
-        # First support the natural "value key" form.  This is important for
-        # compact multi-attribute queries such as "16GB RAM black color XL size".
-        before = text[:match.start()].rstrip().split()
-        if before:
-            candidate = before[-1].strip(" ,.;:!?\"'")
-            if candidate and not _value_is_attribute_alias(candidate, aliases_by_key):
-                result[key] = candidate
-                continue
-
-        # Then support "key value".  Keep the value to one token here; unit
-        # normalization (16GB, 5kg, 2 years, etc.) is preserved by _norm().
-        after = text[match.end():].lstrip()
-        if after:
-            candidate = after.split()[0].strip(" ,.;:!?\"'")
-            if candidate and not _value_is_attribute_alias(candidate, aliases_by_key):
-                result[key] = candidate
+        value = _candidate_value(text, match.start(), match.end(), aliases_by_key)
+        if value:
+            result[key] = value
 
     return result
 
