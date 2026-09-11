@@ -18,6 +18,7 @@ class Base(DeclarativeBase):
 from app.sync.media_models import ProductMediaHealth  # noqa: E402,F401
 from app.sync.issue_models import SyncIssue  # noqa: E402,F401
 from app.db.customer import Customer, CustomerIdentity, CustomerIdentityHistory, CustomerAuditLog  # noqa: E402,F401
+from app.db.billing import BillingWebhookEvent  # noqa: E402,F401
 
 def get_db():
     db = SessionLocal()
