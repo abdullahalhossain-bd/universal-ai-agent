@@ -16,16 +16,31 @@ import pytest
 from tests.markers import requires_postgres, skip_unless_postgres
 
 
-def test_plan_catalog_has_starter_growth_pro():
+@pytest.fixture()
+def db_session():
+    skip_unless_postgres()
+    from app.db.database import SessionLocal
+
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.rollback()
+        session.close()
+
+
+@requires_postgres
+def test_plan_catalog_has_starter_growth_pro(db_session):
     from app.billing.plans import all_plans
 
-    names = {p.name for p in all_plans()}
+    names = {p.name for p in all_plans(db_session)}
     assert names == {"starter", "growth", "pro"}
 
-    starter = next(p for p in all_plans() if p.name == "starter")
+    starter = next(p for p in all_plans(db_session) if p.name == "starter")
     assert starter.stripe_price_id is None  # free plan, nothing to bill
 
 
+@requires_postgres
 def test_list_plans_route_has_no_auth_requirement(client):
     resp = client.get("/v1/billing/plans")
     assert resp.status_code == 200
@@ -41,19 +56,6 @@ def test_checkout_session_without_stripe_configured_returns_503(client, monkeypa
     # No auth at all -> 401 before ever reaching Stripe config.
     resp = client.post("/v1/billing/checkout-session", json={"plan": "growth"})
     assert resp.status_code == 401
-
-
-@pytest.fixture()
-def db_session():
-    skip_unless_postgres()
-    from app.db.database import SessionLocal
-
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.rollback()
-        session.close()
 
 
 @requires_postgres
@@ -84,31 +86,45 @@ def test_checkout_session_503_when_stripe_not_configured_for_authed_store(
 
 
 @requires_postgres
-def test_checkout_session_rejects_unbillable_plan(client, monkeypatch):
+def test_checkout_session_rejects_unbillable_plan(client, monkeypatch, db_session):
+    from app.billing import plans as plans_module
     from app.core.config import settings
+    from app.db.models import BillingPlan
 
     # Pretend Stripe IS configured, but growth has no price id -> the
     # service layer should still reject before calling Stripe.
     monkeypatch.setattr(settings, "stripe_secret_key", "sk_test_fake")
-    monkeypatch.setattr(settings, "stripe_price_growth", None)
 
-    email = f"noprice-{uuid.uuid4().hex[:8]}@example.com"
-    signup = client.post(
-        "/v1/auth/signup",
-        json={
-            "email": email,
-            "password": "correct horse battery staple",
-            "store_name": "No Price Shop",
-        },
-    )
-    token = signup.json()["access_token"]
+    growth = db_session.query(BillingPlan).filter(BillingPlan.name == "growth").first()
+    original_price_id = growth.stripe_price_id
+    growth.stripe_price_id = None
+    db_session.add(growth)
+    db_session.commit()
+    plans_module.invalidate_cache()
 
-    resp = client.post(
-        "/v1/billing/checkout-session",
-        json={"plan": "growth"},
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert resp.status_code == 400
+    try:
+        email = f"noprice-{uuid.uuid4().hex[:8]}@example.com"
+        signup = client.post(
+            "/v1/auth/signup",
+            json={
+                "email": email,
+                "password": "correct horse battery staple",
+                "store_name": "No Price Shop",
+            },
+        )
+        token = signup.json()["access_token"]
+
+        resp = client.post(
+            "/v1/billing/checkout-session",
+            json={"plan": "growth"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 400
+    finally:
+        growth.stripe_price_id = original_price_id
+        db_session.add(growth)
+        db_session.commit()
+        plans_module.invalidate_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -122,39 +138,50 @@ def _fake_event(event_type: str, obj: dict) -> dict:
 
 @requires_postgres
 def test_webhook_subscription_updated_applies_plan_and_budget(client, db_session, monkeypatch):
+    from app.billing import plans as plans_module
     from app.billing import service
-    from app.core.config import settings
-    from app.db.models import Store
+    from app.db.models import BillingPlan, Store
 
-    monkeypatch.setattr(settings, "stripe_price_growth", "price_growth_test")
-
-    store = Store(name="Webhook Shop", plan="starter", monthly_budget=1.0)
-    db_session.add(store)
+    growth = db_session.query(BillingPlan).filter(BillingPlan.name == "growth").first()
+    original_price_id = growth.stripe_price_id
+    growth.stripe_price_id = "price_growth_test"
+    db_session.add(growth)
     db_session.commit()
-    db_session.refresh(store)
+    plans_module.invalidate_cache()
 
-    # Unique per run: stripe_subscription_id is unique across stores,
-    # and the store row outlives this test in a persistent database.
-    subscription_id = f"sub_{uuid.uuid4().hex[:12]}"
+    try:
+        store = Store(name="Webhook Shop", plan="starter", monthly_budget=1.0)
+        db_session.add(store)
+        db_session.commit()
+        db_session.refresh(store)
 
-    event = _fake_event(
-        "customer.subscription.updated",
-        {
-            "id": subscription_id,
-            "status": "active",
-            "customer": "cus_123",
-            "metadata": {"store_id": store.id},
-            "items": {"data": [{"price": {"id": "price_growth_test"}}]},
-        },
-    )
+        # Unique per run: stripe_subscription_id is unique across stores,
+        # and the store row outlives this test in a persistent database.
+        subscription_id = f"sub_{uuid.uuid4().hex[:12]}"
 
-    service.handle_webhook_event(db_session, event)
+        event = _fake_event(
+            "customer.subscription.updated",
+            {
+                "id": subscription_id,
+                "status": "active",
+                "customer": "cus_123",
+                "metadata": {"store_id": store.id},
+                "items": {"data": [{"price": {"id": "price_growth_test"}}]},
+            },
+        )
 
-    db_session.refresh(store)
-    assert store.plan == "growth"
-    assert float(store.monthly_budget) == 5.00
-    assert store.stripe_subscription_status == "active"
-    assert store.stripe_subscription_id == subscription_id
+        service.handle_webhook_event(db_session, event)
+
+        db_session.refresh(store)
+        assert store.plan == "growth"
+        assert float(store.monthly_budget) == 5.00
+        assert store.stripe_subscription_status == "active"
+        assert store.stripe_subscription_id == subscription_id
+    finally:
+        growth.stripe_price_id = original_price_id
+        db_session.add(growth)
+        db_session.commit()
+        plans_module.invalidate_cache()
 
 
 @requires_postgres

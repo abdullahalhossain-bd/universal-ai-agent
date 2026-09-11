@@ -142,9 +142,9 @@ def test_dynamic_continuation_is_not_a_confirmation_phrase_allowlist():
 
     service = DynamicAttributeChatService.__new__(DynamicAttributeChatService)
     service.db = DBStub()
-    assert not service._message_has_product_match("assa dao")
-    assert not service._message_has_product_match("accha, kore dao")
-    assert not service._message_has_product_match("okay please")
+    assert not service._message_has_product_match("store-1", "assa dao")
+    assert not service._message_has_product_match("store-1", "accha, kore dao")
+    assert not service._message_has_product_match("store-1", "okay please")
 
 
 def test_dynamic_attributes_use_adjacent_value_not_next_attribute():

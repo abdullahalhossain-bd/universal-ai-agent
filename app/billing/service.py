@@ -24,7 +24,7 @@ import logging
 import stripe
 from sqlalchemy.orm import Session
 
-from app.billing.plans import get_plan
+from app.billing.plans import all_plans, get_plan
 from app.core.config import settings
 from app.db.models import Store
 
@@ -72,7 +72,7 @@ def create_checkout_session(db: Session, store: Store, plan_name: str) -> str:
     # become a client error (400).
     client = _client()
 
-    plan = get_plan(plan_name)
+    plan = get_plan(db, plan_name)
     if plan is None or plan.stripe_price_id is None:
         raise InvalidPlan(
             f"'{plan_name}' has no billable Stripe price configured"
@@ -118,11 +118,11 @@ def verify_webhook_signature(payload: bytes, sig_header: str) -> stripe.Event:
     )
 
 
-def _plan_name_from_price_id(price_id: str | None) -> str | None:
+def _plan_name_from_price_id(db: Session, price_id: str | None) -> str | None:
     if not price_id:
         return None
-    for plan in (get_plan("starter"), get_plan("growth"), get_plan("pro")):
-        if plan is not None and plan.stripe_price_id == price_id:
+    for plan in all_plans(db):
+        if plan.stripe_price_id == price_id:
             return plan.name
     return None
 
@@ -182,10 +182,10 @@ def handle_webhook_event(db: Session, event: stripe.Event) -> None:
         items = (obj.get("items") or {}).get("data") or []
         if items:
             price_id = items[0].get("price", {}).get("id")
-        plan_name = _plan_name_from_price_id(price_id)
+        plan_name = _plan_name_from_price_id(db, price_id)
 
         if plan_name and obj["status"] in ("active", "trialing"):
-            plan = get_plan(plan_name)
+            plan = get_plan(db, plan_name)
             store.plan = plan.name
             store.monthly_budget = plan.monthly_budget
 
@@ -196,7 +196,7 @@ def handle_webhook_event(db: Session, event: stripe.Event) -> None:
         store.stripe_subscription_status = "canceled"
         # Fall back to the free plan rather than leaving a stale
         # paid budget in place after the subscription actually ends.
-        starter = get_plan("starter")
+        starter = get_plan(db, "starter")
         store.plan = starter.name
         store.monthly_budget = starter.monthly_budget
         db.add(store)

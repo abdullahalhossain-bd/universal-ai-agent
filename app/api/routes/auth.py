@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.auth.dashboard_auth import get_current_user
 from app.auth.jwt_session import create_access_token
 from app.auth.password import WeakPasswordError, hash_password, verify_password
-from app.billing.plans import PLAN_BUDGETS
+from app.billing.plans import plan_budgets
 from app.core.security import generate_api_key, resolve_client_ip
 from app.core.rate_limit import enforce_login_rate_limit, enforce_signup_rate_limit
 from app.db.database import get_db
@@ -41,15 +41,16 @@ def _client_ip(request: Request) -> str:
 async def signup(payload: SignupRequest, http_request: Request, db: Session = Depends(get_db)):
     await enforce_signup_rate_limit(client_ip=_client_ip(http_request))
     plan_name = payload.plan.lower().strip()
-    if plan_name not in PLAN_BUDGETS:
-        raise HTTPException(status_code=400, detail=f"Invalid plan. Use one of: {', '.join(PLAN_BUDGETS)}.")
+    budgets = plan_budgets(db)
+    if plan_name not in budgets:
+        raise HTTPException(status_code=400, detail=f"Invalid plan. Use one of: {', '.join(budgets)}.")
     if db.query(User).filter(User.email == payload.email.lower()).first():
         raise HTTPException(status_code=409, detail="An account with this email already exists")
     try:
         password_hash = hash_password(payload.password)
     except WeakPasswordError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    store = Store(name=payload.store_name, website_url=payload.website_url, plan=plan_name, monthly_budget=PLAN_BUDGETS[plan_name])
+    store = Store(name=payload.store_name, website_url=payload.website_url, plan=plan_name, monthly_budget=budgets[plan_name])
     db.add(store); db.flush()
     user = User(store_id=store.id, email=payload.email.lower(), password_hash=password_hash)
     db.add(user)

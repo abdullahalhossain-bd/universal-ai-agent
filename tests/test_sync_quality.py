@@ -23,10 +23,10 @@ def test_sync_result_data_quality_report_counts_present_and_missing_fields():
     assert report["products"] == 2
     assert report["source_rows"] == 2
     assert report["skipped_rows"] == 0
-    assert report["fields"]["name"] == {"present": 2, "missing": 0}
-    assert report["fields"]["price"] == {"present": 1, "missing": 1}
-    assert report["fields"]["image_url"] == {"present": 1, "missing": 1}
-    assert report["fields"]["product_url"] == {"present": 2, "missing": 0}
+    assert report["fields"]["name"] == {"present": 2, "missing": 0, "coverage_pct": 100.0}
+    assert report["fields"]["price"] == {"present": 1, "missing": 1, "coverage_pct": 50.0}
+    assert report["fields"]["image_url"] == {"present": 1, "missing": 1, "coverage_pct": 50.0}
+    assert report["fields"]["product_url"] == {"present": 2, "missing": 0, "coverage_pct": 100.0}
 
 
 def test_sync_result_data_quality_tracks_skipped_source_rows():

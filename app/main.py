@@ -133,9 +133,9 @@ app.include_router(widget_router)
 _CHAT_DIR = Path(__file__).resolve().parent.parent / "frontend" / "chat"
 if _CHAT_DIR.is_dir():
     app.mount("/chat", StaticFiles(directory=str(_CHAT_DIR), html=True), name="chat-ui")
-_DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dashboard"
-if _DASHBOARD_DIR.is_dir():
-    app.mount("/dashboard", StaticFiles(directory=str(_DASHBOARD_DIR), html=True), name="dashboard-ui")
+_SYNC_DIAGNOSTICS_DIR = Path(__file__).resolve().parent.parent / "frontend" / "sync-diagnostics"
+if _SYNC_DIAGNOSTICS_DIR.is_dir():
+    app.mount("/sync-diagnostics", StaticFiles(directory=str(_SYNC_DIAGNOSTICS_DIR), html=True), name="sync-diagnostics-ui")
 from app.core.alerting import send_alert
 from app.core.request_context import get_request_id
 

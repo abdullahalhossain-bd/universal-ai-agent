@@ -62,8 +62,6 @@ class Settings(BaseSettings):
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
     stripe_price_starter: str | None = None
-    stripe_price_growth: str | None = None
-    stripe_price_pro: str | None = None
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
     @field_validator("database_url", "redis_url", "groq_base_url", "trusted_proxies", "cors_allow_origins", mode="before")

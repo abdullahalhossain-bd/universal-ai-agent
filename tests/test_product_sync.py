@@ -95,8 +95,8 @@ MAPPING = {
     "price": "sell_amt",
     "stock": "available_qty",
     "description": "details",
-    "image": "pic",
-    "url": "link",
+    "image_url": "pic",
+    "product_url": "link",
 }
 
 
@@ -405,9 +405,11 @@ class TestProcessSync(SyncTestBase):
             RESTConnector, "fetch_product_rows", _boom
         )
 
+        store = self.make_store()
+
         result = await process_sync(
             {
-                "store_id": str(uuid.uuid4()),
+                "store_id": store.id,
                 "connector_type": "rest",
                 "api_base_url": "https://example.com",
                 "table_name": "products",

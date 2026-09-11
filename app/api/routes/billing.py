@@ -27,7 +27,7 @@ router = APIRouter(prefix="/v1/billing", tags=["billing"])
 
 
 @router.get("/plans")
-def list_plans():
+def list_plans(db: Session = Depends(get_db)):
     return {
         "plans": [
             {
@@ -36,7 +36,7 @@ def list_plans():
                 "monthly_budget": p.monthly_budget,
                 "billable": p.stripe_price_id is not None,
             }
-            for p in all_plans()
+            for p in all_plans(db)
         ]
     }
 

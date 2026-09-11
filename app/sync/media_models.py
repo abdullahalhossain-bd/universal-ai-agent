@@ -11,6 +11,7 @@ class ProductMediaHealth(Base):
         Index("uq_product_media_health_identity", "store_id", "source_datasource_id", "product_id", unique=True),
         Index("ix_product_media_health_source_checked", "source_datasource_id", "url_checked_at"),
         Index("ix_product_media_health_store_product", "store_id", "product_id"),
+        Index("ix_product_media_health_source_fingerprint", "source_fingerprint"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     store_id: Mapped[str] = mapped_column(String(36), ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)

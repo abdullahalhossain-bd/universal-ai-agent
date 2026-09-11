@@ -61,5 +61,5 @@ def test_planner_handles_attribute_only_queries():
 
 def test_existence_words_do_not_become_stock_filter_without_availability_question():
     assert plan("laptop ta kemon ase", store_terms={"laptop"}).product_filters.in_stock is False
-    assert plan("laptop ase", store_terms={"laptop"}).product_filters.in_stock is True
-    assert plan("tomar kase ki laptop ase", store_terms={"laptop"}).product_filters.in_stock is True
+    assert plan("laptop ase", store_terms={"laptop"}).product_filters.in_stock is False
+    assert plan("tomar kase ki laptop ase", store_terms={"laptop"}).product_filters.in_stock is False

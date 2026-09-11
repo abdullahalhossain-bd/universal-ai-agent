@@ -12,8 +12,8 @@ from app.commerce.service import CommerceActionService
     [
         {"action": CommerceAction.PRODUCT_LINK},
         {"action": CommerceAction.STOCK_CHECK},
-        {"action": CommerceAction.CART_ADD, "product_id": "p1"},
-        {"action": CommerceAction.CART_UPDATE, "product_id": "p1"},
+        {"action": CommerceAction.ADD_TO_CART, "product_id": "p1"},
+        {"action": CommerceAction.UPDATE_CART, "product_id": "p1"},
         {"action": CommerceAction.ORDER_STATUS},
     ],
 )
@@ -24,7 +24,7 @@ def test_action_contract_rejects_missing_required_inputs(payload):
 
 def test_mutating_action_is_never_executed_without_merchant_adapter():
     request = CommerceActionRequest(
-        action=CommerceAction.CART_ADD,
+        action=CommerceAction.ADD_TO_CART,
         product_id="missing",
         quantity=1,
     )

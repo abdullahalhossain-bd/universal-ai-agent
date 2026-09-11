@@ -21,7 +21,10 @@ def create_scratch_schema(base_url: str) -> str:
         {"options": f"-csearch_path={schema},public"},
         append=True,
     )
-    return str(scratch_url)
+    # str(url) masks the password with "***" (SQLAlchemy's default, meant
+    # for safe logging) -- but this string is used to open a real
+    # connection below, so it must keep the real password.
+    return scratch_url.render_as_string(hide_password=False)
 
 
 def drop_scratch_schema(scratch_url: str) -> None:

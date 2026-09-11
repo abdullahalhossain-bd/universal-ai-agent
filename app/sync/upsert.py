@@ -5,7 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.db.models import Product
 from app.sync.result import SyncResult
-_TRACKED_FIELDS=("name","description","category","price","currency","stock","image_url","product_url","source_datasource_id","attributes")
+_TRACKED_FIELDS=("name","description","category","brand","price","currency","stock","image_url","product_url","source_datasource_id","attributes")
 def _changed(existing,data):
     incoming_fp=data.get("_source_fingerprint")
     if incoming_fp and existing.source_fingerprint:return incoming_fp!=existing.source_fingerprint
@@ -26,7 +26,7 @@ def upsert_products(db:Session,store_id,products,*,batch_size=100,result=None,so
         if source_datasource_id:data["source_datasource_id"]=source_datasource_id
         data["attributes"]=data.get("attributes") or {};incoming_fp=data.get("_source_fingerprint")
         if existing is None:
-            row=Product(id=pid,store_id=store_id,name=data["name"],description=data.get("description"),category=data.get("category"),price=data.get("price"),currency=data.get("currency"),stock=data.get("stock"),image_url=data.get("image_url"),product_url=data.get("product_url"),source_datasource_id=data.get("source_datasource_id"),source_fingerprint=incoming_fp)
+            row=Product(id=pid,store_id=store_id,name=data["name"],description=data.get("description"),category=data.get("category"),brand=data.get("brand"),price=data.get("price"),currency=data.get("currency"),stock=data.get("stock"),image_url=data.get("image_url"),product_url=data.get("product_url"),source_datasource_id=data.get("source_datasource_id"),source_fingerprint=incoming_fp)
             db.add(row);db.flush();_persist_attributes(db,store_id,pid,data["attributes"]);row.attributes=data["attributes"];by_id[pid]=row;result.created+=1;pending+=1
         elif _changed(existing,data):
             old_price=existing.price;old_stock=existing.stock;old_name=existing.name

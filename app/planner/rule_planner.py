@@ -39,6 +39,7 @@ STOP_WORDS = set(SHARED_STOPWORDS) | {"এমন", "যেমন", "মতো", 
 _GENERIC_ENTITY_ALIASES = {
     "ফোন": "phone", "মোবাইল": "mobile", "স্মার্টফোন": "smartphone", "আইফোন": "iphone",
     "ফোনটা": "phone", "মোবাইলটা": "mobile", "smart phone": "smartphone", "i phone": "iphone",
+    "ল্যাপটপ": "laptop", "ল্যাপটপটা": "laptop",
 }
 
 def _normalize_digits(text: str) -> str:
@@ -78,6 +79,11 @@ def _extract_min_price(text: str) -> float | None:
 
 def _normalize_entity_text(value: str) -> str:
     value = _normalize_digits(value).lower().strip()
+    # U+09DF ("য়") has no canonical Unicode decomposition, so text typed
+    # as "য" + "়" (U+09AF + U+09BC nukta) won't match it via casefold
+    # alone -- fold that decomposed form explicitly (see also
+    # app/chat/conversation_intelligence.py, which has the same issue).
+    value = value.replace("\u09af\u09bc", "\u09df")
     value = re.sub(r"[^\w\u0980-\u09ff.-]+", " ", value, flags=re.UNICODE)
     return re.sub(r"\s+", " ", value).strip()
 

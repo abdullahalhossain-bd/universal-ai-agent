@@ -153,10 +153,13 @@ class ProfessionalCommerceChatService(DynamicAttributeChatService):
 
     @staticmethod
     def _recommendation_has_support(products: list[dict]) -> bool:
+        # A rating backed by only one or two reviews is not meaningful
+        # evidence -- it could be a single enthusiastic (or fake) review.
+        min_reviews = 3
         for product in products:
             rating, reviews, sales, bestseller = product.get("rating"), product.get("review_count"), product.get("sales_count"), product.get("bestseller_score")
             try:
-                if rating is not None and float(rating) >= 4.0 and reviews is not None and int(reviews) > 0:
+                if rating is not None and float(rating) >= 4.0 and reviews is not None and int(reviews) >= min_reviews:
                     return True
             except (TypeError, ValueError):
                 pass

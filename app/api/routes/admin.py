@@ -9,13 +9,13 @@ from sqlalchemy.orm import Session
 from app.auth.admin_auth import get_current_admin
 from app.auth.admin_session import create_admin_access_token
 from app.auth.password import verify_password
-from app.billing.plans import PLAN_BUDGETS, all_plans
+from app.billing.plans import all_plans, get_plan, invalidate_cache, plan_budgets
 from app.core.features import FEATURE_CATALOG, catalog_payload, normalized_features
 from app.core.rate_limit import enforce_login_rate_limit
 from app.core.security import resolve_client_ip
 from app.db.database import get_db, engine
 from app.db.admin_audit import AdminAuditLog
-from app.db.models import APIKey, DataSource, PlatformAdmin, Store, User
+from app.db.models import APIKey, BillingPlan, DataSource, PlatformAdmin, Store, User
 from app.usage.models import UsageRecord
 
 router = APIRouter(prefix="/v1/admin", tags=["platform-admin"])
@@ -61,7 +61,7 @@ def platform_stats(admin: PlatformAdmin = Depends(get_current_admin), db: Sessio
     by_plan = dict(db.query(Store.plan, func.count(Store.id)).group_by(Store.plan).all())
     month_start = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     month_spend = db.query(func.coalesce(func.sum(UsageRecord.estimated_cost), 0)).filter(UsageRecord.created_at >= month_start).filter(UsageRecord.status == "completed").scalar() or 0
-    return {"total_stores": total_stores, "active_stores": active_stores, "suspended_stores": suspended_stores, "stores_by_plan": {p: int(by_plan.get(p, 0)) for p in PLAN_BUDGETS}, "month_to_date_spend": float(month_spend), "plans": [{"name": p.name, "label": p.label, "monthly_budget": p.monthly_budget} for p in all_plans()]}
+    return {"total_stores": total_stores, "active_stores": active_stores, "suspended_stores": suspended_stores, "stores_by_plan": {p: int(by_plan.get(p, 0)) for p in plan_budgets(db)}, "month_to_date_spend": float(month_spend), "plans": [{"name": p.name, "label": p.label, "monthly_budget": p.monthly_budget} for p in all_plans(db)]}
 
 @router.get("/features")
 def list_feature_catalog(admin: PlatformAdmin = Depends(get_current_admin)):
@@ -111,8 +111,9 @@ def update_store(store_id: str, payload: UpdateStoreRequest, admin: PlatformAdmi
         store.status = payload.status
     if payload.plan is not None:
         plan_name = payload.plan.lower().strip()
-        if plan_name not in PLAN_BUDGETS: raise HTTPException(status_code=400, detail=f"Invalid plan. Use one of: {', '.join(PLAN_BUDGETS)}.")
-        store.plan = plan_name; store.monthly_budget = PLAN_BUDGETS[plan_name]
+        budgets = plan_budgets(db)
+        if plan_name not in budgets: raise HTTPException(status_code=400, detail=f"Invalid plan. Use one of: {', '.join(budgets)}.")
+        store.plan = plan_name; store.monthly_budget = budgets[plan_name]
     if payload.monthly_budget is not None:
         if payload.monthly_budget < 0: raise HTTPException(status_code=400, detail="monthly_budget must be >= 0")
         store.monthly_budget = payload.monthly_budget
@@ -133,6 +134,95 @@ def list_usage(store_id: str | None = Query(default=None), limit: int = Query(de
     total = query.with_entities(func.count(UsageRecord.id)).scalar() or 0
     records = query.order_by(UsageRecord.created_at.desc()).offset(offset).limit(limit).all()
     return {"total": total, "limit": limit, "offset": offset, "usage": [{"id": r.id, "store_id": r.store_id, "route": r.route, "model": r.model, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens, "estimated_cost": r.estimated_cost, "status": r.status, "created_at": r.created_at.isoformat()} for r in records]}
+
+class CreatePlanRequest(BaseModel):
+    name: str
+    label: str
+    monthly_budget: float
+    stripe_price_id: str | None = None
+    sort_order: int = 0
+    is_active: bool = True
+
+
+class UpdatePlanRequest(BaseModel):
+    label: str | None = None
+    monthly_budget: float | None = None
+    stripe_price_id: str | None = None
+    sort_order: int | None = None
+    is_active: bool | None = None
+
+
+def _plan_dict(row: BillingPlan) -> dict:
+    return {"name": row.name, "label": row.label, "monthly_budget": float(row.monthly_budget), "stripe_price_id": row.stripe_price_id, "is_active": row.is_active, "sort_order": row.sort_order, "updated_at": row.updated_at.isoformat()}
+
+
+@router.get("/plans")
+def list_all_plans(admin: PlatformAdmin = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """
+    Full plan catalog including inactive/retired plans (unlike
+    GET /v1/billing/plans, which only returns active ones to merchants).
+    """
+    rows = db.query(BillingPlan).order_by(BillingPlan.sort_order, BillingPlan.name).all()
+    return {"plans": [_plan_dict(r) for r in rows]}
+
+
+@router.post("/plans", status_code=201)
+def create_plan(payload: CreatePlanRequest, admin: PlatformAdmin = Depends(get_current_admin), db: Session = Depends(get_db)):
+    name = payload.name.lower().strip()
+    if not name or not name.replace("_", "").isalnum():
+        raise HTTPException(status_code=400, detail="Plan name must be alphanumeric (underscores allowed), e.g. 'growth'.")
+    if payload.monthly_budget < 0:
+        raise HTTPException(status_code=400, detail="monthly_budget must be >= 0")
+    if db.query(BillingPlan).filter(BillingPlan.name == name).first() is not None:
+        raise HTTPException(status_code=409, detail=f"Plan '{name}' already exists.")
+    row = BillingPlan(name=name, label=payload.label, monthly_budget=payload.monthly_budget, stripe_price_id=payload.stripe_price_id, sort_order=payload.sort_order, is_active=payload.is_active)
+    db.add(row)
+    db.flush(); db.refresh(row)
+    db.add(AdminAuditLog(admin_id=admin.id, action="plan.create", store_id=None, details=json.dumps(_plan_dict(row), ensure_ascii=False)))
+    db.commit(); db.refresh(row)
+    invalidate_cache()
+    return _plan_dict(row)
+
+
+@router.patch("/plans/{name}")
+def update_plan(name: str, payload: UpdatePlanRequest, admin: PlatformAdmin = Depends(get_current_admin), db: Session = Depends(get_db)):
+    row = db.query(BillingPlan).filter(BillingPlan.name == name.lower().strip()).first()
+    if row is None: raise HTTPException(status_code=404, detail="Plan not found")
+    before = _plan_dict(row)
+    if payload.label is not None: row.label = payload.label
+    if payload.monthly_budget is not None:
+        if payload.monthly_budget < 0: raise HTTPException(status_code=400, detail="monthly_budget must be >= 0")
+        row.monthly_budget = payload.monthly_budget
+    if payload.stripe_price_id is not None: row.stripe_price_id = payload.stripe_price_id or None
+    if payload.sort_order is not None: row.sort_order = payload.sort_order
+    if payload.is_active is not None: row.is_active = payload.is_active
+    db.add(row)
+    after = _plan_dict(row)
+    db.add(AdminAuditLog(admin_id=admin.id, action="plan.update", store_id=None, details=json.dumps({"before": before, "after": after}, ensure_ascii=False, default=str)))
+    db.commit(); db.refresh(row)
+    invalidate_cache()
+    return _plan_dict(row)
+
+
+@router.delete("/plans/{name}")
+def deactivate_plan(name: str, admin: PlatformAdmin = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """
+    Soft-delete: sets is_active=False so the plan disappears from new
+    signups/upgrades (GET /v1/billing/plans) without breaking stores
+    already on it — Store.plan is a plain string, not a foreign key.
+    Rows are never hard-deleted so Stripe webhook history and past
+    invoices still resolve against a real plan record.
+    """
+    row = db.query(BillingPlan).filter(BillingPlan.name == name.lower().strip()).first()
+    if row is None: raise HTTPException(status_code=404, detail="Plan not found")
+    stores_on_plan = db.query(func.count(Store.id)).filter(Store.plan == row.name).scalar() or 0
+    row.is_active = False
+    db.add(row)
+    db.add(AdminAuditLog(admin_id=admin.id, action="plan.deactivate", store_id=None, details=json.dumps({"name": row.name, "stores_still_on_plan": stores_on_plan}, ensure_ascii=False)))
+    db.commit()
+    invalidate_cache()
+    return {"ok": True, "name": row.name, "stores_still_on_plan": stores_on_plan}
+
 
 @router.get("/system-health")
 async def system_health(admin: PlatformAdmin = Depends(get_current_admin)):

@@ -7,7 +7,7 @@ from app.db.agent_config import AgentConfig
 from app.core.security import generate_api_key, resolve_client_ip
 from app.core.rate_limit import enforce_signup_rate_limit
 from app.core.tenant import get_current_store
-from app.billing.plans import PLAN_BUDGETS
+from app.billing.plans import plan_budgets
 
 router = APIRouter(prefix="/v1/stores", tags=["stores"])
 
@@ -21,9 +21,10 @@ async def create_store(http_request: Request, payload: CreateStoreRequest, db: S
     client_ip = resolve_client_ip(peer_host=http_request.client.host if http_request.client else None, forwarded_for=http_request.headers.get("x-forwarded-for"))
     await enforce_signup_rate_limit(client_ip=client_ip)
     plan_name = payload.plan.lower().strip()
-    if plan_name not in PLAN_BUDGETS:
-        raise HTTPException(status_code=400, detail="Invalid plan. Use starter, growth, or pro.")
-    store = Store(name=payload.name, website_url=payload.website_url, plan=plan_name, monthly_budget=PLAN_BUDGETS[plan_name])
+    budgets = plan_budgets(db)
+    if plan_name not in budgets:
+        raise HTTPException(status_code=400, detail=f"Invalid plan. Use one of: {', '.join(budgets)}.")
+    store = Store(name=payload.name, website_url=payload.website_url, plan=plan_name, monthly_budget=budgets[plan_name])
     db.add(store)
     db.flush()
     raw_key, prefix, key_hash = generate_api_key()

@@ -6,6 +6,7 @@ simple commerce actions stay fast, cheap, and predictable.
 """
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 import re
 from typing import Any, Mapping, Sequence
@@ -40,13 +41,29 @@ _ORDINALS = {
     "fifth": 5, "5th": 5, "five": 5, "sixth": 6, "6th": 6, "six": 6,
     "seventh": 7, "7th": 7, "seven": 7, "eighth": 8, "8th": 8, "eight": 8,
     "ninth": 9, "9th": 9, "nine": 9, "tenth": 10, "10th": 10, "ten": 10,
-    "প্রথম": 1, "দ্বিতীয়": 2, "দ্বিতীয়": 2, "তৃতীয়": 3, "তৃতীয়": 3,
-    "চতুর্থ": 4, "পঞ্চম": 5, "ষষ্ঠ": 6, "সপ্তম": 7, "অষ্টম": 8, "নবম": 9, "দশম": 10,
+    # Bengali ordinals carry noun suffixes (টা/টি/টার/টির) directly
+    # attached with no space (e.g. "তৃতীয়টার" = "the third one's"), so
+    # each suffixed form needs its own entry -- a word-boundary regex on
+    # the bare ordinal won't match since the suffix is a \w character.
+    "প্রথম": 1, "প্রথমটা": 1, "প্রথমটি": 1, "প্রথমটার": 1, "প্রথমটির": 1,
+    "দ্বিতীয়": 2, "দ্বিতীয়টা": 2, "দ্বিতীয়টি": 2, "দ্বিতীয়টার": 2, "দ্বিতীয়টির": 2,
+    "তৃতীয়": 3, "তৃতীয়টা": 3, "তৃতীয়টি": 3, "তৃতীয়টার": 3, "তৃতীয়টির": 3,
+    "চতুর্থ": 4, "চতুর্থটা": 4, "চতুর্থটি": 4, "চতুর্থটার": 4, "চতুর্থটির": 4,
+    "পঞ্চম": 5, "পঞ্চমটা": 5, "পঞ্চমটি": 5, "পঞ্চমটার": 5, "পঞ্চমটির": 5,
+    "ষষ্ঠ": 6, "ষষ্ঠটা": 6, "ষষ্ঠটার": 6,
+    "সপ্তম": 7, "সপ্তমটা": 7, "সপ্তমটার": 7,
+    "অষ্টম": 8, "অষ্টমটা": 8, "অষ্টমটার": 8,
+    "নবম": 9, "নবমটা": 9, "নবমটার": 9,
+    "দশম": 10, "দশমটা": 10, "দশমটার": 10,
 }
 
 
 def _normalize(text: str) -> str:
-    text = str(text or "").casefold().strip()
+    text = unicodedata.normalize("NFC", str(text or "")).casefold().strip()
+    # U+09DF (Bengali YYA, "য়") has no canonical Unicode decomposition, so
+    # NFC alone won't fold the common decomposed input "য" + "়" (U+09AF
+    # + U+09BC nukta) into it -- do that fold explicitly.
+    text = text.replace("\u09af\u09bc", "\u09df")
     text = text.translate(str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789"))
     text = re.sub(r"[!?.,;:()\[\]{}\"'“”‘’]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()

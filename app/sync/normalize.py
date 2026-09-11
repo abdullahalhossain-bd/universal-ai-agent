@@ -13,6 +13,7 @@ _FIELD_ALIASES={
  "price":("price","saleprice","sale_price","sellingprice","selling_price","regularprice","regular_price","amount","cost"),
  "stock":("stock","quantity","qty","inventory","inventoryquantity","inventory_quantity","stockquantity","stock_quantity","availablequantity","available_quantity"),
  "category":("category","categoryname","category_name","productcategory","product_category","type","producttype","product_type"),
+ "brand":("brand","brandname","brand_name","manufacturer","vendor","make"),
  "currency":("currency","currencycode","currency_code","pricecurrency","price_currency"),
  "image_url":("image_url","image","images","main_image","mainimage","image_src","imagesource","image_source","imageurl","image_url_1","thumbnail","thumbnail_url","thumbnailurl","featured_image","featuredimage","photo","picture","productimage","product_image","productphoto","product_photo","primaryimage","primary_image","coverimage","cover_image"),
  "product_url":("product_url","producturl","url","link","product_link","productlink","permalink","product_page","productpage","product_page_url","productpageurl","web_url","weburl","shop_url","shopurl","href","product_href","producthref"),
@@ -157,4 +158,4 @@ def normalize_row(raw:dict,mapping:dict)->dict|None:
  if not product_id or not name:return None
  attrs=_extract_attributes(raw,mapping);sku=_as_str(_get(raw,mapping,"sku"))
  if sku:attrs.setdefault("sku",sku)
- return {"id":product_id,"sku":sku,"name":name,"description":_as_str(_get(raw,mapping,"description")),"price":_as_float(_get(raw,mapping,"price")),"stock":_as_float(_get(raw,mapping,"stock")),"category":_as_str(_get(raw,mapping,"category")),"image_url":_first_image_url(_get(raw,mapping,"image_url")),"product_url":_first_product_url(_get(raw,mapping,"product_url")),"currency":_as_currency(_get(raw,mapping,"currency")),"attributes":attrs}
+ return {"id":product_id,"sku":sku,"name":name,"description":_as_str(_get(raw,mapping,"description")),"price":_as_float(_get(raw,mapping,"price")),"stock":_as_float(_get(raw,mapping,"stock")),"category":_as_str(_get(raw,mapping,"category")),"brand":_as_str(_get(raw,mapping,"brand")),"image_url":_first_image_url(_get(raw,mapping,"image_url")),"product_url":_first_product_url(_get(raw,mapping,"product_url")),"currency":_as_currency(_get(raw,mapping,"currency")),"attributes":attrs}
