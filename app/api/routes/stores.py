@@ -71,3 +71,37 @@ def update_agent_config(payload: AgentConfigRequest, store: Store = Depends(get_
     db.commit()
     db.refresh(config)
     return _agent_config_response(config)
+
+class WidgetConfigRequest(BaseModel):
+    store_name: str = Field(min_length=1, max_length=255)
+    logo_url: str | None = Field(default=None, max_length=2048)
+    brand_color: str = Field(default="#111827", pattern=r"^#[0-9A-Fa-f]{6}$")
+    greeting: str = Field(default="আসসালামু আলাইকুম! কীভাবে সাহায্য করতে পারি? পণ্য, দাম, স্টক বা product link সম্পর্কে জিজ্ঞেস করুন।", min_length=1, max_length=1000)
+    assistant_name: str = Field(default="Shopping Assistant", min_length=1, max_length=100)
+    position: str = Field(default="bottom-right", pattern="^(bottom-right|bottom-left)$")
+
+def _widget_config_response(store: Store, config: AgentConfig):
+    return {"store_id": store.id, "store_name": store.name, "logo_url": config.logo_url, "brand_color": config.brand_color, "greeting": config.welcome_message, "assistant_name": config.agent_name, "position": config.position}
+
+@router.get("/me/widget-config")
+def get_widget_config(store: Store = Depends(get_current_store), db: Session = Depends(get_db)):
+    return _widget_config_response(store, _get_or_create_agent_config(store, db))
+
+@router.put("/me/widget-config")
+def update_widget_config(payload: WidgetConfigRequest, store: Store = Depends(get_current_store), db: Session = Depends(get_db)):
+    if payload.logo_url:
+        from urllib.parse import urlparse
+        parsed = urlparse(payload.logo_url.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise HTTPException(status_code=400, detail="logo_url must be a valid http(s) URL")
+    config = _get_or_create_agent_config(store, db)
+    store.name = payload.store_name.strip()
+    config.logo_url = payload.logo_url.strip() if payload.logo_url else None
+    config.brand_color = payload.brand_color.upper()
+    config.welcome_message = payload.greeting.strip()
+    config.agent_name = payload.assistant_name.strip()
+    config.position = payload.position
+    db.commit()
+    db.refresh(store)
+    db.refresh(config)
+    return _widget_config_response(store, config)
