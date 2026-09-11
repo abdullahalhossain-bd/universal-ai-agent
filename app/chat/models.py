@@ -20,6 +20,9 @@ class ChatSession(Base):
     access_token: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True, default=lambda: secrets.token_urlsafe(32))
     mode: Mapped[str] = mapped_column(String(20), nullable=False, default="ai", server_default="ai")
     mode_owner: Mapped[str] = mapped_column(String(20), nullable=False, default="ai", server_default="ai")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open", server_default="open", index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
