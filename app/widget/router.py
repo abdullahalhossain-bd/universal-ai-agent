@@ -17,16 +17,12 @@ _WIDGET_PATH = _STATIC_DIR / "widget.js"
 _ADMIN_PATH = _STATIC_DIR / "admin.html"
 _BRANDING_PATH = _STATIC_DIR / "branding.html"
 _PLATFORM_ADMIN_PATH = _STATIC_DIR / "platform-admin.html"
+_MERCHANT_CHAT_PATH = _STATIC_DIR / "merchant-chat.js"
 
 
 @router.get("/widget.js")
 async def widget_bundle() -> Response:
-    """Return a tiny loader that applies per-store branding before loading the core widget.
-
-    Keeping the existing widget implementation as widget-core.js means existing
-    merchant snippets remain valid while branding can be changed centrally from
-    the dashboard without requiring merchants to edit their embed code.
-    """
+    """Return a tiny loader that applies per-store branding before loading the core widget."""
     loader = r'''/* Universal Commerce AI — dynamic merchant-branded widget loader. */
 (function () {
   "use strict";
@@ -74,6 +70,14 @@ async def widget_bundle() -> Response:
       if (bubble) { bubble.setAttribute("aria-expanded", "false"); bubble.focus(); }
     });
   }
+  function loadMerchantMode() {
+    var human = document.createElement("script");
+    human.src = apiBase + "/merchant-chat.js";
+    human.async = true;
+    human.setAttribute("data-key", key);
+    human.setAttribute("data-api-base", apiBase);
+    document.head.appendChild(human);
+  }
   function loadCore(cfg) {
     var core = document.createElement("script");
     core.src = apiBase + "/widget-core.js";
@@ -87,7 +91,11 @@ async def widget_bundle() -> Response:
       var tries = 0;
       (function waitForRoot() {
         var root = findWidgetRoot();
-        if (root) { applyBranding(root, cfg); return; }
+        if (root) {
+          applyBranding(root, cfg);
+          loadMerchantMode();
+          return;
+        }
         if (++tries < 40) setTimeout(waitForRoot, 25);
       })();
     };
@@ -119,6 +127,15 @@ async def widget_bundle() -> Response:
 async def widget_core_bundle() -> FileResponse:
     return FileResponse(
         _WIDGET_PATH,
+        media_type="application/javascript",
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+@router.get("/merchant-chat.js")
+async def merchant_chat_bundle() -> FileResponse:
+    return FileResponse(
+        _MERCHANT_CHAT_PATH,
         media_type="application/javascript",
         headers={"Cache-Control": "public, max-age=300"},
     )
