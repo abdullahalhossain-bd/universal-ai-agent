@@ -1,13 +1,7 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from fastapi.responses import FileResponse, Response
-from sqlalchemy.orm import Session
-
-from app.core.tenant import get_current_store
-from app.db.agent_config import AgentConfig
-from app.db.database import get_db
-from app.db.models import Store
 
 
 # No "/v1" prefix on purpose — merchants embed this at a short,
@@ -21,6 +15,7 @@ router = APIRouter(tags=["Widget"])
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 _WIDGET_PATH = _STATIC_DIR / "widget.js"
 _ADMIN_PATH = _STATIC_DIR / "admin.html"
+_BRANDING_PATH = _STATIC_DIR / "branding.html"
 _PLATFORM_ADMIN_PATH = _STATIC_DIR / "platform-admin.html"
 
 
@@ -133,6 +128,15 @@ async def widget_core_bundle() -> FileResponse:
 async def admin_dashboard() -> FileResponse:
     return FileResponse(
         _ADMIN_PATH,
+        media_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/admin/branding")
+async def admin_branding_dashboard() -> FileResponse:
+    return FileResponse(
+        _BRANDING_PATH,
         media_type="text/html",
         headers={"Cache-Control": "no-store"},
     )
