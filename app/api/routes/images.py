@@ -8,10 +8,11 @@ persists a ChatImage row so the returned image_id can later be resolved.
 
 from __future__ import annotations
 
+import hmac
 import io
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.auth.dependency import authenticate_api_key, resolve_active_store
@@ -29,27 +30,35 @@ from app.images.validation import MAX_FILE_SIZE_BYTES, sniff_image_mime, validat
 router = APIRouter(prefix="/v1/images", tags=["Images"])
 
 
+def _verify_conversation_access(db: Session, store_id: str, conversation_id: str | None, conversation_token: str | None) -> ChatSession | None:
+    if not conversation_id:
+        return None
+    session = (
+        db.query(ChatSession)
+        .filter(ChatSession.store_id == store_id, ChatSession.conversation_key == conversation_id)
+        .first()
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if not conversation_token:
+        raise HTTPException(status_code=401, detail="Conversation token required")
+    expected = str(session.access_token or "")
+    if not expected or not hmac.compare_digest(expected, conversation_token):
+        raise HTTPException(status_code=403, detail="Invalid conversation token")
+    return session
+
+
 @router.post("")
 async def upload_image(
     file: UploadFile = File(...),
     conversation_id: str | None = Form(default=None),
+    x_conversation_token: str | None = Header(default=None, alias="x-conversation-token"),
     api_key: APIKey = Depends(authenticate_api_key),
     db: Session = Depends(get_db),
 ):
     store = resolve_active_store(api_key=api_key, db=db)
     require_feature(store, FEATURE_IMAGE_SEARCH)
-
-    if conversation_id:
-        foreign_session = (
-            db.query(ChatSession)
-            .filter(
-                ChatSession.conversation_key == conversation_id,
-                ChatSession.store_id != store.id,
-            )
-            .first()
-        )
-        if foreign_session is not None:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+    _verify_conversation_access(db, store.id, conversation_id, x_conversation_token)
 
     raw_bytes = await file.read()
     if len(raw_bytes) > MAX_FILE_SIZE_BYTES:
@@ -100,21 +109,20 @@ async def upload_image(
 async def analyze_image(
     image_id: str,
     request: ImageAnalyzeRequest,
+    x_conversation_token: str | None = Header(default=None, alias="x-conversation-token"),
     api_key: APIKey = Depends(authenticate_api_key),
     db: Session = Depends(get_db),
 ):
     store = resolve_active_store(api_key=api_key, db=db)
     require_feature(store, FEATURE_IMAGE_SEARCH)
 
-    # Image IDs are store-scoped, and conversation-bound uploads must also
-    # remain bound to their original conversation. Without this check a
-    # caller who knows an image_id could attach an uploaded image to a
-    # different conversation in the same store.
     image_record = ImageRepository(db).get(store_id=store.id, image_id=image_id)
     if image_record is None:
         raise HTTPException(status_code=404, detail="Image not found")
     if image_record.conversation_id is not None and image_record.conversation_id != request.conversation_id:
         raise HTTPException(status_code=404, detail="Image not found")
+
+    _verify_conversation_access(db, store.id, request.conversation_id, x_conversation_token)
 
     service = ChatService(db=db)
     return await service.handle_image(
