@@ -28,6 +28,7 @@ class DataSourceService:
    from app.sync.quality import valid_http_url
    if not valid_http_url(connection_url): raise ValueError("website URL must be a valid http(s) URL")
    validate_connection=False
+   table_name=table_name or "website"
   elif ctype!="rest" and not connection_url: raise ValueError("connection_url required for SQL connectors")
   elif ctype=="rest" and not api_base_url: raise ValueError("api_base_url required for REST connectors")
   if validate_connection and not self._test_connection_sync(ctype,connection_url,api_base_url=api_base_url): raise ConnectionError("connection test failed")
