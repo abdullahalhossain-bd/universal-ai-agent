@@ -11,7 +11,7 @@ _PRODUCT_TOKEN_RE = re.compile(r"(?:product|item|product-card|product-item|produ
 _NAME_ATTRS = ("name", "product-name", "product_name", "title", "product-title", "product_title")
 _PRICE_ATTRS = ("price", "sale-price", "regular-price", "product-price", "product_price")
 _URL_ATTRS = ("url", "product-url", "product_url")
-_SKU_ATTRS = ("sku", "product-id", "product_id", "productid", "itemid")
+_SKU_ATTRS = ("sku", "data-sku", "product-id", "data-product-id", "product_id", "productid", "itemid")
 
 
 def _walk_products(value):
@@ -62,9 +62,6 @@ def _dedupe_products(items: list[dict]) -> list[dict]:
     unique = []
     seen = set()
     for item in items:
-        # Prefer the canonical product URL when available. A semantic parent
-        # node and its nested product card can otherwise have different SKU
-        # availability while representing the exact same catalog item.
         url = str(item.get("url") or "").strip().casefold()
         sku = str(item.get("sku") or "").strip().casefold()
         name = str(item.get("name") or "").strip().casefold()
