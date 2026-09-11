@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import datetime
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 from app.crawler.classifier import classify_page
 from app.crawler.limits import get_crawl_limits
@@ -23,9 +22,7 @@ def _product_id(url: str, fallback: str | None = None) -> str:
 
 
 def _first(value):
-    if isinstance(value, list):
-        return value[0] if value else None
-    return value
+    return value[0] if isinstance(value, list) and value else value
 
 
 def _offer(product: dict) -> dict:
@@ -81,12 +78,10 @@ async def ingest_website(db, store, datasource, *, max_pages: int | None = None,
     page_limit = max_pages or int(limits.get("max_pages", 100))
     crawler = WebsiteCrawler(max_pages=page_limit, max_depth=max_depth)
     pages = await crawler.crawl(datasource.connection_url)
-
     product_rows: list[dict] = []
     seen_products: set[str] = set()
     chunker = TextChunker()
-    knowledge_created = 0
-    knowledge_updated = 0
+    knowledge_created = knowledge_updated = 0
     now = datetime.utcnow()
 
     for page in pages:
@@ -95,15 +90,11 @@ async def ingest_website(db, store, datasource, *, max_pages: int | None = None,
             if row["id"] not in seen_products:
                 seen_products.add(row["id"])
                 product_rows.append(row)
-
         content = page.get("content") or ""
         if not content:
             continue
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        existing = db.query(KnowledgePage).filter(
-            KnowledgePage.store_id == store.id,
-            KnowledgePage.url == page["url"],
-        ).first()
+        existing = db.query(KnowledgePage).filter(KnowledgePage.store_id == store.id, KnowledgePage.url == page["url"]).first()
         page_type = classify_page(page["url"], page.get("title"), content, structured)
         if existing and existing.content_hash == content_hash:
             existing.status = "active"
@@ -121,52 +112,17 @@ async def ingest_website(db, store, datasource, *, max_pages: int | None = None,
             db.query(KnowledgeChunk).filter(KnowledgeChunk.page_id == page_id).delete(synchronize_session=False)
             knowledge_updated += 1
         else:
-            existing = KnowledgePage(
-                store_id=store.id,
-                url=page["url"],
-                title=page.get("title"),
-                content=content,
-                content_hash=content_hash,
-                page_type=page_type,
-                status="active",
-                http_status=page.get("http_status"),
-                crawled_at=now,
-            )
+            existing = KnowledgePage(store_id=store.id, url=page["url"], title=page.get("title"), content=content, content_hash=content_hash, page_type=page_type, status="active", http_status=page.get("http_status"), crawled_at=now)
             db.add(existing)
             db.flush()
             page_id = existing.id
             knowledge_created += 1
         for index, chunk in enumerate(chunker.split(content)):
-            db.add(KnowledgeChunk(
-                store_id=store.id,
-                page_id=page_id,
-                url=page["url"],
-                title=page.get("title"),
-                chunk_index=index,
-                content=chunk,
-            ))
+            db.add(KnowledgeChunk(store_id=store.id, page_id=page_id, chunk_index=index, content=chunk))
 
     result = None
     if product_rows:
-        mapping = {field: field for field in (
-            "id", "sku", "name", "description", "price", "stock", "category",
-            "brand", "image_url", "product_url", "currency"
-        )}
-        result = ProductSyncService(db).sync_rows(
-            store.id,
-            product_rows,
-            mapping,
-            full_sync=True,
-            source_datasource_id=datasource.id,
-        )
+        mapping = {field: field for field in ("id", "sku", "name", "description", "price", "stock", "category", "brand", "image_url", "product_url", "currency")}
+        result = ProductSyncService(db).sync_rows(store.id, product_rows, mapping, full_sync=True, source_datasource_id=datasource.id)
     db.commit()
-    return {
-        "pages_found": len(pages),
-        "products_found": len(product_rows),
-        "knowledge_created": knowledge_created,
-        "knowledge_updated": knowledge_updated,
-        "products_created": result.created if result else 0,
-        "products_updated": result.updated if result else 0,
-        "products_unchanged": result.unchanged if result else 0,
-        "errors": result.errors if result else [],
-    }
+    return {"pages_found": len(pages), "products_found": len(product_rows), "knowledge_created": knowledge_created, "knowledge_updated": knowledge_updated, "products_created": result.created if result else 0, "products_updated": result.updated if result else 0, "products_unchanged": result.unchanged if result else 0, "errors": result.errors if result else []}
