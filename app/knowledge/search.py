@@ -48,8 +48,10 @@ class KnowledgeSearchEngine:
             FROM knowledge_chunks kc
             JOIN knowledge_pages kp
                 ON kp.id = kc.page_id
+                AND kp.store_id = kc.store_id
             WHERE
                 kc.store_id = :store_id
+                AND kp.store_id = :store_id
                 AND kc.content ILIKE :like_query
             ORDER BY score DESC
             LIMIT :limit
