@@ -19,7 +19,10 @@ def _check_literal_host(host: str) -> bool:
 _LOCAL_NAMES = frozenset({"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback", "metadata.google.internal"})
 def is_private_host(url: str) -> bool:
     parsed=urlparse(url)
-    if parsed.scheme not in ("http","https") or _local_hosts_allowed(): return False
+    # Non-web schemes are never valid crawler destinations, regardless of the
+    # local-host test override used by datasource integration tests.
+    if parsed.scheme not in ("http","https"): return True
+    if _local_hosts_allowed(): return False
     host=(parsed.hostname or "").rstrip(".").lower()
     return not host or host in _LOCAL_NAMES or host.endswith(".localhost") or _check_literal_host(host)
 async def assert_safe_url(url: str)->None:
