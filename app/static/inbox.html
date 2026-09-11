@@ -51,18 +51,19 @@
     });
   }
   function showAuth(error){
-    if(timer)clearInterval(timer);
+    if(timer){clearInterval(timer);timer=null;}
     auth.style.display="block";app.style.display="none";
     var e=document.getElementById("auth-error");e.textContent=error||"";e.style.display=error?"block":"none";
   }
   function showApp(){auth.style.display="none";app.style.display="block";loadList();if(!timer)timer=setInterval(poll,5000)}
+  function appendEmpty(parent,text){var el=document.createElement("div");el.className="empty";el.textContent=text;parent.appendChild(el)}
   function renderList(items){
     list.textContent="";
-    if(!Array.isArray(items)||!items.length){list.innerHTML='<div class="empty">No customer conversations yet.</div>';return}
+    if(!Array.isArray(items)||!items.length){appendEmpty(list,"No customer conversations yet.");return}
     items.forEach(function(item){
       var b=document.createElement("button");b.className="conversation"+(selected&&selected.conversation_id===item.conversation_id?" active":"");b.type="button";
       var label=document.createElement("b");label.textContent=item.visitor_id||item.conversation_id;
-      var small=document.createElement("small");small.textContent=item.last_message&&item.last_message.content?item.last_message.content:"No messages yet";
+      var small=document.createElement("small");small.textContent=item.last_message&&item.last_message.content?String(item.last_message.content):"No messages yet";
       var badge=document.createElement("span");badge.className="badge"+(item.mode==="human"?" human":"");badge.textContent=item.mode==="human"?"Human":"AI";
       b.appendChild(label);b.appendChild(small);b.appendChild(badge);b.onclick=function(){openConversation(item.conversation_id)};list.appendChild(b);
     });
@@ -70,12 +71,12 @@
   function renderListCache(){renderList(cached)}
   function renderMessages(data){
     messages.textContent="";
-    if(!data||!Array.isArray(data.messages)||!data.messages.length){messages.innerHTML='<div class="empty">No messages yet.</div>';return}
+    if(!data||!Array.isArray(data.messages)||!data.messages.length){appendEmpty(messages,"No messages yet.");return}
     data.messages.forEach(function(m){var el=document.createElement("div");el.className="msg "+(m.role==="user"?"user":m.role==="merchant"?"merchant":"assistant");el.textContent=m.content==null?"":String(m.content);messages.appendChild(el)});messages.scrollTop=messages.scrollHeight;
   }
   function setControls(mode){var human=mode==="human";status.textContent=human?"Human mode — AI replies paused":"AI mode";takeover.disabled=human||!selected;resume.disabled=!human||!selected;reply.disabled=!selected||!human;send.disabled=!selected||!human||loading;reply.placeholder=human?"Reply to customer…":"Take over first to reply directly."}
   function openConversation(id){selected={conversation_id:id};loadConversation()}
-  function loadConversation(){if(!selected)return;api("/v1/messages/conversations/"+encodeURIComponent(selected.conversation_id)).then(function(data){selected=data;title.textContent="Visitor: "+(data.visitor_id||"anonymous");meta.textContent=data.conversation_id;setControls(data.mode||"ai");renderMessages(data);renderListCache()}).catch(function(e){messages.innerHTML="";var er=document.createElement("div");er.className="error";er.textContent=e.message;messages.appendChild(er)})}
+  function loadConversation(){if(!selected)return;api("/v1/messages/conversations/"+encodeURIComponent(selected.conversation_id)).then(function(data){selected=data;title.textContent="Visitor: "+(data.visitor_id||"anonymous");meta.textContent=data.conversation_id;setControls(data.mode||"ai");renderMessages(data);renderListCache()}).catch(function(e){messages.textContent="";var er=document.createElement("div");er.className="error";er.textContent=e.message;messages.appendChild(er)})}
   function loadList(){if(!token)return;api("/v1/messages/conversations").then(function(data){cached=Array.isArray(data)?data:[];renderList(cached);var active=cached.find(function(x){return selected&&x.conversation_id===selected.conversation_id});if(active)loadConversation()}).catch(function(e){list.textContent="";var er=document.createElement("div");er.className="error";er.textContent=e.message;list.appendChild(er)})}
   function changeMode(mode){if(!selected)return;api("/v1/messages/conversations/"+encodeURIComponent(selected.conversation_id)+"/mode",{method:"POST",body:{mode:mode}}).then(function(){loadConversation();loadList()}).catch(function(e){alert(e.message)})}
   function sendReply(){var text=reply.value.trim();if(!text||!selected||loading)return;loading=true;setControls("human");api("/v1/messages/conversations/"+encodeURIComponent(selected.conversation_id)+"/reply",{method:"POST",body:{message:text}}).then(function(){reply.value="";loadConversation();loadList()}).catch(function(e){alert(e.message)}).finally(function(){loading=false;if(selected)setControls(selected.mode||"ai")})}
