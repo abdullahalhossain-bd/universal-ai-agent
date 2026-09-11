@@ -20,6 +20,7 @@
   var pollingTimer = null;
   var lastMerchantMessageId = null;
   var initializedConversation = null;
+  var modeChanging = false;
 
   function makeId() {
     try {
@@ -160,20 +161,66 @@
     }
   }
 
-  function setMode(enabled) {
+  function renderMode(enabled) {
     humanMode = enabled;
-    if (!root) return;
+    if (!root || !merchantButton || !input) return;
     merchantButton.textContent = enabled ? "🤖 AI assistant" : "💬 Talk to merchant";
     merchantButton.setAttribute("aria-pressed", enabled ? "true" : "false");
     merchantButton.style.background = enabled ? "#ecfdf5" : "#fff";
     merchantButton.style.color = enabled ? "#047857" : "#475569";
     input.placeholder = enabled ? "Write a message to the merchant…" : "পণ্য, দাম বা product link সম্পর্কে জিজ্ঞেস করুন…";
     if (modeNote) {
-      modeNote.textContent = enabled ? "You are chatting with the merchant. Replies will appear here." : "AI assistant mode";
+      modeNote.textContent = enabled ? "You are chatting with the merchant. AI auto-replies are paused." : "AI assistant mode";
       modeNote.style.display = enabled ? "block" : "none";
     }
     if (enabled) startMerchantPolling();
     else stopMerchantPolling();
+  }
+
+  function setRemoteMode(mode) {
+    var conversation = getConversation();
+    return fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversation) + "/mode", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": API_KEY },
+      body: JSON.stringify({ mode: mode })
+    }).then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (data) {
+        if (!response.ok) throw new Error(data.detail || ("HTTP " + response.status));
+        return data;
+      });
+    });
+  }
+
+  function syncModeFromServer() {
+    var conversation = getConversation();
+    fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversation), {
+      headers: { "x-api-key": API_KEY }
+    })
+      .then(function (response) {
+        if (!response.ok) return null;
+        return response.json();
+      })
+      .then(function (data) {
+        if (!data || (data.mode !== "human" && data.mode !== "ai")) return;
+        renderMode(data.mode === "human");
+      })
+      .catch(function () {});
+  }
+
+  function setMode(enabled) {
+    if (modeChanging || enabled === humanMode) return;
+    modeChanging = true;
+    var previous = humanMode;
+    renderMode(enabled);
+    setRemoteMode(enabled ? "human" : "ai")
+      .catch(function (error) {
+        renderMode(previous);
+        addMessage("Could not change chat mode. Please try again.", "merchant");
+        console.error("Merchant chat mode error:", error);
+      })
+      .finally(function () {
+        modeChanging = false;
+      });
   }
 
   function sendToMerchant() {
@@ -195,6 +242,7 @@
       addMessage(text, "user");
       input.value = "";
       input.style.height = "auto";
+      renderMode(true);
       startMerchantPolling();
     }).catch(function (error) {
       addMessage("Message could not be sent. Please try again.", "merchant");
@@ -227,11 +275,11 @@
 
     merchantButton.addEventListener("click", function () {
       setMode(!humanMode);
-      if (humanMode) input.focus();
+      if (!modeChanging && humanMode) input.focus();
     });
 
-    /* Keep the original AI button and its listener detached. The replacement
-       delegates to it whenever the customer returns to AI mode. */
+    /* Keep the original AI button listener intact behind a replacement.
+       The replacement delegates to it whenever the customer is in AI mode. */
     var replacement = originalSend.cloneNode(true);
     originalSend.replaceWith(replacement);
     sendButton = replacement;
@@ -249,7 +297,8 @@
       }
     }, true);
 
-    setMode(false);
+    renderMode(false);
+    syncModeFromServer();
     return true;
   }
 
