@@ -9,6 +9,7 @@
 
   var CONV_KEY = "ucai_widget_conv_" + API_KEY.slice(-8);
   var VISITOR_KEY = "ucai_widget_visitor_" + API_KEY.slice(-8);
+  var POLL_KEY = "ucai_widget_merchant_poll_" + API_KEY.slice(-8);
   var root = null;
   var humanMode = false;
   var sendButton = null;
@@ -16,6 +17,9 @@
   var input = null;
   var merchantButton = null;
   var modeNote = null;
+  var pollingTimer = null;
+  var lastMerchantMessageId = null;
+  var initializedConversation = null;
 
   function makeId() {
     try {
@@ -57,15 +61,80 @@
     return null;
   }
 
-  function addMessage(text, role) {
+  function addMessage(text, role, messageId) {
     if (!root) return;
     var messages = root.querySelector(".messages");
     if (!messages) return;
+    if (messageId && messages.querySelector('[data-merchant-message-id="' + CSS.escape(String(messageId)) + '"]')) return;
     var el = document.createElement("div");
     el.className = "msg " + (role === "user" ? "user" : "merchant");
+    if (messageId) el.setAttribute("data-merchant-message-id", String(messageId));
     el.textContent = text;
     messages.appendChild(el);
     messages.scrollTop = messages.scrollHeight;
+  }
+
+  function existingMerchantIds() {
+    if (!root) return [];
+    var nodes = root.querySelectorAll("[data-merchant-message-id]");
+    var ids = [];
+    for (var i = 0; i < nodes.length; i++) ids.push(nodes[i].getAttribute("data-merchant-message-id"));
+    return ids;
+  }
+
+  function getConversation() {
+    return conversationId();
+  }
+
+  function pollMerchantMessages() {
+    if (!humanMode) return;
+    var conversation = getConversation();
+    fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversation), {
+      headers: { "x-api-key": API_KEY }
+    })
+      .then(function (response) {
+        if (!response.ok) return null;
+        return response.json();
+      })
+      .then(function (data) {
+        if (!data || !Array.isArray(data.messages)) return;
+        var existing = existingMerchantIds();
+        data.messages.forEach(function (message) {
+          if (!message || message.role !== "merchant" || !message.id) return;
+          var id = String(message.id);
+          if (existing.indexOf(id) !== -1 || id === lastMerchantMessageId) return;
+          addMessage("Store team: " + (message.content || ""), "merchant", id);
+          lastMerchantMessageId = id;
+        });
+        if (data.messages.length) {
+          var merchantMessages = data.messages.filter(function (m) { return m && m.role === "merchant" && m.id; });
+          if (merchantMessages.length) lastMerchantMessageId = String(merchantMessages[merchantMessages.length - 1].id);
+        }
+        try { localStorage.setItem(POLL_KEY, JSON.stringify({ conversation_id: conversation, last_id: lastMerchantMessageId || null })); } catch (_) {}
+      })
+      .catch(function () {});
+  }
+
+  function startMerchantPolling() {
+    var conversation = getConversation();
+    if (initializedConversation !== conversation) {
+      initializedConversation = conversation;
+      lastMerchantMessageId = null;
+      try {
+        var stored = JSON.parse(localStorage.getItem(POLL_KEY) || "null");
+        if (stored && stored.conversation_id === conversation && stored.last_id) lastMerchantMessageId = String(stored.last_id);
+      } catch (_) {}
+    }
+    pollMerchantMessages();
+    if (pollingTimer) return;
+    pollingTimer = setInterval(pollMerchantMessages, 4000);
+  }
+
+  function stopMerchantPolling() {
+    if (pollingTimer) {
+      clearInterval(pollingTimer);
+      pollingTimer = null;
+    }
   }
 
   function setMode(enabled) {
@@ -80,6 +149,8 @@
       modeNote.textContent = enabled ? "You are chatting with the merchant. Replies will appear here." : "AI assistant mode";
       modeNote.style.display = enabled ? "block" : "none";
     }
+    if (enabled) startMerchantPolling();
+    else stopMerchantPolling();
   }
 
   function sendToMerchant() {
@@ -97,10 +168,11 @@
         if (!response.ok) throw new Error(data.detail || ("HTTP " + response.status));
         return data;
       });
-    }).then(function () {
+    }).then(function (data) {
       addMessage(text, "user");
       input.value = "";
       input.style.height = "auto";
+      if (data && data.id) startMerchantPolling();
     }).catch(function (error) {
       addMessage("Message could not be sent. Please try again.", "merchant");
       console.error("Merchant chat error:", error);
@@ -163,4 +235,6 @@
     if (install()) return;
     if (++attempts < 80) setTimeout(wait, 100);
   })();
+
+  window.addEventListener("beforeunload", stopMerchantPolling);
 })();
