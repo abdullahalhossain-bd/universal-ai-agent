@@ -1,7 +1,7 @@
 /* Premium commerce UX layer for the standalone customer chat. */
 (function () {
   "use strict";
-  var products = [], language = "en", type = "";
+  var products = [], language = "en", type = "", lastQuery = "", quickSignature = "";
 
   function lang(t) { return /[\u0980-\u09FF]/.test(String(t || "")) ? "bn" : "en"; }
   function safe(v, base) {
@@ -33,14 +33,18 @@
       ".ucai-attrs{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}",
       ".ucai-attr{font-size:10px;padding:4px 7px;border:1px solid #e7e9ee;border-radius:999px;background:#f8fafc;color:#667085}",
       ".ucai-attr b{color:#344054}",
-      ".ucai-quick-replies{display:flex;gap:7px;overflow-x:auto;padding:4px 0 9px;scrollbar-width:none}",
+      ".ucai-quick-replies{display:flex;gap:7px;overflow-x:auto;padding:4px 0 9px;scrollbar-width:none;max-width:100%}",
       ".ucai-quick-replies::-webkit-scrollbar{display:none}",
       ".ucai-quick{white-space:nowrap;border:1px solid #e1e4ea;background:#fff;border-radius:999px;padding:7px 11px;font-size:11px;color:#475569;cursor:pointer;box-shadow:0 2px 8px rgba(16,24,40,.04);transition:all .15s ease}",
       ".ucai-quick:hover{background:#f7f7ff;border-color:#b9b5f5;color:#4f46e5;transform:translateY(-1px)}",
+      ".ucai-quick.ucai-quick-primary{background:#111827;border-color:#111827;color:#fff}",
       ".ucai-product-index{position:absolute;top:8px;left:8px;z-index:2;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:rgba(17,24,39,.76);color:#fff;font:600 10px/1 Inter,sans-serif;box-shadow:0 2px 7px rgba(0,0,0,.16)}",
       ".ucai-image-placeholder{display:flex!important;align-items:center;justify-content:center;color:#98a2b3;font-size:10px;text-align:center;padding:8px}",
       ".ucai-cleanup{display:none!important}",
-      ".ucai-support-note{margin:2px 0 0;font-size:11px;color:#98a2b3}"
+      ".ucai-support-note{margin:2px 0 0;font-size:11px;color:#98a2b3}",
+      ".ucai-single-welcome{margin:0!important}",
+      ".ucai-single-welcome .empty-title{margin-bottom:6px}",
+      "@media(max-width:560px){.ucai-quick{padding:7px 10px;font-size:10.5px}}"
     ].join("");
     document.head.appendChild(s);
   }
@@ -54,8 +58,23 @@
     });
   }
 
+  function compactWelcome() {
+    var empty = document.querySelector(".empty");
+    if (!empty || empty.dataset.ucaiWelcome) return;
+    empty.dataset.ucaiWelcome = "1";
+    empty.classList.add("ucai-single-welcome");
+    var title = empty.querySelector(".empty-title");
+    var copy = empty.querySelector("p:not(.empty-title)");
+    var bn = language === "bn";
+    if (title) title.textContent = bn ? "👋 কী খুঁজছেন?" : "👋 What are you looking for?";
+    if (copy) copy.textContent = bn
+      ? "পণ্যের নাম, দাম, স্টক বা ডেলিভারি সম্পর্কে জিজ্ঞেস করুন।"
+      : "Ask about products, prices, stock or delivery.";
+  }
+
   function patch() {
     style();
+    compactWelcome();
     document.querySelectorAll(".product-tag").forEach(function (card, index) {
       cleanupTechnicalMetadata(card);
       if (card.dataset.ucaiUx) return;
@@ -96,24 +115,109 @@
     quickReplies();
   }
 
+  function normalizedQuery() {
+    return String(lastQuery || "").trim().toLowerCase();
+  }
+
+  function hasAny(text, words) {
+    return words.some(function (word) { return text.indexOf(word) !== -1; });
+  }
+
+  function isHumanRequest(text) {
+    return hasAny(text, ["talk to merchant", "talk to a merchant", "human", "agent", "representative", "মানুষ", "মার্চেন্ট", "কথা বলতে চাই"]);
+  }
+
+  function contextualChoices() {
+    var q = normalizedQuery();
+    var bn = language === "bn";
+    var choices;
+
+    if (isHumanRequest(q)) {
+      choices = bn ? ["মার্চেন্টের সাথে কথা বলুন", "আরেকটি প্রশ্ন"] : ["Talk to merchant", "Ask another question"];
+    } else if (hasAny(q, ["delivery", "deliver", "shipping", "ship", "ডেলিভারি", "কত দিনে", "কবে পাব"])) {
+      choices = bn ? ["ডেলিভারি তথ্য", "মার্চেন্টের সাথে কথা বলুন"] : ["Delivery info", "Talk to merchant"];
+    } else if (hasAny(q, ["warranty", "guarantee", "ওয়ারেন্টি", "ওয়্যারেন্টি", "গ্যারান্টি"])) {
+      choices = bn ? ["ওয়ারেন্টি তথ্য", "মার্চেন্টের সাথে কথা বলুন"] : ["Warranty info", "Talk to merchant"];
+    } else if (hasAny(q, ["return", "refund", "exchange", "ফেরত", "রিটার্ন", "রিফান্ড", "এক্সচেঞ্জ"])) {
+      choices = bn ? ["রিটার্ন পলিসি", "মার্চেন্টের সাথে কথা বলুন"] : ["Return policy", "Talk to merchant"];
+    } else if (hasAny(q, ["compare", "comparison", "তুলনা", "vs ", " vs"])) {
+      choices = bn ? ["তুলনা করুন", "বিস্তারিত"] : ["Compare", "Details"];
+    } else if (hasAny(q, ["price", "cost", "দাম", "মূল্য", "কত টাকা", "কতো টাকা"])) {
+      choices = bn ? ["কম দামের অপশন", "আরও দেখুন"] : ["Lower price", "Show more"];
+    } else if (hasAny(q, ["detail", "details", "tell me more", "বিস্তারিত", "জানতে চাই"])) {
+      choices = bn ? ["বিস্তারিত", "ছবি দেখুন"] : ["More details", "Show photos"];
+    } else if (hasAny(q, ["stock", "available", "availability", "আছে", "স্টকে", "স্টক"])) {
+      choices = bn ? ["স্টকে আছে এমন", "কম দামের অপশন"] : ["In stock", "Lower price"];
+    } else {
+      choices = bn ? ["আরও দেখান", "কম দামের অপশন", "স্টকে আছে এমন"] : ["Show more", "Lower price", "In stock"];
+    }
+
+    return choices.slice(0, 3);
+  }
+
+  function sendQuickReply(text) {
+    var input = document.querySelector("#message-input") || document.querySelector("textarea");
+    if (!input) return;
+    var composer = input.closest("form");
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles:true }));
+    input.focus();
+    if (composer && /talk to merchant|মার্চেন্টের সাথে কথা বলুন/i.test(text)) {
+      setTimeout(function () { if (typeof composer.requestSubmit === "function") composer.requestSubmit(); }, 0);
+    }
+  }
+
   function quickReplies() {
-    if (document.querySelector(".ucai-quick-replies")) return;
-    var composer = document.querySelector("textarea") && document.querySelector("textarea").closest("form"); if (!composer) return;
-    var box = document.createElement("div"); box.className = "ucai-quick-replies";
-    var choices = language === "bn" ? ["আরও দেখান", "কম দামের অপশন", "স্টকে আছে এমন", "বিস্তারিত বলুন"] : ["Show more", "Lower price", "In stock", "Tell me more"];
-    choices.forEach(function (text) { var b = document.createElement("button"); b.type = "button"; b.className = "ucai-quick"; b.textContent = text; b.addEventListener("click", function () { var input = document.querySelector("textarea"); if (!input) return; input.value = text; input.dispatchEvent(new Event("input", { bubbles:true })); input.focus(); }); box.appendChild(b); });
+    var composerInput = document.querySelector("#message-input") || document.querySelector("textarea");
+    var composer = composerInput && composerInput.closest("form");
+    if (!composer) return;
+
+    var choices = contextualChoices();
+    var signature = language + "|" + type + "|" + normalizedQuery() + "|" + choices.join("|");
+    if (quickSignature === signature && document.querySelector(".ucai-quick-replies")) return;
+    quickSignature = signature;
+
+    document.querySelectorAll(".ucai-quick-replies").forEach(function (el) { el.remove(); });
+    var box = document.createElement("div"); box.className = "ucai-quick-replies"; box.setAttribute("aria-label", "Suggested questions");
+    choices.forEach(function (text, index) {
+      var b = document.createElement("button"); b.type = "button"; b.className = "ucai-quick" + ((/talk to merchant|মার্চেন্টের সাথে কথা বলুন/i.test(text)) ? " ucai-quick-primary" : ""); b.textContent = text;
+      b.addEventListener("click", function () { sendQuickReply(text); });
+      box.appendChild(b);
+    });
     composer.parentNode.insertBefore(box, composer);
   }
 
   var nativeFetch = window.fetch;
   window.fetch = function () {
     var args = arguments, u = String(args[0] && args[0].url ? args[0].url : args[0] || ""), o = args[1] || {};
-    try { if (u.indexOf("/v1/chat") !== -1 && o.body) { var b = JSON.parse(o.body); if (b.message) language = lang(b.message); } } catch (_) {}
+    try {
+      if (u.indexOf("/v1/chat") !== -1 && o.body) {
+        var b = JSON.parse(o.body);
+        if (b.message) { lastQuery = String(b.message); language = lang(b.message); quickSignature = ""; }
+      }
+    } catch (_) {}
     return nativeFetch.apply(this, args).then(function (r) {
-      if (u.indexOf("/v1/chat") !== -1 || u.indexOf("/v1/images/") !== -1) r.clone().json().then(function (d) { if (d) { if (Array.isArray(d.products)) products = d.products; type = String(d.type || ""); setTimeout(patch, 0); } }).catch(function () {});
+      if (u.indexOf("/v1/chat") !== -1 || u.indexOf("/v1/images/") !== -1) r.clone().json().then(function (d) {
+        if (d) {
+          if (Array.isArray(d.products)) products = d.products;
+          type = String(d.type || d.intent || "");
+          if (d.message && !lastQuery) language = lang(d.message);
+          setTimeout(patch, 0);
+        }
+      }).catch(function () {});
       return r;
     });
   };
+
+  document.addEventListener("input", function (e) {
+    if (e.target && (e.target.id === "message-input" || e.target.tagName === "TEXTAREA")) {
+      lastQuery = String(e.target.value || "");
+      language = lang(lastQuery);
+      quickSignature = "";
+      setTimeout(quickReplies, 0);
+    }
+  });
+
   new MutationObserver(patch).observe(document.body, { childList:true, subtree:true });
   patch();
 })();
