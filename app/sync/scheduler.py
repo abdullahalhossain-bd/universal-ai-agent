@@ -1,8 +1,10 @@
 """Periodic enqueue for SQL and dynamic website datasources."""
 from __future__ import annotations
 import asyncio, logging
+from datetime import datetime, timedelta
 from typing import Any, Callable, Awaitable
 from app.sync.queue import SyncQueue
+from app.crawler.limits import get_crawl_limits
 logger=logging.getLogger("app.sync.scheduler")
 GetDatasources=Callable[[],Awaitable[list[dict[str,Any]]]]
 
@@ -14,7 +16,7 @@ async def get_active_datasources() -> list[dict[str,Any]]:
         rows=DataSourceService(db).list_active(); out=[]
         for ds in rows:
             if ds.connector_type=="website":
-                out.append({"id":ds.id,"store_id":ds.store_id,"connector_type":"website","active":ds.active,"full_sync":ds.full_sync})
+                out.append({"id":ds.id,"store_id":ds.store_id,"connector_type":"website","active":ds.active,"full_sync":ds.full_sync,"last_sync_at":ds.last_sync_at,"plan":ds.store.plan if getattr(ds,"store",None) else None})
             elif ds.connector_type in {"postgresql","mysql","postgres"} and ds.table_name and ds.mapping and ds.connection_url:
                 out.append({"id":ds.id,"store_id":ds.store_id,"connector_type":ds.connector_type,"table_name":ds.table_name,"active":ds.active,"full_sync":ds.full_sync})
         return out
@@ -25,8 +27,12 @@ async def scheduler(redis_url: str="redis://localhost:6379",*,interval_seconds: 
     logger.info("Sync scheduler started (interval=%ss)",interval_seconds)
     while True:
         try:
+            now=datetime.utcnow()
             for ds in await fetch():
                 if not ds.get("active",True): continue
+                if ds.get("connector_type")=="website":
+                    plan=ds.get("plan") or "basic"; hours=float(get_crawl_limits(plan).get("recrawl_hours",24)); last=ds.get("last_sync_at")
+                    if last and now-last < timedelta(hours=hours): continue
                 job={"store_id":ds.get("store_id") or ds.get("tenant_id"),"datasource_id":ds.get("id"),"job_type":"website_sync" if ds.get("connector_type")=="website" else "product_sync","full_sync":ds.get("full_sync",True)}
                 await queue.enqueue(job)
                 logger.info("enqueued %s store=%s datasource=%s",job["job_type"],job["store_id"],job["datasource_id"])
