@@ -7,7 +7,7 @@ from app.db.database import Base
 
 
 class AgentConfig(Base):
-    """Merchant-controlled AI assistant behavior for one store."""
+    """Merchant-controlled AI assistant behavior and storefront branding."""
 
     __tablename__ = "agent_configs"
 
@@ -24,5 +24,8 @@ class AgentConfig(Base):
     fallback_message: Mapped[str] = mapped_column(Text, nullable=False, default="I couldn't find that information. Please contact the store for help.", server_default="I couldn't find that information. Please contact the store for help.")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     auto_reply_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    logo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    brand_color: Mapped[str] = mapped_column(String(7), nullable=False, default="#111827", server_default="#111827")
+    position: Mapped[str] = mapped_column(String(20), nullable=False, default="bottom-right", server_default="bottom-right")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now())
