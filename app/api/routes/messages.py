@@ -71,28 +71,27 @@ def _upsert_profile(db: Session, store_id: str, visitor_id: str, name=None, emai
         profile = VisitorProfile(store_id=store_id, visitor_id=visitor_id)
         db.add(profile)
     if name is not None and name.strip(): profile.name = name.strip()
+    # Email/phone supplied by a public visitor are deliberately kept out of the
+    # trusted Customer/CustomerIdentity records until a merchant-controlled
+    # linking flow is used. They remain legacy visitor metadata for compatibility.
     if email is not None: profile.email = str(email).strip().lower()
     if phone is not None and phone.strip(): profile.phone = phone.strip()
     return profile
 
 
 def _sync_customer_profile(db: Session, session: ChatSession, name=None, email=None, phone=None, actor_type="customer", actor_id=None):
+    """Synchronize only non-sensitive profile data from a conversation.
+
+    Public email/phone input never creates or moves a trusted CustomerIdentity.
+    Secure email/phone linking is merchant-only through customer_management.py.
+    """
     if not session.customer_id:
         return None
     customer = _get_customer(db, session.store_id, session.customer_id)
     if customer is None or customer.merged_into_customer_id:
         return None
-    values = {"name": name.strip() if isinstance(name, str) else name, "email": str(email).strip().lower() if email is not None else None, "phone": phone.strip() if isinstance(phone, str) else phone}
-    for field, value in values.items():
-        if value is None or value == "": continue
-        if field in {"email", "phone"}:
-            existing = db.query(CustomerIdentity).filter(CustomerIdentity.store_id == session.store_id, CustomerIdentity.identity_type == field, CustomerIdentity.identity_value == value).first()
-            if existing is not None and existing.customer_id != customer.id:
-                raise HTTPException(status_code=409, detail=f"{field.title()} is already linked to another customer. Use the merchant merge flow after verification.")
-            if existing is None:
-                db.add(CustomerIdentity(store_id=session.store_id, customer_id=customer.id, identity_type=field, identity_value=value))
-                db.add(CustomerIdentityHistory(store_id=session.store_id, customer_id=customer.id, action="linked", identity_type=field, identity_value=value, to_customer_id=customer.id, actor_type=actor_type, actor_id=actor_id))
-        setattr(customer, field, value)
+    if isinstance(name, str) and name.strip():
+        customer.name = name.strip()
     customer.last_seen_at = datetime.utcnow()
     customer.updated_at = datetime.utcnow()
     return customer
@@ -103,11 +102,8 @@ def _sync_customer_from_profile(db: Session, session: ChatSession):
     customer = _get_customer(db, session.store_id, session.customer_id)
     if customer is None or customer.merged_into_customer_id: return None
     profile = _get_profile(db, session.store_id, session.visitor_id)
-    if profile:
-        # Legacy VisitorProfile remains compatible, but an identity collision never auto-links customers.
-        for field in ("name", "email", "phone"):
-            value = getattr(profile, field)
-            if value and not getattr(customer, field): setattr(customer, field, value)
+    if profile and profile.name and not customer.name:
+        customer.name = profile.name
     customer.last_seen_at = datetime.utcnow()
     return customer
 
@@ -120,7 +116,7 @@ def _conversation_identity(db: Session, session: ChatSession):
 
 def _conversation_row(session: ChatSession, messages: list[ChatMessage], db: Session):
     last = messages[-1] if messages else None
-    return {"conversation_id": session.conversation_key, "session_id": session.id, "visitor_id": session.visitor_id, "customer_id": session.customer_id, "identity": _conversation_identity(db, session), "mode": session.mode or "ai", "mode_owner": session.mode_owner or "ai", "created_at": session.created_at, "updated_at": session.updated_at, "last_message": _message_row(last) if last else None, "messages": [_message_row(item) for item in messages]}
+    return {"conversation_id": session.conversation_key, "session_id": session.id, "visitor_id": session.visitor_id, "customer_id": session.customer_id, "identity": _conversation_identity(db, session), "mode": session.mode or "ai", "mode_owner": session.mode_owner or "ai", "status": session.status or "open", "created_at": session.created_at, "updated_at": session.updated_at, "last_message": _message_row(last) if last else None, "messages": [_message_row(item) for item in messages]}
 
 
 def _authorized_customer(api_key: APIKey, x_api_key: str | None) -> str:
@@ -158,7 +154,7 @@ def list_conversations(auth: tuple[User, Store] = Depends(get_current_inbox_user
     result = []
     for session in sessions:
         last = db.query(ChatMessage).filter(ChatMessage.session_id == session.id).order_by(ChatMessage.created_at.desc()).first()
-        result.append({"conversation_id": session.conversation_key, "session_id": session.id, "visitor_id": session.visitor_id, "customer_id": session.customer_id, "identity": _conversation_identity(db, session), "mode": session.mode or "ai", "mode_owner": session.mode_owner or "ai", "created_at": session.created_at, "updated_at": session.updated_at, "last_message": _message_row(last) if last else None})
+        result.append({"conversation_id": session.conversation_key, "session_id": session.id, "visitor_id": session.visitor_id, "customer_id": session.customer_id, "identity": _conversation_identity(db, session), "mode": session.mode or "ai", "mode_owner": session.mode_owner or "ai", "status": session.status or "open", "created_at": session.created_at, "updated_at": session.updated_at, "last_message": _message_row(last) if last else None})
     db.commit()
     return result
 
@@ -190,8 +186,8 @@ def get_customer_profile(customer_id: str, auth: tuple[User, Store] = Depends(ge
     if customer.merged_into_customer_id: raise HTTPException(status_code=409, detail=f"Customer was merged into {customer.merged_into_customer_id}")
     identities = db.query(CustomerIdentity).filter(CustomerIdentity.store_id == store.id, CustomerIdentity.customer_id == customer.id).order_by(CustomerIdentity.created_at.asc()).all()
     conversations = db.query(ChatSession).filter(ChatSession.store_id == store.id, ChatSession.customer_id == customer.id).order_by(ChatSession.updated_at.desc()).limit(100).all()
-    history = db.query(CustomerIdentityHistory).filter(CustomerIdentityHistory.store_id == store.id, CustomerIdentityIdentityHistory.customer_id == customer.id).order_by(CustomerIdentityHistory.created_at.desc()).limit(100).all() if False else db.query(CustomerIdentityHistory).filter(CustomerIdentityHistory.store_id == store.id, CustomerIdentityHistory.customer_id == customer.id).order_by(CustomerIdentityHistory.created_at.desc()).limit(100).all()
-    return {"customer": _customer_row(customer), "identities": [{"id": i.id, "type": i.identity_type, "value": i.identity_value, "created_at": i.created_at, "updated_at": i.updated_at} for i in identities], "conversations": [{"conversation_id": s.conversation_key, "session_id": s.id, "updated_at": s.updated_at, "mode": s.mode or "ai"} for s in conversations], "identity_history": [{"id": h.id, "action": h.action, "identity_type": h.identity_type, "identity_value": h.identity_value, "from_customer_id": h.from_customer_id, "to_customer_id": h.to_customer_id, "actor_type": h.actor_type, "actor_id": h.actor_id, "metadata": h.metadata_json, "created_at": h.created_at} for h in history]}
+    history = db.query(CustomerIdentityHistory).filter(CustomerIdentityHistory.store_id == store.id, CustomerIdentityHistory.customer_id == customer.id).order_by(CustomerIdentityHistory.created_at.desc()).limit(100).all()
+    return {"customer": _customer_row(customer), "identities": [{"id": i.id, "type": i.identity_type, "value": i.identity_value, "created_at": i.created_at, "updated_at": i.updated_at} for i in identities], "conversations": [{"conversation_id": s.conversation_key, "session_id": s.id, "updated_at": s.updated_at, "mode": s.mode or "ai", "status": s.status or "open"} for s in conversations], "identity_history": [{"id": h.id, "action": h.action, "identity_type": h.identity_type, "identity_value": h.identity_value, "from_customer_id": h.from_customer_id, "to_customer_id": h.to_customer_id, "actor_type": h.actor_type, "actor_id": h.actor_id, "metadata": h.metadata_json, "created_at": h.created_at} for h in history]}
 
 
 @router.post("/customers/merge")
@@ -235,7 +231,7 @@ def merchant_reply(conversation_id: str, payload: ReplyRequest, auth: tuple[User
     _user, store = auth
     session = _find_session(db, store.id, conversation_id)
     if session is None: raise HTTPException(status_code=404, detail="Conversation not found")
-    session.mode = "human"; session.mode_owner = "merchant"
+    session.mode = "human"; session.mode_owner = "merchant"; session.status = "open"
     message = ChatMessage(session_id=session.id, role="merchant", content=payload.message.strip())
     db.add(message); db.commit(); db.refresh(message)
     return _message_row(message)
@@ -270,9 +266,9 @@ def customer_identity(conversation_id: str, payload: CustomerIdentityRequest, x_
     _require_customer_conversation(session, x_conversation_token)
     if session.visitor_id != payload.visitor_id.strip(): raise HTTPException(status_code=409, detail="Visitor identity does not match this conversation")
     profile = _upsert_profile(db, store_id, session.visitor_id, payload.name, payload.email, payload.phone)
-    customer = _sync_customer_profile(db, session, payload.name, payload.email, payload.phone, actor_type="customer")
+    customer = _sync_customer_profile(db, session, payload.name, None, None, actor_type="customer")
     db.commit(); db.refresh(profile)
-    return {"conversation_id": conversation_id, "customer_id": customer.id if customer else None, "identity": {**_profile_row(profile), **_customer_row(customer)}}
+    return {"conversation_id": conversation_id, "customer_id": customer.id if customer else None, "identity": {**_profile_row(profile), **_customer_row(customer)}, "trusted_email_phone_linked": False}
 
 
 @router.post("/customer/{conversation_id}")
@@ -285,7 +281,9 @@ def customer_message(conversation_id: str, payload: CustomerMessageRequest, x_ap
     if session.visitor_id != visitor: raise HTTPException(status_code=409, detail="Visitor identity does not match this conversation")
     session.mode = "human"
     if session.mode_owner != "merchant": session.mode_owner = "customer"
+    session.status = "open"
+    session.read_at = None
     _upsert_profile(db, store_id, session.visitor_id, payload.name, payload.email, payload.phone)
-    _sync_customer_profile(db, session, payload.name, payload.email, payload.phone, actor_type="customer")
-    message = ChatMessage(session_id=session.id, role="user", content=payload.message.strip()); db.add(message); db.commit(); db.refresh(message)
+    _sync_customer_profile(db, session, payload.name, None, None, actor_type="customer")
+    message = ChatMessage(session_id=session.id, role="user", content=payload.message.strip()); db.add(message); session.updated_at = datetime.utcnow(); db.commit(); db.refresh(message)
     return _message_row(message)
