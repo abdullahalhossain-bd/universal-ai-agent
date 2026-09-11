@@ -41,6 +41,7 @@ def _conversation_row(session: ChatSession, messages: list[ChatMessage]):
         "session_id": session.id,
         "visitor_id": session.visitor_id,
         "mode": session.mode or "ai",
+        "mode_owner": session.mode_owner or "ai",
         "created_at": session.created_at,
         "updated_at": session.updated_at,
         "last_message": _message_row(last) if last else None,
@@ -67,14 +68,19 @@ def _find_session(db: Session, store_id: str, conversation_id: str):
     )
 
 
-def _set_mode(session: ChatSession, mode: str, db: Session):
+def _set_mode(session: ChatSession, mode: str, db: Session, owner: str = "merchant"):
     mode = mode.strip().lower()
     if mode not in {"ai", "human"}:
         raise HTTPException(status_code=400, detail="Mode must be 'ai' or 'human'")
     session.mode = mode
+    session.mode_owner = "ai" if mode == "ai" else owner
     db.commit()
     db.refresh(session)
-    return {"conversation_id": session.conversation_key, "mode": session.mode}
+    return {
+        "conversation_id": session.conversation_key,
+        "mode": session.mode,
+        "mode_owner": session.mode_owner,
+    }
 
 
 @router.get("/conversations")
@@ -102,6 +108,7 @@ def list_conversations(
             "session_id": session.id,
             "visitor_id": session.visitor_id,
             "mode": session.mode or "ai",
+            "mode_owner": session.mode_owner or "ai",
             "created_at": session.created_at,
             "updated_at": session.updated_at,
             "last_message": _message_row(last) if last else None,
@@ -140,7 +147,7 @@ def merchant_set_mode(
     session = _find_session(db, store.id, conversation_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return _set_mode(session, payload.mode, db)
+    return _set_mode(session, payload.mode, db, owner="merchant")
 
 
 @router.post("/conversations/{conversation_id}/reply")
@@ -155,8 +162,9 @@ def merchant_reply(
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     # A merchant reply is an explicit human takeover. The AI pipeline must
-    # stay disabled for this conversation until mode is switched back to AI.
+    # stay disabled until the merchant explicitly resumes AI.
     session.mode = "human"
+    session.mode_owner = "merchant"
     message = ChatMessage(
         session_id=session.id,
         role="merchant",
@@ -178,7 +186,7 @@ def customer_messages(
     store_id = _authorized_customer(api_key, x_api_key)
     session = _find_session(db, store_id, conversation_id)
     if session is None:
-        return {"conversation_id": conversation_id, "mode": "ai", "messages": []}
+        return {"conversation_id": conversation_id, "mode": "ai", "mode_owner": "ai", "messages": []}
     messages = (
         db.query(ChatMessage)
         .filter(
@@ -191,6 +199,7 @@ def customer_messages(
     return {
         "conversation_id": conversation_id,
         "mode": session.mode or "ai",
+        "mode_owner": session.mode_owner or "ai",
         "messages": [_message_row(item) for item in messages],
     }
 
@@ -215,11 +224,21 @@ def customer_set_mode(
             conversation_key=conversation_id,
             visitor_id="anonymous",
             mode="ai",
+            mode_owner="ai",
         )
         db.add(session)
         db.commit()
         db.refresh(session)
-    return _set_mode(session, payload.mode, db)
+
+    requested = payload.mode.strip().lower()
+    if requested == "ai" and session.mode_owner == "merchant":
+        raise HTTPException(
+            status_code=409,
+            detail="The merchant currently controls this conversation. Only the merchant can resume AI.",
+        )
+    if requested == "human":
+        return _set_mode(session, "human", db, owner="customer")
+    return _set_mode(session, "ai", db, owner="customer")
 
 
 @router.post("/customer/{conversation_id}")
@@ -248,11 +267,16 @@ def customer_message(
             conversation_key=conversation_id,
             visitor_id=payload.visitor_id.strip() or "anonymous",
             mode="human",
+            mode_owner="customer",
         )
         db.add(session)
         db.flush()
     else:
         session.mode = "human"
+        # A customer message while already in merchant takeover must not
+        # transfer ownership back to the customer.
+        if session.mode_owner != "merchant":
+            session.mode_owner = "customer"
 
     message = ChatMessage(
         session_id=session.id,
