@@ -3,7 +3,17 @@ import { adminApi, api, getAdminToken, getToken, setAdminToken, setToken } from 
 
 const AuthContext = createContext(null)
 
-export function AuthProvider({ children }) {
+async function establishInboxSession(email, password) {
+  // Dashboard auth and Inbox auth are intentionally separate credentials/tokens.
+  // This call only establishes the HttpOnly Inbox cookie; the JWT is never stored in JS.
+  try {
+    await api.post('/v1/auth/inbox/login', { email, password }, { auth: false })
+  } catch {
+    // Do not break the main dashboard login if the optional Inbox session cannot be established.
+  }
+}
+
+const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
   const [store, setStore] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -59,16 +69,25 @@ export function AuthProvider({ children }) {
   const login = async (email, password) => {
     const data = await api.post('/v1/auth/login', { email, password }, { auth: false })
     applyAuthResponse(data)
+    await establishInboxSession(email, password)
     return data
   }
 
   const signup = async (payload) => {
     const data = await api.post('/v1/auth/signup', payload, { auth: false })
     applyAuthResponse(data)
+    await establishInboxSession(payload.email, payload.password)
     return data
   }
 
-  const logout = () => {
+  const logout = async () => {
+    // Revoke the dashboard session server-side. The Inbox cookie is session-version
+    // bound, so it becomes unusable as soon as this succeeds.
+    try {
+      if (getToken()) await api.post('/v1/auth/logout')
+    } catch {
+      // Always clear local state even if the server is temporarily unavailable.
+    }
     setToken(null)
     setUser(null)
     setStore(null)
@@ -112,6 +131,8 @@ export function AuthProvider({ children }) {
     </AuthContext.Provider>
   )
 }
+
+export { AuthProvider }
 
 export function useAuth() {
   const ctx = useContext(AuthContext)
