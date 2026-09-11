@@ -18,6 +18,7 @@ _ADMIN_PATH = _STATIC_DIR / "admin.html"
 _BRANDING_PATH = _STATIC_DIR / "branding.html"
 _PLATFORM_ADMIN_PATH = _STATIC_DIR / "platform-admin.html"
 _MERCHANT_CHAT_PATH = _STATIC_DIR / "merchant-chat.js"
+_INBOX_PATH = _STATIC_DIR / "inbox.html"
 
 
 @router.get("/widget.js")
@@ -145,6 +146,15 @@ async def merchant_chat_bundle() -> FileResponse:
 async def admin_dashboard() -> FileResponse:
     return FileResponse(
         _ADMIN_PATH,
+        media_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/admin/inbox")
+async def merchant_inbox_dashboard() -> FileResponse:
+    return FileResponse(
+        _INBOX_PATH,
         media_type="text/html",
         headers={"Cache-Control": "no-store"},
     )
