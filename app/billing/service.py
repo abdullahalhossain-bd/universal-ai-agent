@@ -1,27 +1,12 @@
-"""
-Stripe integration.
-
-Three entry points, each mapped to a route in app/api/routes/billing.py:
-
-* `create_checkout_session` — merchant clicks "Upgrade to Growth" ->
-  redirected to Stripe-hosted Checkout for a new subscription.
-* `create_portal_session` — merchant clicks "Manage billing" ->
-  redirected to Stripe's hosted Customer Portal (update card, view
-  invoices, cancel).
-* `handle_webhook_event` — Stripe calls back after checkout completes
-  or a subscription changes/cancels/fails payment; this is the ONLY
-  code path allowed to write `Store.plan` / `.monthly_budget` /
-  `.stripe_subscription_status` for a paid plan, precisely because it
-  reflects what Stripe actually charged rather than what a request
-  claims happened. Signature-verified (see verify_webhook_signature)
-  so an attacker can't POST a fake "upgrade me" event.
-"""
+"""Stripe billing integration with durable webhook idempotency."""
 
 from __future__ import annotations
 
 import logging
 
 import stripe
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.billing.plans import all_plans, get_plan
@@ -32,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class BillingNotConfigured(Exception):
-    """Raised when STRIPE_SECRET_KEY isn't set — billing routes 503."""
+    pass
 
 
 class InvalidPlan(Exception):
@@ -48,13 +33,8 @@ def _client() -> stripe.StripeClient:
 def _ensure_stripe_customer(db: Session, store: Store) -> str:
     if store.stripe_customer_id:
         return store.stripe_customer_id
-
-    client = _client()
-    customer = client.v1.customers.create(
-        params={
-            "name": store.name,
-            "metadata": {"store_id": store.id},
-        }
+    customer = _client().v1.customers.create(
+        params={"name": store.name, "metadata": {"store_id": store.id}}
     )
     store.stripe_customer_id = customer.id
     db.add(store)
@@ -64,22 +44,11 @@ def _ensure_stripe_customer(db: Session, store: Store) -> str:
 
 
 def create_checkout_session(db: Session, store: Store, plan_name: str) -> str:
-    """Returns the Stripe-hosted Checkout URL to redirect the merchant to."""
-
-    # Config first: an unconfigured Stripe integration is a 503
-    # ("service unavailable") regardless of which plan was asked for.
-    # Only after the integration exists does an unbillable plan
-    # become a client error (400).
     client = _client()
-
     plan = get_plan(db, plan_name)
     if plan is None or plan.stripe_price_id is None:
-        raise InvalidPlan(
-            f"'{plan_name}' has no billable Stripe price configured"
-        )
-
+        raise InvalidPlan(f"'{plan_name}' has no billable Stripe price configured")
     customer_id = _ensure_stripe_customer(db, store)
-
     session = client.v1.checkout.sessions.create(
         params={
             "mode": "subscription",
@@ -98,13 +67,8 @@ def create_checkout_session(db: Session, store: Store, plan_name: str) -> str:
 def create_portal_session(db: Session, store: Store) -> str:
     if not store.stripe_customer_id:
         raise InvalidPlan("This store has no Stripe customer yet")
-
-    client = _client()
-    session = client.v1.billing_portal.sessions.create(
-        params={
-            "customer": store.stripe_customer_id,
-            "return_url": f"{settings.frontend_url}/billing",
-        }
+    session = _client().v1.billing_portal.sessions.create(
+        params={"customer": store.stripe_customer_id, "return_url": f"{settings.frontend_url}/billing"}
     )
     return session.url
 
@@ -112,10 +76,7 @@ def create_portal_session(db: Session, store: Store) -> str:
 def verify_webhook_signature(payload: bytes, sig_header: str) -> stripe.Event:
     if not settings.stripe_webhook_secret:
         raise BillingNotConfigured("STRIPE_WEBHOOK_SECRET is not configured")
-
-    return stripe.Webhook.construct_event(
-        payload, sig_header, settings.stripe_webhook_secret
-    )
+    return stripe.Webhook.construct_event(payload, sig_header, settings.stripe_webhook_secret)
 
 
 def _plan_name_from_price_id(db: Session, price_id: str | None) -> str | None:
@@ -127,85 +88,81 @@ def _plan_name_from_price_id(db: Session, price_id: str | None) -> str | None:
     return None
 
 
+def _claim_webhook_event(db: Session, event: stripe.Event) -> bool:
+    """Claim a Stripe event exactly once; duplicate deliveries are harmless."""
+    try:
+        db.execute(
+            text(
+                "INSERT INTO billing_webhook_events "
+                "(id, event_type, processed_at) VALUES (:id, :event_type, CURRENT_TIMESTAMP)"
+            ),
+            {"id": str(event["id"]), "event_type": str(event["type"])},
+        )
+        db.flush()
+        return True
+    except IntegrityError:
+        db.rollback()
+        logger.info("stripe webhook %s already processed", event["id"])
+        return False
+
+
 def handle_webhook_event(db: Session, event: stripe.Event) -> None:
-    """
-    Applies a verified Stripe event to the matching Store. Unknown
-    event types are ignored (Stripe sends many we don't act on);
-    events for a store_id we can't resolve are logged and skipped
-    rather than raising, so a Stripe retry storm can't take the
-    endpoint down.
-    """
+    """Apply a verified Stripe event exactly once to its store."""
+    if not _claim_webhook_event(db, event):
+        return
 
     event_type = event["type"]
     obj = event["data"]["object"]
-
     store: Store | None = None
+    store_id = (obj.get("metadata") or {}).get("store_id") or obj.get("client_reference_id")
 
-    store_id = (obj.get("metadata") or {}).get("store_id") or obj.get(
-        "client_reference_id"
-    )
     if store_id:
         store = db.query(Store).filter(Store.id == store_id).first()
     if store is None and obj.get("customer"):
-        store = (
-            db.query(Store)
-            .filter(Store.stripe_customer_id == obj["customer"])
-            .first()
-        )
+        store = db.query(Store).filter(Store.stripe_customer_id == obj["customer"]).first()
 
     if store is None:
-        logger.warning(
-            "stripe webhook %s: no matching store (customer=%s, store_id=%s)",
-            event_type,
-            obj.get("customer"),
-            store_id,
-        )
+        logger.warning("stripe webhook %s: no matching store", event_type)
+        db.commit()
         return
 
     if event_type == "checkout.session.completed":
-        subscription_id = obj.get("subscription")
-        if subscription_id:
-            store.stripe_subscription_id = subscription_id
+        if obj.get("subscription"):
+            store.stripe_subscription_id = obj["subscription"]
         if obj.get("customer"):
             store.stripe_customer_id = obj["customer"]
-        db.add(store)
-        db.commit()
 
-    elif event_type in (
-        "customer.subscription.created",
-        "customer.subscription.updated",
-    ):
+    elif event_type in ("customer.subscription.created", "customer.subscription.updated"):
         store.stripe_subscription_id = obj["id"]
         store.stripe_subscription_status = obj["status"]
-
-        price_id = None
         items = (obj.get("items") or {}).get("data") or []
-        if items:
-            price_id = items[0].get("price", {}).get("id")
+        price_id = items[0].get("price", {}).get("id") if items else None
         plan_name = _plan_name_from_price_id(db, price_id)
 
+        # Only active/trialing subscriptions grant the paid entitlement.
+        # past_due/unpaid remain visible while Stripe retries payment.
         if plan_name and obj["status"] in ("active", "trialing"):
             plan = get_plan(db, plan_name)
             store.plan = plan.name
             store.monthly_budget = plan.monthly_budget
 
-        db.add(store)
-        db.commit()
-
     elif event_type == "customer.subscription.deleted":
         store.stripe_subscription_status = "canceled"
-        # Fall back to the free plan rather than leaving a stale
-        # paid budget in place after the subscription actually ends.
         starter = get_plan(db, "starter")
         store.plan = starter.name
         store.monthly_budget = starter.monthly_budget
-        db.add(store)
-        db.commit()
+        store.stripe_subscription_id = None
 
     elif event_type == "invoice.payment_failed":
+        # Stripe can retry invoices; do not immediately downgrade a merchant.
         store.stripe_subscription_status = "past_due"
-        db.add(store)
-        db.commit()
+
+    elif event_type == "invoice.paid":
+        if store.stripe_subscription_status == "past_due":
+            store.stripe_subscription_status = "active"
 
     else:
         logger.info("stripe webhook %s: no handler, ignoring", event_type)
+
+    db.add(store)
+    db.commit()
