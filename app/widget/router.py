@@ -14,6 +14,7 @@ router = APIRouter(tags=["Widget"])
 
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 _WIDGET_PATH = _STATIC_DIR / "widget.js"
+_ENHANCED_WIDGET_PATH = _STATIC_DIR / "widget-enhanced.js"
 _ADMIN_PATH = _STATIC_DIR / "admin.html"
 _BRANDING_PATH = _STATIC_DIR / "branding.html"
 _PLATFORM_ADMIN_PATH = _STATIC_DIR / "platform-admin.html"
@@ -23,7 +24,7 @@ _INBOX_PATH = _STATIC_DIR / "inbox.html"
 
 @router.get("/widget.js")
 async def widget_bundle() -> Response:
-    """Return a tiny loader that applies per-store branding before loading the core widget."""
+    """Return a dynamic merchant-branded widget loader."""
     loader = r'''/* Universal Commerce AI — dynamic merchant-branded widget loader. */
 (function () {
   "use strict";
@@ -81,7 +82,7 @@ async def widget_bundle() -> Response:
   }
   function loadCore(cfg) {
     var core = document.createElement("script");
-    core.src = apiBase + "/widget-core.js";
+    core.src = apiBase + "/widget-enhanced.js";
     core.async = true;
     core.setAttribute("data-key", key);
     core.setAttribute("data-api-base", apiBase);
@@ -128,6 +129,15 @@ async def widget_bundle() -> Response:
 async def widget_core_bundle() -> FileResponse:
     return FileResponse(
         _WIDGET_PATH,
+        media_type="application/javascript",
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+@router.get("/widget-enhanced.js")
+async def widget_enhanced_bundle() -> FileResponse:
+    return FileResponse(
+        _ENHANCED_WIDGET_PATH,
         media_type="application/javascript",
         headers={"Cache-Control": "public, max-age=300"},
     )
