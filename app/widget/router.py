@@ -122,7 +122,7 @@ async def widget_bundle() -> Response:
     return Response(
         content=loader,
         media_type="application/javascript",
-        headers={"Cache-Control": "public, max-age=60"},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
     )
 
 
@@ -131,7 +131,7 @@ async def widget_core_bundle() -> FileResponse:
     return FileResponse(
         _WIDGET_PATH,
         media_type="application/javascript",
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
     )
 
 
@@ -140,7 +140,7 @@ async def widget_enhanced_bundle() -> FileResponse:
     return FileResponse(
         _ENHANCED_WIDGET_PATH,
         media_type="application/javascript",
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
     )
 
 
@@ -150,7 +150,7 @@ async def premium_overrides_css() -> FileResponse:
     return FileResponse(
         _PREMIUM_CSS_PATH,
         media_type="text/css",
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
     )
 
 
@@ -159,7 +159,7 @@ async def merchant_chat_bundle() -> FileResponse:
     return FileResponse(
         _MERCHANT_CHAT_PATH,
         media_type="application/javascript",
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
     )
 
 
