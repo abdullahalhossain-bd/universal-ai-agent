@@ -40,6 +40,10 @@
     }
   }
 
+  function getConversation() {
+    return conversationId();
+  }
+
   function visitorId() {
     try {
       var value = localStorage.getItem(VISITOR_KEY);
@@ -86,7 +90,7 @@
 
   function pollMerchantMessages() {
     if (!humanMode) return;
-    var conversation = conversationId();
+    var conversation = getConversation();
     fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversation), {
       headers: { "x-api-key": API_KEY }
     })
