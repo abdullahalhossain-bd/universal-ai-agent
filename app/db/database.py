@@ -17,7 +17,7 @@ class Base(DeclarativeBase):
 # Register auxiliary models before Base.metadata.create_all() is invoked.
 from app.sync.media_models import ProductMediaHealth  # noqa: E402,F401
 from app.sync.issue_models import SyncIssue  # noqa: E402,F401
-from app.db.customer import Customer, CustomerIdentity  # noqa: E402,F401
+from app.db.customer import Customer, CustomerIdentity, CustomerIdentityHistory  # noqa: E402,F401
 
 def get_db():
     db = SessionLocal()
