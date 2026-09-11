@@ -24,6 +24,7 @@ from app.knowledge.chunk import KnowledgePage, KnowledgeChunk
 from app.usage.models import UsageRecord
 from app.api.routes.products import router as products_router
 from app.api.routes.datasources import router as datasources_router
+from app.api.routes.websites import router as websites_router
 from app.api.routes.sync_issues import router as sync_issues_router
 from app.api.routes.sync_quality import router as sync_quality_router
 from app.api.routes.sync_diff import router as sync_diff_router
@@ -44,30 +45,25 @@ from app.api.routes.billing import router as billing_router
 from app.api.routes.admin import router as admin_router
 from app.api.routes.admin_analytics import router as admin_analytics_router
 from app.sync.schema_audit_hooks import register_schema_audit_hooks
-
 register_schema_audit_hooks()
 
 def _ensure_alembic_baseline():
     from sqlalchemy import inspect
     inspector = inspect(engine)
-    if inspector.has_table("alembic_version"):
-        return
+    if inspector.has_table("alembic_version"): return
     missing_tables = [t.name for t in Base.metadata.sorted_tables if not inspector.has_table(t.name)]
     missing_columns = []
     for t in Base.metadata.sorted_tables:
-        if not inspector.has_table(t.name):
-            continue
+        if not inspector.has_table(t.name): continue
         actual = {c["name"] for c in inspector.get_columns(t.name)}
         for c in t.columns:
-            if c.name not in actual:
-                missing_columns.append(f"{t.name}.{c.name}")
+            if c.name not in actual: missing_columns.append(f"{t.name}.{c.name}")
     if missing_tables or missing_columns:
-        details = []
+        details=[]
         if missing_tables: details.append(f"tables={missing_tables}")
         if missing_columns: details.append(f"columns={missing_columns}")
         raise RuntimeError("Alembic version table is missing and the existing schema does not match the active ORM schema; refusing to stamp head: " + "; ".join(details))
-    if os.getenv("ALLOW_ALEMBIC_BASELINE_STAMP") != "1":
-        raise RuntimeError("alembic_version is missing. Run `alembic upgrade head` or explicitly set ALLOW_ALEMBIC_BASELINE_STAMP=1 only after an operator has verified the entire schema.")
+    if os.getenv("ALLOW_ALEMBIC_BASELINE_STAMP") != "1": raise RuntimeError("alembic_version is missing. Run `alembic upgrade head` or explicitly set ALLOW_ALEMBIC_BASELINE_STAMP=1 only after an operator has verified the entire schema.")
     from alembic import command
     from alembic.config import Config
     command.stamp(Config(str(Path(__file__).resolve().parent.parent / "alembic.ini")), "head")
@@ -75,32 +71,25 @@ def _ensure_alembic_baseline():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.knowledge.vector_support import resolve_vector_support
-    if resolve_vector_support(engine):
-        logger.info("pgvector detected: knowledge embeddings enabled")
-    else:
-        logger.warning("pgvector unavailable: knowledge_chunks.embedding falls back to Text; semantic search disabled")
+    if resolve_vector_support(engine): logger.info("pgvector detected: knowledge embeddings enabled")
+    else: logger.warning("pgvector unavailable: knowledge_chunks.embedding falls back to Text; semantic search disabled")
     if settings.auto_create_tables:
-        if settings.environment.lower() in ("production", "prod"):
-            raise RuntimeError("auto_create_tables=true with environment=production. Set AUTO_CREATE_TABLES=false and run `alembic upgrade head` as a deploy step instead — see alembic/README.md.")
+        if settings.environment.lower() in ("production", "prod"): raise RuntimeError("auto_create_tables=true with environment=production. Set AUTO_CREATE_TABLES=false and run `alembic upgrade head` as a deploy step instead — see alembic/README.md.")
         Base.metadata.create_all(bind=engine)
-    else:
-        _ensure_alembic_baseline()
-    background_tasks = []
+    else: _ensure_alembic_baseline()
+    background_tasks=[]
     if settings.run_sync_inline:
         try:
             from app.sync.worker import run_worker
             from app.sync.scheduler import scheduler as run_scheduler
             background_tasks += [asyncio.create_task(run_worker(), name="inline-sync-worker"), asyncio.create_task(run_scheduler(settings.redis_url), name="inline-sync-scheduler")]
-        except Exception:
-            logger.exception("Failed to start inline sync worker/scheduler")
+        except Exception: logger.exception("Failed to start inline sync worker/scheduler")
     yield
     for task in background_tasks:
         task.cancel()
     for task in background_tasks:
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
+        try: await task
+        except (asyncio.CancelledError, Exception): pass
 
 app = FastAPI(title="Universal Commerce AI API", version="1.0.0", lifespan=lifespan)
 from app.core.security import get_cors_allow_origins
@@ -118,11 +107,10 @@ app.include_router(billing_router)
 app.include_router(admin_router)
 app.include_router(admin_analytics_router)
 app.include_router(products_router)
-# Register optimized quality/diff routes before the legacy datasource router so
-# the old unbounded quality handler cannot shadow the bounded implementation.
 app.include_router(sync_quality_router)
 app.include_router(sync_diff_router)
 app.include_router(datasources_router)
+app.include_router(websites_router)
 app.include_router(sync_issues_router)
 app.include_router(knowledge_router)
 app.include_router(behavior_router)
@@ -131,47 +119,38 @@ app.include_router(discovery_v1_router, prefix="/v1")
 app.include_router(mapping_v1_router, prefix="/v1")
 app.include_router(widget_router)
 _CHAT_DIR = Path(__file__).resolve().parent.parent / "frontend" / "chat"
-if _CHAT_DIR.is_dir():
-    app.mount("/chat", StaticFiles(directory=str(_CHAT_DIR), html=True), name="chat-ui")
+if _CHAT_DIR.is_dir(): app.mount("/chat", StaticFiles(directory=str(_CHAT_DIR), html=True), name="chat-ui")
 _SYNC_DIAGNOSTICS_DIR = Path(__file__).resolve().parent.parent / "frontend" / "sync-diagnostics"
-if _SYNC_DIAGNOSTICS_DIR.is_dir():
-    app.mount("/sync-diagnostics", StaticFiles(directory=str(_SYNC_DIAGNOSTICS_DIR), html=True), name="sync-diagnostics-ui")
+if _SYNC_DIAGNOSTICS_DIR.is_dir(): app.mount("/sync-diagnostics", StaticFiles(directory=str(_SYNC_DIAGNOSTICS_DIR), html=True), name="sync-diagnostics-ui")
 from app.core.alerting import send_alert
 from app.core.request_context import get_request_id
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request, exc):
-    headers = dict(getattr(exc, "headers", None) or {}); headers["X-Request-ID"] = get_request_id() or "-"
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail, "request_id": get_request_id()}, headers=headers)
+    headers=dict(getattr(exc,"headers",None) or {}); headers["X-Request-ID"]=get_request_id() or "-"
+    return JSONResponse(status_code=exc.status_code, content={"detail":exc.detail,"request_id":get_request_id()}, headers=headers)
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
-    return JSONResponse(status_code=422, content={"detail": "Invalid request payload.", "request_id": get_request_id(), "errors": [{"loc": list(e.get("loc", [])), "msg": e.get("msg", ""), "type": e.get("type", "")} for e in exc.errors()]})
+    return JSONResponse(status_code=422, content={"detail":"Invalid request payload.","request_id":get_request_id(),"errors":[{"loc":list(e.get("loc",[])),"msg":e.get("msg",""),"type":e.get("type","")} for e in exc.errors()]})
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request, exc):
-    request_id = get_request_id(); logger.exception("Unhandled error on %s %s: %s", request.method, request.url.path, exc, extra={"http_method": request.method, "path": request.url.path})
-    asyncio.create_task(send_alert(title="Unhandled exception", detail=f"{type(exc).__name__}: {exc}", extra={"path": request.url.path, "method": request.method}))
-    return JSONResponse(status_code=500, content={"detail": "Internal server error.", "request_id": request_id}, headers={"X-Request-ID": request_id or "-"})
+    request_id=get_request_id(); logger.exception("Unhandled error on %s %s: %s",request.method,request.url.path,exc,extra={"http_method":request.method,"path":request.url.path})
+    asyncio.create_task(send_alert(title="Unhandled exception",detail=f"{type(exc).__name__}: {exc}",extra={"path":request.url.path,"method":request.method}))
+    return JSONResponse(status_code=500,content={"detail":"Internal server error.","request_id":request_id},headers={"X-Request-ID":request_id or "-"})
 
-@app.get("/", tags=["Health"])
-async def root():
-    return {"name": "Universal Commerce AI API", "version": "1.0.0", "status": "ok", "docs": "/docs", "health": "/health", "ready": "/ready"}
-
-@app.get("/health", tags=["Health"])
-async def health():
-    return {"status": "ok"}
-
-@app.get("/ready", tags=["Health"])
+@app.get("/",tags=["Health"])
+async def root(): return {"name":"Universal Commerce AI API","version":"1.0.0","status":"ok","docs":"/docs","health":"/health","ready":"/ready"}
+@app.get("/health",tags=["Health"])
+async def health(): return {"status":"ok"}
+@app.get("/ready",tags=["Health"])
 async def readiness():
     from sqlalchemy import text
     from app.core.redis import redis_client
     try:
-        await asyncio.to_thread(_check_database_readiness, text("SELECT 1")); await redis_client.ping()
-    except Exception:
-        return JSONResponse(status_code=503, content={"status": "not_ready"})
-    return {"status": "ready"}
-
+        await asyncio.to_thread(_check_database_readiness,text("SELECT 1")); await redis_client.ping()
+    except Exception: return JSONResponse(status_code=503,content={"status":"not_ready"})
+    return {"status":"ready"}
 def _check_database_readiness(query):
-    with engine.connect() as connection:
-        connection.execute(query)
+    with engine.connect() as connection: connection.execute(query)
