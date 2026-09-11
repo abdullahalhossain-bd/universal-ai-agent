@@ -1,62 +1,256 @@
 from __future__ import annotations
+
 import json
+import re
+from urllib.parse import urljoin
+
 from bs4 import BeautifulSoup
+
+_PRICE_RE = re.compile(r"(?:[$€£¥₹]|(?:USD|EUR|GBP|BDT|INR)\s*)?\s*\d{1,3}(?:[,.]\d{3})*(?:[.,]\d{1,2})?", re.I)
+_PRODUCT_TOKEN_RE = re.compile(
+    r"(?:product|item|product-card|productcard|product-item|productitem|product-tile|producttile|product-grid|product-list|catalog|shop-item|woocommerce|shopify|add-to-cart|buy-now|price)",
+    re.I,
+)
+_NAME_ATTRS = ("name", "product-name", "product_name", "title", "product-title", "product_title")
+_PRICE_ATTRS = ("price", "sale-price", "regular-price", "product-price", "product_price")
+_IMAGE_ATTRS = ("image", "product-image", "product_image")
+_URL_ATTRS = ("url", "product-url", "product_url")
+_SKU_ATTRS = ("sku", "product-id", "product_id", "productid", "itemid")
 
 
 def _walk_products(value):
-    found=[]
-    if isinstance(value,dict):
-        typ=value.get("@type")
-        types=typ if isinstance(typ,list) else [typ]
-        if any(str(t).casefold()=="product" for t in types): found.append(value)
-        for child in value.values(): found.extend(_walk_products(child))
-    elif isinstance(value,list):
-        for child in value: found.extend(_walk_products(child))
+    found = []
+    if isinstance(value, dict):
+        typ = value.get("@type")
+        types = typ if isinstance(typ, list) else [typ]
+        if any(str(t).casefold() == "product" for t in types):
+            found.append(value)
+        for child in value.values():
+            found.extend(_walk_products(child))
+    elif isinstance(value, list):
+        for child in value:
+            found.extend(_walk_products(child))
+    return found
+
+
+def _walk_product_like_json(value, *, parent_key: str = ""):
+    """Find product-shaped objects in application state without vendor-specific rules."""
+    found = []
+    if isinstance(value, dict):
+        keys = {str(k).casefold() for k in value}
+        name = value.get("name") or value.get("title") or value.get("productName")
+        price = value.get("price")
+        url = value.get("url") or value.get("productUrl") or value.get("link")
+        image = value.get("image") or value.get("imageUrl") or value.get("thumbnail")
+        productish = (
+            bool(name)
+            and (price is not None or url or image)
+            and (bool(_PRODUCT_TOKEN_RE.search(parent_key)) or {"sku", "price"} <= keys or "productid" in keys)
+        )
+        if productish:
+            row = {"@type": "Product", "name": str(name).strip()}
+            for src, dst in (("description", "description"), ("sku", "sku"), ("productId", "productID"),
+                             ("category", "category"), ("brand", "brand"), ("image", "image"),
+                             ("imageUrl", "image"), ("url", "url"), ("productUrl", "url"), ("link", "url")):
+                if src in value and value[src] not in (None, ""):
+                    row[dst] = value[src]
+            if price is not None:
+                row["offers"] = {"price": price, "priceCurrency": value.get("currency") or value.get("priceCurrency")}
+            found.append(row)
+        for key, child in value.items():
+            found.extend(_walk_product_like_json(child, parent_key=str(key)))
+    elif isinstance(value, list):
+        for child in value:
+            found.extend(_walk_product_like_json(child, parent_key=parent_key))
     return found
 
 
 def extract_structured_data(html: str) -> list[dict]:
-    soup=BeautifulSoup(html,"html.parser")
-    items=[]
+    soup = BeautifulSoup(html, "html.parser")
+    items = []
     for script in soup.find_all("script"):
-        raw=script.string or script.get_text()
-        if not raw or len(raw)>2_000_000: continue
-        script_type=(script.get("type") or "").casefold()
-        if "json" not in script_type and not raw.lstrip().startswith(("{","[")): continue
-        try: parsed=json.loads(raw)
-        except (TypeError,ValueError,json.JSONDecodeError): continue
-        if isinstance(parsed,dict) and isinstance(parsed.get("@graph"),list): parsed=parsed["@graph"]
+        raw = script.string or script.get_text()
+        if not raw or len(raw) > 2_000_000:
+            continue
+        script_type = (script.get("type") or "").casefold()
+        if "json" not in script_type and not raw.lstrip().startswith(("{", "[")):
+            continue
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
         items.extend(_walk_products(parsed))
+        items.extend(_walk_product_like_json(parsed))
     for node in soup.select('[itemtype*="Product" i]'):
-        row={"@type":"Product"}
-        for field in ("name","description","sku","category","brand","image","url"):
-            el=node.select_one(f'[itemprop~="{field}"]')
-            if not el: continue
-            row[field]=el.get("content") or el.get("href") or el.get("src") or el.get_text(" ",strip=True)
-        price=node.select_one('[itemprop~="price"]')
-        currency=node.select_one('[itemprop~="priceCurrency"]')
-        if price: row["offers"]={"price":price.get("content") or price.get_text(strip=True),"priceCurrency":currency.get("content") if currency else None}
-        if row.get("name"): items.append(row)
-    unique=[]; seen=set()
+        row = {"@type": "Product"}
+        for field in ("name", "description", "sku", "category", "brand", "image", "url"):
+            el = node.select_one(f'[itemprop~="{field}"]')
+            if not el:
+                continue
+            row[field] = el.get("content") or el.get("href") or el.get("src") or el.get_text(" ", strip=True)
+        price = node.select_one('[itemprop~="price"]')
+        currency = node.select_one('[itemprop~="priceCurrency"]')
+        if price:
+            row["offers"] = {
+                "price": price.get("content") or price.get_text(strip=True),
+                "priceCurrency": currency.get("content") if currency else None,
+            }
+        if row.get("name"):
+            items.append(row)
+    return _dedupe_products(items)
+
+
+def _attr_value(node, names):
+    for name in names:
+        if node.has_attr(name):
+            value = node.get(name)
+            if isinstance(value, list):
+                value = " ".join(value)
+            if value and str(value).strip():
+                return str(value).strip()
+    return None
+
+
+def _element_value(node, attrs):
+    value = _attr_value(node, attrs)
+    if value:
+        return value
+    for attr in ("data-name", "data-title", "aria-label"):
+        value = node.get(attr)
+        if value and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _clean_price(value: str | None):
+    if not value:
+        return None
+    match = _PRICE_RE.search(value.replace("\xa0", " "))
+    return match.group(0).strip() if match else None
+
+
+def _candidate_nodes(soup: BeautifulSoup):
+    seen = set()
+    selectors = [
+        "[data-product-id]", "[data-product]", "[data-productid]", "[data-sku]",
+        ".product", ".product-card", ".product-item", ".product-tile", ".product-grid-item",
+        ".woocommerce-loop-product__link", "article", "li",
+    ]
+    for selector in selectors:
+        for node in soup.select(selector):
+            ident = id(node)
+            if ident not in seen:
+                seen.add(ident)
+                yield node
+    # Generic semantic fallback: class/id tokens are much more reliable than raw tag names.
+    for node in soup.find_all(["div", "article", "li", "section"]):
+        tokens = f"{node.get('class', '')} {node.get('id', '')}"
+        if _PRODUCT_TOKEN_RE.search(tokens):
+            ident = id(node)
+            if ident not in seen:
+                seen.add(ident)
+                yield node
+
+
+def extract_html_products(html: str, page_url: str | None = None) -> list[dict]:
+    """Extract product candidates from ordinary HTML when Schema.org data is absent.
+
+    This is intentionally semantic and vendor-neutral: it scores product-like DOM
+    containers using names, prices, product links, images, IDs/SKUs and cart controls.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    results = []
+    for node in _candidate_nodes(soup):
+        text = node.get_text(" ", strip=True)
+        if not text or len(text) > 5000:
+            continue
+        classes = " ".join(node.get("class", []))
+        ident = str(node.get("id", ""))
+        tokens = f"{classes} {ident}"
+        name_el = node.select_one("[itemprop~=name], [data-product-name], [data-name], [data-title], h1, h2, h3, h4, h5, .title, .name")
+        name = _element_value(name_el, _NAME_ATTRS) if name_el else None
+        if not name and node.name in {"article", "li"}:
+            link = node.select_one("a[href]")
+            name = link.get("aria-label") if link else None
+        if not name:
+            continue
+        price_el = node.select_one("[itemprop~=price], [data-price], [data-product-price], .price, .sale-price, .amount")
+        price = _clean_price(_element_value(price_el, _PRICE_ATTRS) if price_el else None) or _clean_price(text)
+        link_el = node.select_one("a[href]")
+        href = (link_el.get("href") if link_el else None) or _attr_value(node, _URL_ATTRS)
+        product_url = urljoin(page_url, href) if href and page_url else href
+        image_el = node.select_one("img[src], img[data-src], img[data-lazy-src]")
+        image_url = None
+        if image_el:
+            image_url = image_el.get("src") or image_el.get("data-src") or image_el.get("data-lazy-src")
+            if page_url and image_url:
+                image_url = urljoin(page_url, image_url)
+        sku = _attr_value(node, _SKU_ATTRS)
+        if not sku and node.select_one("[data-sku], [itemprop~=sku]"):
+            sku_el = node.select_one("[data-sku], [itemprop~=sku]")
+            sku = sku_el.get("content") or sku_el.get_text(" ", strip=True)
+        score = 0
+        if _PRODUCT_TOKEN_RE.search(tokens): score += 2
+        if price: score += 2
+        if product_url: score += 2
+        if image_url: score += 1
+        if sku: score += 1
+        if any(token in text.casefold() for token in ("add to cart", "buy now", "shop now", "order now")): score += 2
+        if score < 4 or (not price and not product_url and not image_url):
+            continue
+        external = sku or product_url or name
+        results.append({
+            "@type": "Product",
+            "name": name,
+            "sku": sku,
+            "description": text[:1000],
+            "offers": {"price": price} if price else {},
+            "image": image_url,
+            "url": product_url,
+            "_extraction": "semantic_html",
+        })
+    return _dedupe_products(results)
+
+
+def _dedupe_products(items: list[dict]) -> list[dict]:
+    unique = []
+    seen = set()
     for item in items:
-        key=json.dumps(item,sort_keys=True,default=str)
-        if key not in seen: seen.add(key); unique.append(item)
+        name = str(item.get("name") or "").strip().casefold()
+        url = str(item.get("url") or "").strip().casefold()
+        sku = str(item.get("sku") or "").strip().casefold()
+        key = sku or url or name
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
     return unique
 
 
 def extract_text(html: str):
-    soup=BeautifulSoup(html,"html.parser")
-    for tag in soup(["script","style","noscript","nav","footer"]): tag.decompose()
-    return soup.get_text(separator=" ",strip=True)
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "nav", "footer"]):
+        tag.decompose()
+    return soup.get_text(separator=" ", strip=True)
 
 
 def extract_metadata(html: str):
-    soup=BeautifulSoup(html,"html.parser")
-    title_tag=soup.find("title")
-    description_tag=soup.find("meta",attrs={"name":"description"})
-    return {"title":title_tag.get_text(strip=True) if title_tag else None,"description":description_tag.get("content") if description_tag else None,"headings":[h.get_text(" ",strip=True) for h in soup.find_all(["h1","h2","h3"])]}
+    soup = BeautifulSoup(html, "html.parser")
+    title_tag = soup.find("title")
+    description_tag = soup.find("meta", attrs={"name": "description"})
+    return {
+        "title": title_tag.get_text(strip=True) if title_tag else None,
+        "description": description_tag.get("content") if description_tag else None,
+        "headings": [h.get_text(" ", strip=True) for h in soup.find_all(["h1", "h2", "h3"])],
+    }
 
 
-def parse_page(html: str) -> dict:
-    metadata=extract_metadata(html)
-    return {**metadata,"content":extract_text(html),"structured_data":extract_structured_data(html)}
+def parse_page(html: str, page_url: str | None = None) -> dict:
+    metadata = extract_metadata(html)
+    structured = extract_structured_data(html)
+    semantic = extract_html_products(html, page_url)
+    return {
+        **metadata,
+        "content": extract_text(html),
+        "structured_data": _dedupe_products(structured + semantic),
+    }
