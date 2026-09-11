@@ -12,19 +12,27 @@
   var root = null;
   var humanMode = false;
   var sendButton = null;
+  var originalSend = null;
   var input = null;
   var merchantButton = null;
   var modeNote = null;
+
+  function makeId() {
+    try {
+      if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    } catch (_) {}
+    return Date.now().toString(36) + Math.random().toString(36).slice(2);
+  }
 
   function conversationId() {
     try {
       var value = localStorage.getItem(CONV_KEY);
       if (value) return value;
-      value = (crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+      value = makeId();
       localStorage.setItem(CONV_KEY, value);
       return value;
     } catch (_) {
-      return Date.now().toString(36) + Math.random().toString(36).slice(2);
+      return makeId();
     }
   }
 
@@ -32,7 +40,7 @@
     try {
       var value = localStorage.getItem(VISITOR_KEY);
       if (value) return value;
-      value = (crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+      value = makeId();
       localStorage.setItem(VISITOR_KEY, value);
       return value;
     } catch (_) {
@@ -106,7 +114,7 @@
     root = findRoot();
     if (!root || root.querySelector(".merchant-chat-button")) return !!root;
     input = root.querySelector(".composer textarea");
-    var originalSend = root.querySelector(".composer .send");
+    originalSend = root.querySelector(".composer .send");
     var tools = root.querySelector(".tools");
     if (!input || !originalSend || !tools) return false;
 
@@ -127,14 +135,14 @@
       if (humanMode) input.focus();
     });
 
-    /* Clone the send button so the existing AI click handler stays detached while
-       human mode is active. The original button reference inside widget.js remains
-       valid only for the detached node and cannot send an AI request. */
+    /* Keep the original AI button and its listener detached. The replacement
+       delegates to it whenever the customer returns to AI mode. */
     var replacement = originalSend.cloneNode(true);
     originalSend.replaceWith(replacement);
     sendButton = replacement;
     sendButton.addEventListener("click", function () {
       if (humanMode) sendToMerchant();
+      else originalSend.click();
     });
 
     /* Enter normally belongs to the AI widget. Capture it only in human mode. */
