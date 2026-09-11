@@ -9,6 +9,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     conversation_id: str
+    conversation_token: str | None = None
     type: str
     message: str
     products: list[dict] = Field(default_factory=list)
