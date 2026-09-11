@@ -89,8 +89,14 @@
     ".products{align-self:flex-start;width:min(100%,350px);display:grid;gap:10px}.product{background:#fff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;box-shadow:0 2px 8px rgba(15,23,42,.04);transition:.18s}.product:hover{transform:translateY(-1px);box-shadow:0 7px 20px rgba(15,23,42,.09)}.product-image{width:100%;height:155px;object-fit:cover;background:#f1f5f9;display:block}.product-image-fallback{height:155px;background:#f1f5f9;color:#64748b;display:grid;place-items:center;font-size:12px}.product-body{padding:11px 12px}.product-option{width:100%;border:0;background:transparent;padding:0;text-align:left;cursor:pointer}.product-option-row{display:flex;align-items:flex-start;gap:8px}.product-number{width:24px;height:24px;min-width:24px;border-radius:8px;background:#f1f5f9;color:#475569;display:grid;place-items:center;font-size:11px;font-weight:800}.product-name{font-weight:700;font-size:14px;color:#111827;line-height:1.35}.product-meta{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:7px}.price{font-size:15px;font-weight:800;color:#111827}.stock{font-size:11px;padding:3px 7px;border-radius:999px;background:#ecfdf5;color:#047857}.stock.out{background:#fef2f2;color:#b91c1c}.stock.unknown{background:#f8fafc;color:#64748b}.rating{font-size:11px;color:#64748b;margin-top:5px}.actions{display:flex;gap:7px;margin-top:10px}.action{flex:1;text-align:center;text-decoration:none;border:1px solid #dbe0e6;border-radius:9px;padding:7px 8px;font-size:11.5px;font-weight:600;color:#334155;background:#fff;cursor:pointer}.action.primary{background:" + ACCENT + ";border-color:" + ACCENT + ";color:#fff}.action.disabled{opacity:.5;pointer-events:none}.composer{display:flex;gap:7px;padding:10px;border-top:1px solid #e5e7eb;background:#fff;align-items:flex-end}.composer textarea{flex:1;min-height:40px;max-height:90px;resize:none;border:1px solid #d8dde5;border-radius:11px;padding:9px 10px;outline:0;font-size:13.5px}.composer textarea:focus{border-color:" + ACCENT + "}.composer button{border:0;background:" + ACCENT + ";color:#fff;border-radius:10px;padding:0 14px;height:40px;font-weight:700;cursor:pointer}.composer button:disabled{opacity:.5}.tools{display:flex;gap:6px;padding:7px 10px 0;background:#fff}.tool{border:1px solid #d8dde5;background:#fff;border-radius:8px;padding:5px 8px;font-size:11px;color:#475569;cursor:pointer}.preview{display:none;padding:6px 10px;background:#fff;border-top:1px solid #f1f5f9;font-size:11px;color:#475569}.preview.show{display:flex;justify-content:space-between;align-items:center}.footer{font-size:10px;text-align:center;color:#9ca3af;padding:4px 0 8px}";
   shadow.appendChild(style);
 
+  var style2 = document.createElement("style");
+  style2.textContent = ".bubble{position:relative}.badge{position:absolute;top:-3px;" + (position === "left" ? "left" : "right") + ":-3px;min-width:19px;height:19px;padding:0 4px;border-radius:999px;background:#ef4444;color:#fff;font-size:10.5px;font-weight:800;display:none;align-items:center;justify-content:center;box-shadow:0 0 0 2px #fff;line-height:1}.badge.show{display:flex}" +
+    ".typing-indicator{display:inline-flex;align-items:center;gap:4px;padding:2px}.typing-indicator .dot{width:6px;height:6px;border-radius:50%;background:#9ca3af;animation:ucaiCoreBounce 1.1s infinite ease-in-out}.typing-indicator .dot:nth-child(2){animation-delay:.15s}.typing-indicator .dot:nth-child(3){animation-delay:.3s}@keyframes ucaiCoreBounce{0%,60%,100%{transform:translateY(0);opacity:.5}30%{transform:translateY(-4px);opacity:1}}" +
+    "@media (prefers-reduced-motion:reduce){.typing-indicator .dot{animation:none}}";
+  shadow.appendChild(style2);
+
   var wrap = document.createElement("div");
-  wrap.innerHTML = '<button class="bubble" aria-label="চ্যাট খুলুন" aria-expanded="false" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.48 2 2 6.03 2 11c0 2.28 1 4.35 2.66 5.94L4 22l5.29-1.4A11.1 11.1 0 0 0 12 21c5.52 0 10-4.03 10-9S17.52 2 12 2z"/></svg></button><div class="panel" role="dialog" aria-label="AI Shopping Assistant" aria-modal="false"><div class="header"><div><strong>AI Shopping Assistant</strong><small>পণ্য, দাম, স্টক ও product link</small></div><button class="close" type="button" aria-label="চ্যাট বন্ধ করুন">×</button></div><div class="messages" role="log" aria-live="polite" aria-relevant="additions"></div><div class="preview"><span class="preview-name"></span><button class="tool preview-remove" type="button">সরিয়ে দিন</button></div><div class="tools"><input class="image-input" type="file" accept="image/jpeg,image/png,image/webp" hidden><button class="tool image-button" type="button" aria-label="ছবি আপলোড করুন">📷 ছবি পাঠান</button></div><div class="composer"><textarea rows="1" maxlength="2000" aria-label="আপনার বার্তা" placeholder="পণ্য, দাম বা product link সম্পর্কে জিজ্ঞেস করুন…"></textarea><button class="send" type="button">পাঠান</button></div><div class="footer">Powered by Universal Commerce AI</div></div>';
+  wrap.innerHTML = '<button class="bubble" aria-label="চ্যাট খুলুন" aria-expanded="false" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.48 2 2 6.03 2 11c0 2.28 1 4.35 2.66 5.94L4 22l5.29-1.4A11.1 11.1 0 0 0 12 21c5.52 0 10-4.03 10-9S17.52 2 12 2z"/></svg><span class="badge" aria-hidden="true"></span></button><div class="panel" role="dialog" aria-label="AI Shopping Assistant" aria-modal="false"><div class="header"><div><strong>AI Shopping Assistant</strong><small>পণ্য, দাম, স্টক ও product link</small></div><button class="close" type="button" aria-label="চ্যাট বন্ধ করুন">×</button></div><div class="messages" role="log" aria-live="polite" aria-relevant="additions"></div><div class="preview"><span class="preview-name"></span><button class="tool preview-remove" type="button">সরিয়ে দিন</button></div><div class="tools"><input class="image-input" type="file" accept="image/jpeg,image/png,image/webp" hidden><button class="tool image-button" type="button" aria-label="ছবি আপলোড করুন">📷 ছবি পাঠান</button></div><div class="composer"><textarea rows="1" maxlength="2000" aria-label="আপনার বার্তা" placeholder="পণ্য, দাম বা product link সম্পর্কে জিজ্ঞেস করুন…"></textarea><button class="send" type="button">পাঠান</button></div><div class="footer">Powered by Universal Commerce AI</div></div>';
   shadow.appendChild(wrap);
 
   var bubble = wrap.querySelector(".bubble");
@@ -104,12 +110,33 @@
   var preview = wrap.querySelector(".preview");
   var previewName = wrap.querySelector(".preview-name");
   var previewRemove = wrap.querySelector(".preview-remove");
+  var badge = wrap.querySelector(".badge");
   var sending = false;
   var greeted = false;
   var selectedImageId = null;
+  var unreadCount = 0;
+
+  function updateBadge() {
+    if (!badge) return;
+    if (unreadCount > 0) { badge.textContent = unreadCount > 9 ? "9+" : String(unreadCount); badge.classList.add("show"); }
+    else { badge.textContent = ""; badge.classList.remove("show"); }
+  }
 
   function scroll() { messages.scrollTop = messages.scrollHeight; }
-  function addMessage(role, text) { var el = document.createElement("div"); el.className = "msg " + role; el.textContent = text || ""; messages.appendChild(el); scroll(); return el; }
+  function addMessage(role, text) {
+    var el = document.createElement("div"); el.className = "msg " + role;
+    if (role === "typing") {
+      el.setAttribute("aria-label", text || "টাইপ করছে…");
+      var ind = document.createElement("span"); ind.className = "typing-indicator";
+      for (var i = 0; i < 3; i++) { var dot = document.createElement("span"); dot.className = "dot"; ind.appendChild(dot); }
+      el.appendChild(ind);
+    } else {
+      el.textContent = text || "";
+    }
+    messages.appendChild(el); scroll();
+    if (role !== "typing" && role !== "user" && !panel.classList.contains("open")) { unreadCount++; updateBadge(); }
+    return el;
+  }
   function money(value, currency) { if (value === null || value === undefined || value === "") return "দাম জানতে যোগাযোগ করুন"; var n = Number(value), cur = String(currency || "").trim(); if (Number.isFinite(n)) { var formatted = n.toLocaleString(undefined, { maximumFractionDigits: 2 }); return cur ? cur + " " + formatted : formatted; } return cur ? cur + " " + String(value) : String(value); }
 
   function rememberInteraction(interactionId, convId, productIds) {
@@ -217,7 +244,7 @@
       .finally(function () { setSending(false); input.focus(); });
   }
 
-  function setOpen(open) { panel.classList.toggle("open", open); bubble.setAttribute("aria-expanded", open ? "true" : "false"); if (open) { input.focus(); startPolling(); } }
+  function setOpen(open) { panel.classList.toggle("open", open); bubble.setAttribute("aria-expanded", open ? "true" : "false"); bubble.classList.add("dismissed"); if (open) { unreadCount = 0; updateBadge(); input.focus(); startPolling(); } }
   bubble.addEventListener("click", function () { var open = !panel.classList.contains("open"); setOpen(open); if (open && !greeted) { greeted = true; addMessage("assistant", GREETING); } });
   close.addEventListener("click", function () { setOpen(false); bubble.focus(); });
   send.addEventListener("click", sendMessage);
