@@ -1,17 +1,15 @@
 """
 Billing routes.
 
-`/checkout-session` and `/portal-session` are store-scoped (dashboard
-session or x-api-key, via get_current_store) and only ever *redirect*
-the merchant to Stripe — they never themselves change `Store.plan`.
-`/webhook` is the only place a subscription change is applied to the
-DB, and it trusts nothing but a validly-signed Stripe event.
+Merchant-scoped billing and usage endpoints. Subscription state is changed
+only by verified Stripe webhooks; dashboard endpoints only read billing state
+or create Stripe-hosted Checkout/Portal sessions.
 """
 
 from __future__ import annotations
 
 import stripe
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -47,14 +45,22 @@ def billing_summary(
     db: Session = Depends(get_db),
 ):
     usage_repo = UsageRepository(db)
-    spent_this_month = usage_repo.get_monthly_usage(store.id)
-
+    spent = float(usage_repo.get_monthly_usage(store.id))
+    budget = float(store.monthly_budget)
+    usage_percent = (spent / budget * 100.0) if budget > 0 else 100.0
     return {
         "plan": store.plan,
-        "monthly_budget": float(store.monthly_budget),
-        "spent_this_month": float(spent_this_month),
+        "monthly_budget": budget,
+        "spent_this_month": spent,
+        "remaining_budget": max(0.0, budget - spent),
+        "usage_percent": min(100.0, max(0.0, usage_percent)),
         "subscription_status": store.stripe_subscription_status,
         "has_payment_method": store.stripe_customer_id is not None,
+        "usage_warning": (
+            "critical" if usage_percent >= 100 else
+            "high" if usage_percent >= 80 else
+            "medium" if usage_percent >= 60 else None
+        ),
     }
 
 
@@ -64,13 +70,6 @@ def billing_usage(
     store: Store = Depends(get_current_store),
     db: Session = Depends(get_db),
 ):
-    """Recent usage records for the merchant's own store.
-
-    This is the store-scoped counterpart to GET /v1/admin/usage — that
-    route requires PlatformAdmin auth, so the merchant dashboard cannot
-    call it with a store session/API key. This one is filtered to the
-    caller's own store_id and needs no elevated auth.
-    """
     limit = max(1, min(limit, 50))
     records = (
         db.query(UsageRecord)
@@ -93,6 +92,40 @@ def billing_usage(
             for r in records
         ]
     }
+
+
+@router.get("/invoices")
+def billing_invoices(
+    limit: int = Query(10, ge=1, le=25),
+    store: Store = Depends(get_current_store),
+):
+    """Return the merchant's recent Stripe invoices without exposing IDs for another store."""
+    if not store.stripe_customer_id:
+        return {"invoices": []}
+    try:
+        client = service._client()
+        invoices = client.v1.invoices.list(
+            params={"customer": store.stripe_customer_id, "limit": limit}
+        )
+        rows = []
+        for invoice in invoices.data:
+            rows.append({
+                "id": invoice.id,
+                "number": invoice.number,
+                "status": invoice.status,
+                "currency": invoice.currency,
+                "amount_due": invoice.amount_due,
+                "amount_paid": invoice.amount_paid,
+                "total": invoice.total,
+                "created": invoice.created,
+                "period_start": invoice.period_start,
+                "period_end": invoice.period_end,
+                "hosted_invoice_url": invoice.hosted_invoice_url,
+                "invoice_pdf": invoice.invoice_pdf,
+            })
+        return {"invoices": rows}
+    except stripe.StripeError as exc:
+        raise HTTPException(status_code=502, detail="Unable to load billing history right now") from exc
 
 
 class CheckoutRequest(BaseModel):
@@ -132,13 +165,11 @@ def create_portal_session(
 async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature", "")
-
     try:
         event = service.verify_webhook_signature(payload, sig_header)
     except service.BillingNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except (stripe.SignatureVerificationError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="Invalid webhook signature") from exc
-
     service.handle_webhook_event(db, event)
     return {"received": True}
