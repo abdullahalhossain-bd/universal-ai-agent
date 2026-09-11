@@ -79,10 +79,6 @@ def _extract_min_price(text: str) -> float | None:
 
 def _normalize_entity_text(value: str) -> str:
     value = _normalize_digits(value).lower().strip()
-    # U+09DF ("য়") has no canonical Unicode decomposition, so text typed
-    # as "য" + "়" (U+09AF + U+09BC nukta) won't match it via casefold
-    # alone -- fold that decomposed form explicitly (see also
-    # app/chat/conversation_intelligence.py, which has the same issue).
     value = value.replace("\u09af\u09bc", "\u09df")
     value = re.sub(r"[^\w\u0980-\u09ff.-]+", " ", value, flags=re.UNICODE)
     return re.sub(r"\s+", " ", value).strip()
@@ -93,9 +89,6 @@ def _compact_entity(value: str) -> str:
 def _extract_in_stock(text: str) -> bool:
     normalized = _normalize_entity_text(text)
     if not normalized: return False
-    # "laptop ase/ache" means "does the catalog have it?"; it must not
-    # silently become stock > 0. Inventory filtering requires explicit
-    # stock/availability language.
     explicit_patterns = [r"\bavailable\b", r"\bin\s+stock\b", r"\bstock\b", r"স্টক", r"স্টকে", r"উপলব্ধ", r"মজুদ", r"in-stock"]
     return any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in explicit_patterns)
 
@@ -179,18 +172,25 @@ def _looks_like_product_search(query: str, search_terms: str, attributes: dict, 
     if non_knowledge and any(token in KNOWLEDGE_WORDS for token in tokens): return True
     return 1 <= len(tokens) <= 4 and not any(token in KNOWLEDGE_WORDS for token in tokens)
 
+def _knowledge_score(text: str) -> int:
+    normalized = _normalize_entity_text(text)
+    tokens = set(normalized.split())
+    score = sum(1 for word in KNOWLEDGE_WORDS if " " in word and word in normalized)
+    score += sum(1 for word in KNOWLEDGE_WORDS if " " not in word and word in tokens)
+    return score
+
 def plan(query: str, store_terms: set[str] | None = None):
     text = query.lower()
     attributes = _extract_attributes(query, store_terms)
-    attribute_exclusions = _attribute_search_exclusions(attributes, store_terms)
+    attribute_search_exclusions = _attribute_search_exclusions(attributes, store_terms)
     schema = getattr(store_terms, "attribute_schema", None) or {}
-    store_entities = [entity for entity in _resolve_store_entities(query, store_terms) if entity not in attribute_exclusions and not any(entity in aliases for aliases in schema.values())]
+    store_entities = [entity for entity in _resolve_store_entities(query, store_terms) if entity not in attribute_search_exclusions and not any(entity in aliases for aliases in schema.values())]
     recommendation = _is_recommendation_query(query)
-    knowledge_score = sum(word in text for word in KNOWLEDGE_WORDS)
+    knowledge_score = _knowledge_score(query)
     max_price = _extract_max_price(query)
     min_price = _extract_min_price(query)
     in_stock = _extract_in_stock(query)
-    search_terms = _clean_search_terms(query, exclude_words=attribute_exclusions, store_terms=store_terms)
+    search_terms = _clean_search_terms(query, exclude_words=attribute_search_exclusions, store_terms=store_terms)
     generic_product = _looks_like_product_search(query, search_terms, attributes, max_price, min_price)
     catalog_browse = _catalog_browse_intent(query, store_entities)
     if catalog_browse and not recommendation and not attributes and max_price is None and min_price is None:
@@ -205,7 +205,7 @@ def plan(query: str, store_terms: set[str] | None = None):
     if recommendation and not store_entities: entity_query = None
     common_filters = dict(product_name=entity_query or None, min_price=min_price, max_price=max_price, in_stock=in_stock, recommendation=recommendation, attributes=attributes)
     if product_score > 0 and knowledge_score > 0:
-        return PlannedAction(intent=Intent.MIXED, product_filters=ProductFilters(**common_filters), knowledge_query=_clean_search_terms(query, exclude_words=set(store_entities) | attribute_exclusions) or query, confidence=0.90)
+        return PlannedAction(intent=Intent.MIXED, product_filters=ProductFilters(**common_filters), knowledge_query=_clean_search_terms(query, exclude_words=set(store_entities) | attribute_search_exclusions) or query, confidence=0.90)
     if recommendation:
         return PlannedAction(intent=Intent.PRODUCT_SEARCH, product_filters=ProductFilters(**common_filters), confidence=0.92 if store_entities else 0.80)
     if product_score > 0:
