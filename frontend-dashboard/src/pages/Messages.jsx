@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { MessageSquare, Send, RefreshCw, Clock, UserRound } from 'lucide-react'
+import { MessageSquare, Send, RefreshCw, Clock, UserRound, Bot, UserRoundCog } from 'lucide-react'
 import { api, ApiError } from '../api/client'
 import { Alert, Button, Card, EmptyState, Input, PageHeader, Spinner } from '../components/ui'
 
@@ -19,6 +19,7 @@ export default function Messages() {
   const [reply, setReply] = useState('')
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
+  const [changingMode, setChangingMode] = useState(false)
   const [error, setError] = useState('')
 
   const load = async (conversationId = selected?.conversation_id) => {
@@ -50,6 +51,18 @@ export default function Messages() {
     catch (err) { setError(err instanceof ApiError ? err.detail : 'Could not open conversation.') }
   }
 
+  const setMode = async (mode) => {
+    if (!selected || changingMode || (selected.mode || 'ai') === mode) return
+    setChangingMode(true); setError('')
+    try {
+      const result = await api.post(`/v1/messages/conversations/${encodeURIComponent(selected.conversation_id)}/mode`, { mode })
+      setSelected(prev => prev ? { ...prev, mode: result.mode || mode } : prev)
+      setConversations(prev => prev.map(item => item.conversation_id === selected.conversation_id ? { ...item, mode: result.mode || mode } : item))
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : 'Could not change conversation mode.')
+    } finally { setChangingMode(false) }
+  }
+
   const sendReply = async () => {
     const text = reply.trim()
     if (!text || !selected) return
@@ -61,6 +74,8 @@ export default function Messages() {
     } catch (err) { setError(err instanceof ApiError ? err.detail : 'Reply failed.') }
     finally { setSending(false) }
   }
+
+  const humanMode = (selected?.mode || 'ai') === 'human'
 
   return <div>
     <PageHeader title="Inbox" description="See every customer message, who sent it, and exactly when it was sent. Reply to one customer conversation at a time." />
@@ -81,7 +96,7 @@ export default function Messages() {
                 <span className="flex items-center gap-2 text-sm font-medium"><UserRound size={14}/> Customer</span>
                 <span className="text-[11px] text-muted">{formatTime(item.last_message?.created_at)}</span>
               </div>
-              <div className="mt-1 flex items-center gap-1 text-[10px] text-muted"><Clock size={11}/> {item.last_message ? roleLabel(item.last_message.role) : 'No messages'}</div>
+              <div className="mt-1 flex items-center gap-2 text-[10px] text-muted"><Clock size={11}/> {roleLabel(item.last_message?.role)} · {item.mode === 'human' ? 'Human' : 'AI'}</div>
               <p className="mt-1 truncate text-xs text-muted">{item.last_message?.content || 'No messages yet'}</p>
               <p className="mt-1 truncate text-[10px] text-muted/70">ID: {item.conversation_id}</p>
             </button>
@@ -93,10 +108,25 @@ export default function Messages() {
       <Card className="flex min-h-[680px] flex-col">
         {!selected ? <EmptyState title="Select a conversation" description="Choose a customer conversation from the left." /> : <>
           <div className="border-b border-line pb-4">
-            <div className="flex items-center gap-2 font-semibold text-text"><UserRound size={17}/> Customer conversation</div>
-            <div className="mt-1 text-xs text-muted">Conversation ID: {selected.conversation_id}</div>
-            <div className="mt-1 text-xs text-muted">Visitor ID: {selected.visitor_id || 'anonymous'}</div>
-            <div className="mt-1 text-xs text-muted">Started: {formatTime(selected.created_at)}</div>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 font-semibold text-text"><UserRound size={17}/> Customer conversation</div>
+                <div className="mt-1 text-xs text-muted">Conversation ID: {selected.conversation_id}</div>
+                <div className="mt-1 text-xs text-muted">Visitor ID: {selected.visitor_id || 'anonymous'}</div>
+                <div className="mt-1 text-xs text-muted">Started: {formatTime(selected.created_at)}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant={humanMode ? 'primary' : 'secondary'} disabled={changingMode} onClick={() => setMode('human')}>
+                  <UserRoundCog size={15}/> Human takeover
+                </Button>
+                <Button variant={!humanMode ? 'primary' : 'secondary'} disabled={changingMode} onClick={() => setMode('ai')}>
+                  <Bot size={15}/> Resume AI
+                </Button>
+              </div>
+            </div>
+            <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${humanMode ? 'border-accent/30 bg-accent/5 text-text' : 'border-line bg-paper text-muted'}`}>
+              {humanMode ? 'Human mode is active. Automatic AI replies are paused for this conversation.' : 'AI mode is active. New customer messages can receive automatic AI replies.'}
+            </div>
           </div>
           <div className="flex-1 space-y-4 overflow-y-auto py-5 pr-1">
             {(selected.messages || []).map(message => <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-start' : 'justify-end'}`}>
