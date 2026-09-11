@@ -46,10 +46,17 @@ class ChatSession(Base):
         nullable=False,
     )
 
-    # Per-conversation control. "ai" is the default; "human" is a
-    # merchant/customer takeover and must prevent the normal AI pipeline
-    # from generating automatic replies for this conversation.
+    # Per-conversation control. "ai" is the default; "human" pauses AI.
     mode: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="ai",
+        server_default="ai",
+    )
+
+    # Who currently owns a human-mode conversation. This prevents a customer
+    # from silently resuming AI after a merchant explicitly takes over.
+    mode_owner: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
         default="ai",
