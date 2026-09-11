@@ -14,6 +14,7 @@ from app.core.rate_limit import enforce_rate_limit
 from app.core.security import resolve_client_ip
 from app.core.tenant import get_current_store
 from app.db.agent_config import AgentConfig
+from app.db.customer import Customer, CustomerIdentity
 from app.db.database import get_db
 from app.db.models import QueryEvent, Store
 from app.db.visitor import VisitorProfile
@@ -49,6 +50,37 @@ def _discard_ai_after_takeover(db: Session, store_id: str, conversation_id: str,
     return True
 
 
+def _sync_customer(db: Session, store_id: str, session: ChatSession) -> Customer:
+    """Attach a conversation to a first-class store-scoped Customer.
+
+    Browser visitor_id is treated as an identity locator, never as a secret.
+    Email/phone merges are deliberately not automatic; that is reserved for
+    an explicit, auditable merge flow.
+    """
+    visitor = (session.visitor_id or "anonymous").strip() or "anonymous"
+    customer = None
+    identity = db.query(CustomerIdentity).filter(
+        CustomerIdentity.store_id == store_id,
+        CustomerIdentity.identity_type == "browser",
+        CustomerIdentity.identity_value == visitor,
+    ).first()
+    if identity is not None:
+        customer = db.query(Customer).filter(Customer.id == identity.customer_id, Customer.store_id == store_id).first()
+
+    if customer is None:
+        customer = Customer(store_id=store_id, customer_key=uuid.uuid4().hex)
+        db.add(customer)
+        db.flush()
+        db.add(CustomerIdentity(store_id=store_id, customer_id=customer.id, identity_type="browser", identity_value=visitor))
+
+    session.customer_id = customer.id
+    customer.last_seen_at = __import__("datetime").datetime.utcnow()
+    db.commit()
+    db.refresh(session)
+    db.refresh(customer)
+    return customer
+
+
 def _sync_visitor_identity(db: Session, store_id: str, session: ChatSession, visitor_id: str | None) -> None:
     if not visitor_id: return
     visitor = visitor_id.strip()
@@ -62,6 +94,7 @@ def _sync_visitor_identity(db: Session, store_id: str, session: ChatSession, vis
         db.add(VisitorProfile(store_id=store_id, visitor_id=visitor))
     db.commit()
     db.refresh(session)
+    _sync_customer(db, store_id, session)
 
 
 def _verify_conversation_token(session: ChatSession, supplied_token: str | None) -> None:
@@ -73,8 +106,7 @@ def _verify_conversation_token(session: ChatSession, supplied_token: str | None)
 
 
 def _attach_conversation_token(result: dict, session: ChatSession | None) -> dict:
-    if not isinstance(result, dict) or session is None:
-        return result
+    if not isinstance(result, dict) or session is None: return result
     result["conversation_token"] = session.access_token
     return result
 
@@ -124,6 +156,7 @@ async def chat(http_request: Request, response: Response, request: ChatRequest, 
     final_session = db.query(ChatSession).filter(ChatSession.store_id == store.id, ChatSession.conversation_key == conversation_id).first()
     if final_session is not None:
         _sync_visitor_identity(db, store.id, final_session, request.visitor_id)
+        _sync_customer(db, store.id, final_session)
 
     if conversation_id:
         takeover_won = _discard_ai_after_takeover(db=db, store_id=store.id, conversation_id=conversation_id, preexisting_assistant_ids=preexisting_assistant_ids)
@@ -135,5 +168,3 @@ async def chat(http_request: Request, response: Response, request: ChatRequest, 
     if isinstance(result, dict) and not result.get("interaction_id"):
         _log_query_event(db, store.id, original_message, result)
     return _attach_conversation_token(result, final_session)
-
-# Audit checkpoint: customer chat requests with an existing conversation now require the private conversation capability token.
