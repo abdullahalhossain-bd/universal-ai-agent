@@ -75,6 +75,16 @@ def _authorized_customer(api_key: APIKey, x_api_key: str | None) -> str:
 def _find_session(db: Session, store_id: str, conversation_id: str):
     return db.query(ChatSession).filter(ChatSession.store_id == store_id, ChatSession.conversation_key == conversation_id).first()
 
+def _require_customer_conversation(session: ChatSession, conversation_token: str | None) -> None:
+    if not conversation_token:
+        raise HTTPException(status_code=401, detail="Conversation token required")
+    if not session.access_token or not secrets_compare(session.access_token, conversation_token):
+        raise HTTPException(status_code=403, detail="Invalid conversation token")
+
+def secrets_compare(expected: str, provided: str) -> bool:
+    import hmac
+    return hmac.compare_digest(str(expected), str(provided))
+
 def _set_mode(session: ChatSession, mode: str, db: Session, owner: str = "merchant"):
     mode = mode.strip().lower()
     if mode not in {"ai", "human"}:
@@ -120,60 +130,57 @@ def merchant_reply(conversation_id: str, payload: ReplyRequest, auth: tuple[User
     db.add(message); db.commit(); db.refresh(message)
     return _message_row(message)
 
-# Public widget/customer endpoints intentionally remain pk_live-only.
+# Public customer endpoints require BOTH the merchant's public key (store scope)
+# and the private per-conversation capability token returned by /v1/chat.
 @router.get("/customer/{conversation_id}")
-def customer_messages(conversation_id: str, x_api_key: str | None = Header(default=None, alias="x-api-key"), api_key: APIKey = Depends(get_api_key), db: Session = Depends(get_db)):
+def customer_messages(conversation_id: str, x_api_key: str | None = Header(default=None, alias="x-api-key"), x_conversation_token: str | None = Header(default=None, alias="x-conversation-token"), api_key: APIKey = Depends(get_api_key), db: Session = Depends(get_db)):
     store_id = _authorized_customer(api_key, x_api_key)
     session = _find_session(db, store_id, conversation_id)
-    if session is None:
-        return {"conversation_id": conversation_id, "mode": "ai", "mode_owner": "ai", "identity": _profile_row(None), "messages": []}
+    if session is None: return {"conversation_id": conversation_id, "mode": "ai", "mode_owner": "ai", "identity": _profile_row(None), "messages": []}
+    _require_customer_conversation(session, x_conversation_token)
     messages = db.query(ChatMessage).filter(ChatMessage.session_id == session.id, ChatMessage.role.in_(["assistant", "merchant"])).order_by(ChatMessage.created_at.asc()).all()
     return {"conversation_id": conversation_id, "mode": session.mode or "ai", "mode_owner": session.mode_owner or "ai", "identity": _conversation_identity(db, session), "messages": [_message_row(item) for item in messages]}
 
 @router.post("/customer/{conversation_id}/mode")
-def customer_set_mode(conversation_id: str, payload: ModeRequest, x_api_key: str | None = Header(default=None, alias="x-api-key"), api_key: APIKey = Depends(get_api_key), db: Session = Depends(get_db)):
+def customer_set_mode(conversation_id: str, payload: ModeRequest, x_api_key: str | None = Header(default=None, alias="x-api-key"), x_conversation_token: str | None = Header(default=None, alias="x-conversation-token"), api_key: APIKey = Depends(get_api_key), db: Session = Depends(get_db)):
     store_id = _authorized_customer(api_key, x_api_key)
     conversation_id = conversation_id.strip()
     if not conversation_id or len(conversation_id) > 200: raise HTTPException(status_code=400, detail="Invalid conversation id")
     session = _find_session(db, store_id, conversation_id)
-    if session is None:
-        session = ChatSession(store_id=store_id, conversation_key=conversation_id, visitor_id="anonymous", mode="ai", mode_owner="ai")
-        db.add(session); db.commit(); db.refresh(session)
+    if session is None: raise HTTPException(status_code=404, detail="Conversation not found")
+    _require_customer_conversation(session, x_conversation_token)
     requested = payload.mode.strip().lower()
     if requested == "ai" and session.mode_owner == "merchant": raise HTTPException(status_code=409, detail="The merchant currently controls this conversation. Only the merchant can resume AI.")
     if requested == "human": return _set_mode(session, "human", db, owner="customer")
     return _set_mode(session, "ai", db, owner="customer")
 
 @router.post("/customer/{conversation_id}/identity")
-def customer_identity(conversation_id: str, payload: CustomerIdentityRequest, x_api_key: str | None = Header(default=None, alias="x-api-key"), api_key: APIKey = Depends(get_api_key), db: Session = Depends(get_db)):
+def customer_identity(conversation_id: str, payload: CustomerIdentityRequest, x_api_key: str | None = Header(default=None, alias="x-api-key"), x_conversation_token: str | None = Header(default=None, alias="x-conversation-token"), api_key: APIKey = Depends(get_api_key), db: Session = Depends(get_db)):
     store_id = _authorized_customer(api_key, x_api_key)
     conversation_id = conversation_id.strip()
     if not conversation_id or len(conversation_id) > 200: raise HTTPException(status_code=400, detail="Invalid conversation id")
     session = _find_session(db, store_id, conversation_id)
     if session is None:
-        session = ChatSession(store_id=store_id, conversation_key=conversation_id, visitor_id=payload.visitor_id.strip() or "anonymous", mode="ai", mode_owner="ai")
-        db.add(session); db.flush()
-    elif session.visitor_id != payload.visitor_id.strip():
-        raise HTTPException(status_code=409, detail="Visitor identity does not match this conversation")
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    _require_customer_conversation(session, x_conversation_token)
+    if session.visitor_id != payload.visitor_id.strip(): raise HTTPException(status_code=409, detail="Visitor identity does not match this conversation")
     profile = _upsert_profile(db, store_id, session.visitor_id, payload.name, payload.email, payload.phone)
     db.commit(); db.refresh(profile)
     return {"conversation_id": conversation_id, "identity": _profile_row(profile)}
 
 @router.post("/customer/{conversation_id}")
-def customer_message(conversation_id: str, payload: CustomerMessageRequest, x_api_key: str | None = Header(default=None, alias="x-api-key"), api_key: APIKey = Depends(get_api_key), db: Session = Depends(get_db)):
+def customer_message(conversation_id: str, payload: CustomerMessageRequest, x_api_key: str | None = Header(default=None, alias="x-api-key"), x_conversation_token: str | None = Header(default=None, alias="x-conversation-token"), api_key: APIKey = Depends(get_api_key), db: Session = Depends(get_db)):
     store_id = _authorized_customer(api_key, x_api_key)
     conversation_id = conversation_id.strip()
     if not conversation_id or len(conversation_id) > 200: raise HTTPException(status_code=400, detail="Invalid conversation id")
     visitor = payload.visitor_id.strip() or "anonymous"
     session = _find_session(db, store_id, conversation_id)
     if session is None:
-        session = ChatSession(store_id=store_id, conversation_key=conversation_id, visitor_id=visitor, mode="human", mode_owner="customer")
-        db.add(session); db.flush()
-    else:
-        if session.visitor_id != visitor:
-            raise HTTPException(status_code=409, detail="Visitor identity does not match this conversation")
-        session.mode = "human"
-        if session.mode_owner != "merchant": session.mode_owner = "customer"
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    _require_customer_conversation(session, x_conversation_token)
+    if session.visitor_id != visitor: raise HTTPException(status_code=409, detail="Visitor identity does not match this conversation")
+    session.mode = "human"
+    if session.mode_owner != "merchant": session.mode_owner = "customer"
     _upsert_profile(db, store_id, session.visitor_id, payload.name, payload.email, payload.phone)
     message = ChatMessage(session_id=session.id, role="user", content=payload.message.strip())
     db.add(message)
