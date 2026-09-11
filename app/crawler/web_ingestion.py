@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 from urllib.parse import urljoin
-
 from app.crawler.classifier import classify_page
 from app.crawler.limits import get_crawl_limits
 from app.knowledge.chunk import KnowledgeChunk, KnowledgePage
 from app.knowledge.chunker import TextChunker
 from app.knowledge.crawler import WebsiteCrawler
 from app.sync.service import ProductSyncService
+from app.db.database import SessionLocal
+from app.db.models import DataSource, Store, SyncRun
 
 
 def _canonical_url(url: str, base: str) -> str:
@@ -50,6 +51,8 @@ def extract_products_from_structured_data(structured: list[dict], page_url: str)
             continue
         offers = _offer(item)
         url = _canonical_url(item.get("url") or page_url, page_url)
+        availability = str(offers.get("availability") or "").casefold()
+        stock = 0 if "outofstock" in availability else None
         rows.append({
             "id": _product_id(url, item.get("sku") or item.get("mpn") or item.get("name")),
             "sku": item.get("sku") or item.get("mpn"),
@@ -57,18 +60,12 @@ def extract_products_from_structured_data(structured: list[dict], page_url: str)
             "description": item.get("description"),
             "price": offers.get("price") or item.get("price"),
             "currency": offers.get("priceCurrency") or item.get("priceCurrency"),
-            "stock": None,
+            "stock": stock,
             "category": item.get("category") or item.get("additionalType"),
             "brand": (item.get("brand") or {}).get("name") if isinstance(item.get("brand"), dict) else item.get("brand"),
             "image_url": _image(item),
             "product_url": url,
-            "attributes": {
-                "source": "schema.org",
-                "source_url": page_url,
-                "offers": offers,
-                "aggregateRating": item.get("aggregateRating"),
-                "additionalProperty": item.get("additionalProperty"),
-            },
+            "attributes": {"source": "schema.org", "source_url": page_url, "offers": offers, "aggregateRating": item.get("aggregateRating"), "additionalProperty": item.get("additionalProperty")},
         })
     return [r for r in rows if r.get("name")]
 
@@ -83,7 +80,6 @@ async def ingest_website(db, store, datasource, *, max_pages: int | None = None,
     chunker = TextChunker()
     knowledge_created = knowledge_updated = 0
     now = datetime.utcnow()
-
     for page in pages:
         structured = page.get("structured_data") or []
         for row in extract_products_from_structured_data(structured, page["url"]):
@@ -97,32 +93,52 @@ async def ingest_website(db, store, datasource, *, max_pages: int | None = None,
         existing = db.query(KnowledgePage).filter(KnowledgePage.store_id == store.id, KnowledgePage.url == page["url"]).first()
         page_type = classify_page(page["url"], page.get("title"), content, structured)
         if existing and existing.content_hash == content_hash:
-            existing.status = "active"
-            existing.crawled_at = now
-            continue
+            existing.status = "active"; existing.crawled_at = now; continue
         if existing:
-            existing.title = page.get("title")
-            existing.content = content
-            existing.content_hash = content_hash
-            existing.page_type = page_type
-            existing.http_status = page.get("http_status")
-            existing.status = "active"
-            existing.crawled_at = now
-            page_id = existing.id
-            db.query(KnowledgeChunk).filter(KnowledgeChunk.page_id == page_id).delete(synchronize_session=False)
-            knowledge_updated += 1
+            existing.title = page.get("title"); existing.content = content; existing.content_hash = content_hash; existing.page_type = page_type; existing.http_status = page.get("http_status"); existing.status = "active"; existing.crawled_at = now; page_id = existing.id
+            db.query(KnowledgeChunk).filter(KnowledgeChunk.page_id == page_id).delete(synchronize_session=False); knowledge_updated += 1
         else:
             existing = KnowledgePage(store_id=store.id, url=page["url"], title=page.get("title"), content=content, content_hash=content_hash, page_type=page_type, status="active", http_status=page.get("http_status"), crawled_at=now)
-            db.add(existing)
-            db.flush()
-            page_id = existing.id
-            knowledge_created += 1
+            db.add(existing); db.flush(); page_id = existing.id; knowledge_created += 1
         for index, chunk in enumerate(chunker.split(content)):
             db.add(KnowledgeChunk(store_id=store.id, page_id=page_id, chunk_index=index, content=chunk))
-
     result = None
     if product_rows:
         mapping = {field: field for field in ("id", "sku", "name", "description", "price", "stock", "category", "brand", "image_url", "product_url", "currency")}
         result = ProductSyncService(db).sync_rows(store.id, product_rows, mapping, full_sync=True, source_datasource_id=datasource.id)
     db.commit()
     return {"pages_found": len(pages), "products_found": len(product_rows), "knowledge_created": knowledge_created, "knowledge_updated": knowledge_updated, "products_created": result.created if result else 0, "products_updated": result.updated if result else 0, "products_unchanged": result.unchanged if result else 0, "errors": result.errors if result else []}
+
+
+async def run_website_sync(job: dict):
+    db = SessionLocal()
+    started = datetime.utcnow()
+    run = None
+    try:
+        store_id = job.get("store_id") or job.get("tenant_id")
+        datasource_id = job.get("datasource_id")
+        ds = db.query(DataSource).filter(DataSource.id == datasource_id, DataSource.store_id == store_id, DataSource.active.is_(True)).first()
+        store = db.query(Store).filter(Store.id == store_id).first()
+        if not ds or ds.connector_type != "website" or not ds.connection_url:
+            raise LookupError("active website datasource not found")
+        run = SyncRun(store_id=store_id, datasource_id=datasource_id, status="running", sync_mode="website_full", started_at=started)
+        db.add(run); db.commit()
+        result = await ingest_website(db, store, ds)
+        run.status = "success" if not result["errors"] else "partial"
+        run.finished_at = datetime.utcnow()
+        run.products_seen = result["products_found"]
+        run.created = result["products_created"]
+        run.updated = result["products_updated"]
+        run.unchanged = result["products_unchanged"]
+        run.quality_report = result
+        ds.last_sync_at = datetime.utcnow(); ds.last_sync_status = run.status; ds.last_sync_error = "; ".join(result["errors"]) if result["errors"] else None
+        db.commit()
+        from types import SimpleNamespace
+        return SimpleNamespace(created=result["products_created"], updated=result["products_updated"], errors=result["errors"])
+    except Exception as exc:
+        db.rollback()
+        if run is not None:
+            run.status = "error"; run.finished_at = datetime.utcnow(); run.error = str(exc); db.add(run); db.commit()
+        raise
+    finally:
+        db.close()
