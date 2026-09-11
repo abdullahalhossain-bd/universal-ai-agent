@@ -32,30 +32,42 @@
 <script>
 (function(){
   "use strict";
-  var API_BASE=location.origin, TOKEN_KEY="ucai_merchant_access_token", STORE_KEY="ucai_merchant_store";
-  var token=sessionStorage.getItem(TOKEN_KEY)||"";
+  var API_BASE=location.origin, CSRF_COOKIE="ucai_merchant_csrf";
   var selected=null, timer=null, loading=false, cached=[];
   var auth=document.getElementById("auth"), app=document.getElementById("app");
   var list=document.getElementById("conversation-list"), messages=document.getElementById("messages"), title=document.getElementById("chat-title"), meta=document.getElementById("chat-meta"), status=document.getElementById("mode-status"), reply=document.getElementById("reply"), send=document.getElementById("send"), takeover=document.getElementById("takeover"), resume=document.getElementById("resume");
 
+  function csrfToken(){
+    var prefix=CSRF_COOKIE+"=";
+    var parts=document.cookie.split(";");
+    for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0)return decodeURIComponent(part.slice(prefix.length));}
+    return "";
+  }
+  function clearLocalSession(){selected=null;cached=[];if(timer){clearInterval(timer);timer=null;} }
   function api(path,opts){
     opts=opts||{};
+    var method=(opts.method||"GET").toUpperCase();
     var headers=Object.assign({"content-type":"application/json"},opts.headers||{});
-    if(token) headers.authorization="Bearer "+token;
-    return fetch(API_BASE+path,{method:opts.method||"GET",headers:headers,body:opts.body?JSON.stringify(opts.body):undefined}).then(function(r){
+    if(method!=="GET"&&method!=="HEAD"&&method!=="OPTIONS"){
+      var csrf=csrfToken();if(csrf)headers["x-csrf-token"]=csrf;
+    }
+    return fetch(API_BASE+path,{method:method,headers:headers,credentials:"same-origin",body:opts.body?JSON.stringify(opts.body):undefined}).then(function(r){
       return r.json().catch(function(){return{}}).then(function(d){
-        if(r.status===401){sessionStorage.removeItem(TOKEN_KEY);token="";showAuth("Session expired. Please sign in again.");}
+        if(r.status===401){clearLocalSession();showAuth("Session expired. Please sign in again.");}
         if(!r.ok)throw new Error(d.detail||("HTTP "+r.status));
         return d;
       });
     });
   }
   function showAuth(error){
-    if(timer){clearInterval(timer);timer=null;}
-    auth.style.display="block";app.style.display="none";
+    clearLocalSession();auth.style.display="block";app.style.display="none";
     var e=document.getElementById("auth-error");e.textContent=error||"";e.style.display=error?"block":"none";
   }
-  function showApp(){auth.style.display="none";app.style.display="block";loadList();if(!timer)timer=setInterval(poll,5000)}
+  function showApp(store){
+    auth.style.display="none";app.style.display="block";
+    if(store)document.getElementById("store-label").textContent="Store: "+(store.name||store.id);
+    loadList();if(!timer)timer=setInterval(poll,5000);
+  }
   function appendEmpty(parent,text){var el=document.createElement("div");el.className="empty";el.textContent=text;parent.appendChild(el)}
   function renderList(items){
     list.textContent="";
@@ -77,14 +89,16 @@
   function setControls(mode){var human=mode==="human";status.textContent=human?"Human mode — AI replies paused":"AI mode";takeover.disabled=human||!selected;resume.disabled=!human||!selected;reply.disabled=!selected||!human;send.disabled=!selected||!human||loading;reply.placeholder=human?"Reply to customer…":"Take over first to reply directly."}
   function openConversation(id){selected={conversation_id:id};loadConversation()}
   function loadConversation(){if(!selected)return;api("/v1/messages/conversations/"+encodeURIComponent(selected.conversation_id)).then(function(data){selected=data;title.textContent="Visitor: "+(data.visitor_id||"anonymous");meta.textContent=data.conversation_id;setControls(data.mode||"ai");renderMessages(data);renderListCache()}).catch(function(e){messages.textContent="";var er=document.createElement("div");er.className="error";er.textContent=e.message;messages.appendChild(er)})}
-  function loadList(){if(!token)return;api("/v1/messages/conversations").then(function(data){cached=Array.isArray(data)?data:[];renderList(cached);var active=cached.find(function(x){return selected&&x.conversation_id===selected.conversation_id});if(active)loadConversation()}).catch(function(e){list.textContent="";var er=document.createElement("div");er.className="error";er.textContent=e.message;list.appendChild(er)})}
+  function loadList(){api("/v1/messages/conversations").then(function(data){cached=Array.isArray(data)?data:[];renderList(cached);var active=cached.find(function(x){return selected&&x.conversation_id===selected.conversation_id});if(active)loadConversation()}).catch(function(e){list.textContent="";var er=document.createElement("div");er.className="error";er.textContent=e.message;list.appendChild(er)})}
   function changeMode(mode){if(!selected)return;api("/v1/messages/conversations/"+encodeURIComponent(selected.conversation_id)+"/mode",{method:"POST",body:{mode:mode}}).then(function(){loadConversation();loadList()}).catch(function(e){alert(e.message)})}
   function sendReply(){var text=reply.value.trim();if(!text||!selected||loading)return;loading=true;setControls("human");api("/v1/messages/conversations/"+encodeURIComponent(selected.conversation_id)+"/reply",{method:"POST",body:{message:text}}).then(function(){reply.value="";loadConversation();loadList()}).catch(function(e){alert(e.message)}).finally(function(){loading=false;if(selected)setControls(selected.mode||"ai")})}
-  document.getElementById("login-form").addEventListener("submit",function(e){e.preventDefault();var btn=document.getElementById("login-btn");var err=document.getElementById("auth-error");err.style.display="none";btn.disabled=true;fetch(API_BASE+"/v1/auth/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({email:document.getElementById("email").value.trim(),password:document.getElementById("password").value})}).then(function(r){return r.json().catch(function(){return{}}).then(function(d){if(!r.ok)throw new Error(d.detail||("HTTP "+r.status));return d})}).then(function(data){token=data.access_token;sessionStorage.setItem(TOKEN_KEY,token);if(data.store){sessionStorage.setItem(STORE_KEY,JSON.stringify(data.store));document.getElementById("store-label").textContent="Store: "+(data.store.name||data.store.id)};showApp()}).catch(function(e){err.textContent=e.message;err.style.display="block"}).finally(function(){btn.disabled=false})});
-  send.onclick=sendReply;reply.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendReply()}});takeover.onclick=function(){changeMode("human")};resume.onclick=function(){changeMode("ai")};document.getElementById("refresh").onclick=loadList;document.getElementById("dashboard").onclick=function(){location.href="/admin"};document.getElementById("logout").onclick=function(){if(token){fetch(API_BASE+"/v1/auth/logout",{method:"POST",headers:{authorization:"Bearer "+token}}).catch(function(){})}sessionStorage.removeItem(TOKEN_KEY);sessionStorage.removeItem(STORE_KEY);token="";showAuth()};
-  function poll(){if(token){if(selected)loadConversation();else loadList()}}
-  try{var savedStore=JSON.parse(sessionStorage.getItem(STORE_KEY)||"null");if(savedStore)document.getElementById("store-label").textContent="Store: "+(savedStore.name||savedStore.id)}catch(_){ }
-  if(token)showApp();else showAuth();
+  document.getElementById("login-form").addEventListener("submit",function(e){
+    e.preventDefault();var btn=document.getElementById("login-btn"),err=document.getElementById("auth-error");err.style.display="none";btn.disabled=true;
+    fetch(API_BASE+"/v1/auth/inbox/login",{method:"POST",headers:{"content-type":"application/json"},credentials:"same-origin",body:JSON.stringify({email:document.getElementById("email").value.trim(),password:document.getElementById("password").value})}).then(function(r){return r.json().catch(function(){return{}}).then(function(d){if(!r.ok)throw new Error(d.detail||("HTTP "+r.status));return d})}).then(function(data){showApp(data.store)}).catch(function(e){err.textContent=e.message;err.style.display="block"}).finally(function(){btn.disabled=false});
+  });
+  send.onclick=sendReply;reply.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendReply()}});takeover.onclick=function(){changeMode("human")};resume.onclick=function(){changeMode("ai")};document.getElementById("refresh").onclick=loadList;document.getElementById("dashboard").onclick=function(){location.href="/admin"};document.getElementById("logout").onclick=function(){api("/v1/auth/inbox/logout",{method:"POST"}).catch(function(){}).finally(function(){showAuth()})};
+  function poll(){if(selected)loadConversation();else loadList()}
+  fetch(API_BASE+"/v1/auth/inbox/me",{credentials:"same-origin"}).then(function(r){if(!r.ok)throw new Error("not authenticated");return r.json()}).then(function(data){showApp(data.store)}).catch(function(){showAuth()});
   window.addEventListener("beforeunload",function(){if(timer)clearInterval(timer)});
 })();
 </script>
