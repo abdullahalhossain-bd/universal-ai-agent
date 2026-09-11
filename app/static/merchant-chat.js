@@ -16,7 +16,6 @@
   var root = null;
   var humanMode = false;
   var sendButton = null;
-  var originalSend = null;
   var input = null;
   var merchantButton = null;
   var modeNote = null;
@@ -30,14 +29,9 @@
     try { if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID(); } catch (_) {}
     return Date.now().toString(36) + Math.random().toString(36).slice(2);
   }
-
-  function storageGet(key) {
-    try { return localStorage.getItem(key) || ""; } catch (_) { return ""; }
-  }
-
+  function storageGet(key) { try { return localStorage.getItem(key) || ""; } catch (_) { return ""; } }
   function getConversation() { return storageGet(CONV_KEY); }
   function getToken() { return storageGet(TOKEN_KEY); }
-
   function getVisitor() {
     var value = storageGet(VISITOR_KEY);
     if (value) return value;
@@ -45,14 +39,12 @@
     try { localStorage.setItem(VISITOR_KEY, value); } catch (_) {}
     return value;
   }
-
   function authHeaders(extra) {
     var headers = extra || {};
     var token = getToken();
     if (token) headers["x-conversation-token"] = token;
     return headers;
   }
-
   function findWidgetRoot() {
     var nodes = document.body ? document.body.children : [];
     for (var i = 0; i < nodes.length; i++) {
@@ -61,41 +53,41 @@
     }
     return null;
   }
-
   function hasConversation() { return !!getConversation() && !!getToken(); }
-
+  function hasMerchantMessage(id) {
+    if (!root || id == null) return false;
+    var nodes = root.querySelectorAll("[data-merchant-message-id]");
+    var wanted = String(id);
+    for (var i = 0; i < nodes.length; i++) if (nodes[i].getAttribute("data-merchant-message-id") === wanted) return true;
+    return false;
+  }
   function addMessage(text, role, messageId) {
     if (!root) return;
     var messages = root.querySelector(".messages");
-    if (!messages) return;
-    if (messageId) {
-      var existing = root.querySelector('[data-merchant-message-id="' + CSS.escape(String(messageId)) + '"]');
-      if (existing) return;
-    }
+    if (!messages || (messageId != null && hasMerchantMessage(messageId))) return;
     var el = document.createElement("div");
     el.className = "msg " + (role === "user" ? "user" : "merchant");
-    if (messageId) el.setAttribute("data-merchant-message-id", String(messageId));
+    if (messageId != null) el.setAttribute("data-merchant-message-id", String(messageId));
     el.textContent = text || "";
     messages.appendChild(el);
     messages.scrollTop = messages.scrollHeight;
   }
 
   function fetchCustomerState() {
-    var conversation = getConversation();
-    var token = getToken();
+    var conversation = getConversation(), token = getToken();
     if (!conversation || !token) return Promise.resolve(null);
     return fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversation), {
       method: "GET",
       headers: authHeaders({ "x-api-key": API_KEY })
     }).then(function (response) {
-      if (!response.ok) {
-        return response.json().catch(function () { return {}; }).then(function (data) {
+      return response.json().catch(function () { return {}; }).then(function (data) {
+        if (!response.ok) {
           var error = new Error((data && data.detail) || ("HTTP " + response.status));
           error.status = response.status;
           throw error;
-        });
-      }
-      return response.json();
+        }
+        return data;
+      });
     });
   }
 
@@ -118,10 +110,6 @@
     if (!hasConversation()) return;
     fetchCustomerState().then(function (data) {
       if (!data || (data.mode !== "human" && data.mode !== "ai")) return;
-      if (data.mode === "human" && data.mode_owner === "merchant") {
-        renderMode(true);
-        return;
-      }
       renderMode(data.mode === "human");
     }).catch(function (error) {
       if (error && (error.status === 401 || error.status === 403)) {
@@ -130,13 +118,10 @@
       }
     });
   }
-
   function startModePolling() {
     syncModeFromServer();
-    if (modePollingTimer) return;
-    modePollingTimer = setInterval(syncModeFromServer, 4000);
+    if (!modePollingTimer) modePollingTimer = setInterval(syncModeFromServer, 4000);
   }
-
   function stopModePolling() {
     if (modePollingTimer) { clearInterval(modePollingTimer); modePollingTimer = null; }
   }
@@ -147,17 +132,10 @@
       if (data.mode === "human" && !humanMode) renderMode(true);
       if (data.mode !== "human" && humanMode && data.mode_owner !== "merchant") renderMode(false);
       if (!humanMode || !Array.isArray(data.messages)) return;
-
-      var merchantMessages = data.messages.filter(function (message) {
-        return message && message.role === "merchant" && message.id != null;
-      });
+      var merchantMessages = data.messages.filter(function (m) { return m && m.role === "merchant" && m.id != null; });
       for (var i = 0; i < merchantMessages.length; i++) {
         var message = merchantMessages[i];
-        if (!lastMerchantMessageId || String(message.id) !== String(lastMerchantMessageId)) {
-          if (!root.querySelector('[data-merchant-message-id="' + CSS.escape(String(message.id)) + '"]')) {
-            addMessage("Store team: " + (message.content || ""), "merchant", message.id);
-          }
-        }
+        if (!hasMerchantMessage(message.id)) addMessage("Store team: " + (message.content || ""), "merchant", message.id);
       }
       if (merchantMessages.length) {
         lastMerchantMessageId = String(merchantMessages[merchantMessages.length - 1].id);
@@ -167,7 +145,6 @@
       if (error && (error.status === 401 || error.status === 403)) stopMerchantPolling();
     });
   }
-
   function startMerchantPolling() {
     if (!hasConversation()) return;
     var conversation = getConversation();
@@ -182,14 +159,12 @@
     pollMerchantMessages();
     if (!pollingTimer) pollingTimer = setInterval(pollMerchantMessages, 4000);
   }
-
   function stopMerchantPolling() {
     if (pollingTimer) { clearInterval(pollingTimer); pollingTimer = null; }
   }
 
   function setRemoteMode(mode) {
-    var conversation = getConversation();
-    var token = getToken();
+    var conversation = getConversation(), token = getToken();
     if (!conversation || !token) return Promise.reject(new Error("No authenticated conversation"));
     return fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversation) + "/mode", {
       method: "POST",
@@ -206,7 +181,6 @@
       });
     });
   }
-
   function setMode(enabled) {
     if (modeChanging || enabled === humanMode) return;
     if (!hasConversation()) {
@@ -214,7 +188,6 @@
       if (input) input.focus();
       return;
     }
-
     modeChanging = true;
     var previous = humanMode;
     renderMode(enabled);
@@ -222,8 +195,7 @@
       renderMode(data && data.mode === "human");
     }).catch(function (error) {
       renderMode(previous);
-      var detail = error && error.message ? error.message : "Could not change chat mode.";
-      addMessage(detail === "Could not change chat mode." ? detail + " Please try again." : detail, "merchant");
+      addMessage((error && error.message) || "Could not change chat mode. Please try again.", "merchant");
       console.error("Merchant chat mode error:", error);
     }).finally(function () { modeChanging = false; });
   }
@@ -231,13 +203,11 @@
   function sendToMerchant() {
     var text = (input && input.value || "").trim();
     if (!text || !hasConversation()) return;
-    var conversation = getConversation();
-    var visitor = getVisitor();
     sendButton.disabled = true;
-    fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversation), {
+    fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(getConversation()), {
       method: "POST",
       headers: authHeaders({ "content-type": "application/json", "x-api-key": API_KEY }),
-      body: JSON.stringify({ message: text, visitor_id: visitor })
+      body: JSON.stringify({ message: text, visitor_id: getVisitor() })
     }).then(function (response) {
       return response.json().catch(function () { return {}; }).then(function (data) {
         if (!response.ok) {
@@ -252,7 +222,6 @@
       input.value = "";
       input.style.height = "auto";
       renderMode(true);
-      startMerchantPolling();
     }).catch(function (error) {
       addMessage((error && error.message) || "Message could not be sent. Please try again.", "merchant");
       console.error("Merchant chat error:", error);
@@ -265,57 +234,54 @@
   function install() {
     root = findWidgetRoot();
     if (!root) return false;
-    if (root.querySelector(".merchant-chat-button")) {
-      merchantButton = root.querySelector(".merchant-chat-button");
-      input = root.querySelector(".composer textarea");
-      sendButton = root.querySelector(".composer .send");
-      return !!merchantButton && !!input && !!sendButton;
+    input = root.querySelector(".composer textarea");
+    sendButton = root.querySelector(".composer .send");
+    var tools = root.querySelector(".tools");
+    if (!input || !sendButton || !tools) return false;
+
+    merchantButton = root.querySelector(".merchant-chat-button");
+    if (!merchantButton) {
+      merchantButton = document.createElement("button");
+      merchantButton.type = "button";
+      merchantButton.className = "tool merchant-chat-button";
+      merchantButton.setAttribute("aria-pressed", "false");
+      merchantButton.textContent = "💬 Talk to merchant";
+      merchantButton.title = "Chat directly with the merchant";
+      tools.appendChild(merchantButton);
+      merchantButton.addEventListener("click", function () { setMode(!humanMode); });
     }
 
-    input = root.querySelector(".composer textarea");
-    originalSend = root.querySelector(".composer .send");
-    var tools = root.querySelector(".tools");
-    if (!input || !originalSend || !tools) return false;
+    modeNote = root.querySelector(".merchant-mode-note");
+    if (!modeNote) {
+      modeNote = document.createElement("div");
+      modeNote.className = "merchant-mode-note";
+      modeNote.style.cssText = "display:none;padding:5px 10px 0;background:#fff;color:#047857;font-size:10.5px";
+      var composer = root.querySelector(".composer");
+      if (composer) composer.before(modeNote);
+    }
 
-    merchantButton = document.createElement("button");
-    merchantButton.type = "button";
-    merchantButton.className = "tool merchant-chat-button";
-    merchantButton.setAttribute("aria-pressed", "false");
-    merchantButton.textContent = "💬 Talk to merchant";
-    merchantButton.title = "Chat directly with the merchant";
-    tools.appendChild(merchantButton);
-
-    modeNote = document.createElement("div");
-    modeNote.style.cssText = "display:none;padding:5px 10px 0;background:#fff;color:#047857;font-size:10.5px";
-    var composer = root.querySelector(".composer");
-    if (composer) composer.before(modeNote);
-
-    merchantButton.addEventListener("click", function () {
-      if (!modeChanging && humanMode) {
-        setMode(false);
-        return;
-      }
-      setMode(true);
-    });
-
-    var replacement = originalSend.cloneNode(true);
-    originalSend.replaceWith(replacement);
-    sendButton = replacement;
-    sendButton.addEventListener("click", function () {
-      if (humanMode) sendToMerchant();
-      else replacement.__ucaiNativeSend && replacement.__ucaiNativeSend();
-    });
-    replacement.__ucaiNativeSend = function () { if (typeof originalSend.onclick === "function") originalSend.onclick(); };
-
-    input.addEventListener("keydown", function (event) {
-      if (humanMode && event.key === "Enter" && !event.shiftKey) {
+    /* Capture the send click only while human mode is active; otherwise the
+       original widget listener remains untouched. */
+    if (!sendButton.__ucaiMerchantBound) {
+      sendButton.__ucaiMerchantBound = true;
+      sendButton.addEventListener("click", function (event) {
+        if (!humanMode) return;
         event.preventDefault();
         event.stopImmediatePropagation();
         sendToMerchant();
-      }
-    }, true);
+      }, true);
+    }
+    if (!input.__ucaiMerchantBound) {
+      input.__ucaiMerchantBound = true;
+      input.addEventListener("keydown", function (event) {
+        if (!humanMode || event.key !== "Enter" || event.shiftKey) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        sendToMerchant();
+      }, true);
+    }
 
-    renderMode(false);
+    renderMode(humanMode);
     startModePolling();
     return true;
   }
@@ -323,7 +289,7 @@
   var attempts = 0;
   (function waitForWidget() {
     if (install()) return;
-    if (++attempts < 160) setTimeout(waitForWidget, 100);
+    if (++attempts < 200) setTimeout(waitForWidget, 100);
   })();
 
   window.addEventListener("beforeunload", function () {
