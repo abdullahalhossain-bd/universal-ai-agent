@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { LayoutDashboard, Globe, KeyRound, CreditCard, Database, MessageSquareText, MessagesSquare, BarChart3, Settings, LogOut, Sparkles } from 'lucide-react'
+import { LayoutDashboard, Globe, KeyRound, CreditCard, Database, MessageSquareText, MessagesSquare, BarChart3, Settings, LogOut, Sparkles, BrainCircuit } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
 const NAV = [
@@ -9,6 +9,7 @@ const NAV = [
   { to: '/api-keys', label: 'API Keys', icon: KeyRound },
   { to: '/chat', label: 'Chat', icon: MessageSquareText },
   { to: '/messages', label: 'Messages', icon: MessagesSquare },
+  { to: '/analytics', label: 'Conversation intelligence', icon: BrainCircuit },
   { to: '/usage', label: 'Usage', icon: BarChart3 },
   { to: '/billing', label: 'Billing', icon: CreditCard },
   { to: '/settings', label: 'Settings', icon: Settings },
