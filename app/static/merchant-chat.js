@@ -10,6 +10,7 @@
   var CONV_KEY = "ucai_widget_conv_" + API_KEY.slice(-8);
   var VISITOR_KEY = "ucai_widget_visitor_" + API_KEY.slice(-8);
   var POLL_KEY = "ucai_widget_merchant_poll_" + API_KEY.slice(-8);
+  var MODE_POLL_KEY = "ucai_widget_mode_poll_" + API_KEY.slice(-8);
   var root = null;
   var humanMode = false;
   var sendButton = null;
@@ -18,6 +19,7 @@
   var merchantButton = null;
   var modeNote = null;
   var pollingTimer = null;
+  var modePollingTimer = null;
   var lastMerchantMessageId = null;
   var initializedConversation = null;
   var modeChanging = false;
@@ -89,22 +91,24 @@
     messages.scrollTop = messages.scrollHeight;
   }
 
-  function pollMerchantMessages() {
-    if (!humanMode) return;
+  function fetchCustomerState() {
     var conversation = getConversation();
-    fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversation), {
+    return fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversation), {
       headers: { "x-api-key": API_KEY }
-    })
-      .then(function (response) {
-        if (!response.ok) return null;
-        return response.json();
-      })
+    }).then(function (response) {
+      if (!response.ok) return null;
+      return response.json();
+    });
+  }
+
+  function pollMerchantMessages() {
+    fetchCustomerState()
       .then(function (data) {
         if (!data) return;
 
-        /* Merchant takeover/resume can happen from another browser. Mirror
-           the authoritative server mode so the customer UI changes without
-           requiring a page refresh. */
+        /* The server is authoritative. A merchant can take over or resume AI
+           from another browser, so mode must be observed even while the
+           customer is currently in AI mode. */
         if (data.mode === "human" && !humanMode) renderMode(true);
         else if (data.mode === "ai" && humanMode) renderMode(false);
 
@@ -169,6 +173,28 @@
     }
   }
 
+  function syncModeFromServer() {
+    fetchCustomerState()
+      .then(function (data) {
+        if (!data || (data.mode !== "human" && data.mode !== "ai")) return;
+        renderMode(data.mode === "human");
+      })
+      .catch(function () {});
+  }
+
+  function startModePolling() {
+    syncModeFromServer();
+    if (modePollingTimer) return;
+    modePollingTimer = setInterval(syncModeFromServer, 4000);
+  }
+
+  function stopModePolling() {
+    if (modePollingTimer) {
+      clearInterval(modePollingTimer);
+      modePollingTimer = null;
+    }
+  }
+
   function renderMode(enabled) {
     humanMode = enabled;
     if (!root || !merchantButton || !input) return;
@@ -197,22 +223,6 @@
         return data;
       });
     });
-  }
-
-  function syncModeFromServer() {
-    var conversation = getConversation();
-    fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversation), {
-      headers: { "x-api-key": API_KEY }
-    })
-      .then(function (response) {
-        if (!response.ok) return null;
-        return response.json();
-      })
-      .then(function (data) {
-        if (!data || (data.mode !== "human" && data.mode !== "ai")) return;
-        renderMode(data.mode === "human");
-      })
-      .catch(function () {});
   }
 
   function setMode(enabled) {
@@ -303,7 +313,7 @@
     }, true);
 
     renderMode(false);
-    syncModeFromServer();
+    startModePolling();
     return true;
   }
 
@@ -313,5 +323,8 @@
     if (++attempts < 80) setTimeout(wait, 100);
   })();
 
-  window.addEventListener("beforeunload", stopMerchantPolling);
+  window.addEventListener("beforeunload", function () {
+    stopMerchantPolling();
+    stopModePolling();
+  });
 })();
