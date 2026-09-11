@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 from app.db.database import SessionLocal
+from app.db.models import DataSource
 from app.knowledge.chunk import KnowledgeChunk, KnowledgePage
 from app.knowledge.chunker import TextChunker
 from app.knowledge.crawler import WebsiteCrawler
@@ -20,7 +21,6 @@ class WebsiteConnector:
         self.root_url = root_url
         self.crawler = WebsiteCrawler(max_pages=max_pages, max_depth=max_depth)
         self._rows: list[dict] | None = None
-        self.store_id: str | None = None
 
     def _run_crawl(self) -> list[dict]:
         async def crawl():
@@ -32,17 +32,29 @@ class WebsiteConnector:
         with ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(asyncio.run, crawl()).result()
 
+    def _store_id(self, db):
+        source = db.query(DataSource.store_id).filter(
+            DataSource.connector_type == "website",
+            DataSource.connection_url == self.root_url,
+            DataSource.active.is_(True),
+        ).order_by(DataSource.created_at.desc()).first()
+        return source[0] if source else None
+
     def _persist_knowledge(self, pages: list[dict]) -> None:
-        if not pages or not self.store_id:
+        if not pages:
             return
         db = SessionLocal()
+        store_id = self._store_id(db)
+        if not store_id:
+            db.close()
+            return
         chunker = TextChunker()
         try:
             for page in pages:
                 content = page.get("content") or ""
                 content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
                 existing = db.query(KnowledgePage).filter(
-                    KnowledgePage.store_id == self.store_id,
+                    KnowledgePage.store_id == store_id,
                     KnowledgePage.url == page.get("url"),
                 ).first()
                 if existing and existing.content_hash == content_hash:
@@ -55,19 +67,13 @@ class WebsiteConnector:
                     page_id = existing.id
                     db.query(KnowledgeChunk).filter(KnowledgeChunk.page_id == page_id).delete(synchronize_session=False)
                 else:
-                    obj = KnowledgePage(
-                        store_id=self.store_id,
-                        url=page.get("url"),
-                        title=page.get("title"),
-                        content=content,
-                        content_hash=content_hash,
-                        http_status=page.get("http_status"),
-                    )
+                    obj = KnowledgePage(store_id=store_id, url=page.get("url"), title=page.get("title"),
+                                        content=content, content_hash=content_hash, http_status=page.get("http_status"))
                     db.add(obj)
                     db.flush()
                     page_id = obj.id
                 for index, chunk in enumerate(chunker.split(content)):
-                    db.add(KnowledgeChunk(store_id=self.store_id, page_id=page_id, chunk_index=index, content=chunk))
+                    db.add(KnowledgeChunk(store_id=store_id, page_id=page_id, chunk_index=index, content=chunk))
             db.commit()
         except Exception:
             db.rollback()
@@ -103,20 +109,12 @@ class WebsiteConnector:
                     continue
                 seen.add(key)
                 rows.append({
-                    "id": hashlib.sha256(key.encode()).hexdigest()[:40],
-                    "external_id": external,
-                    "sku": product.get("sku"),
-                    "name": product.get("name"),
-                    "description": product.get("description"),
+                    "id": hashlib.sha256(key.encode()).hexdigest()[:40], "external_id": external,
+                    "sku": product.get("sku"), "name": product.get("name"), "description": product.get("description"),
                     "price": offers.get("price") if isinstance(offers, dict) else None,
-                    "compare_at_price": None,
-                    "currency": offers.get("priceCurrency") if isinstance(offers, dict) else None,
-                    "stock": None,
-                    "in_stock": None,
-                    "category": product.get("category"),
-                    "brand": brand,
-                    "image_url": image_url,
-                    "image_urls": image_urls,
+                    "compare_at_price": None, "currency": offers.get("priceCurrency") if isinstance(offers, dict) else None,
+                    "stock": None, "in_stock": None, "category": product.get("category"), "brand": brand,
+                    "image_url": image_url, "image_urls": image_urls,
                     "product_url": product.get("url") or page_url,
                     "attributes": {"source_url": page_url, "source_type": "website_structured_data"},
                 })
@@ -129,8 +127,7 @@ class WebsiteConnector:
     def discover(self):
         return {"tables": [{"name": "website", "columns": [
             {"name": "id"}, {"name": "external_id"}, {"name": "sku"}, {"name": "name"},
-            {"name": "description"}, {"name": "price"}, {"name": "compare_at_price"},
-            {"name": "currency"}, {"name": "stock"}, {"name": "in_stock"}, {"name": "category"},
-            {"name": "brand"}, {"name": "image_url"}, {"name": "image_urls"}, {"name": "product_url"},
-            {"name": "attributes"},
-        }]}
+            {"name": "description"}, {"name": "price"}, {"name": "compare_at_price"}, {"name": "currency"},
+            {"name": "stock"}, {"name": "in_stock"}, {"name": "category"}, {"name": "brand"},
+            {"name": "image_url"}, {"name": "image_urls"}, {"name": "product_url"}, {"name": "attributes"},
+        ]}]}
