@@ -5,7 +5,10 @@ from app.knowledge.embedding import LocalEmbeddingService
 
 class VectorKnowledgeSearch:
 
-    def __init__(self, database_url: str):
+    def __init__(
+        self,
+        database_url: str,
+    ):
 
         self.engine = create_engine(
             database_url,
@@ -43,9 +46,11 @@ class VectorKnowledgeSearch:
 
             JOIN knowledge_pages kp
                 ON kp.id = kc.page_id
+                AND kp.store_id = kc.store_id
 
             WHERE
                 kc.store_id = :store_id
+                AND kp.store_id = :store_id
                 AND kc.embedding IS NOT NULL
 
             ORDER BY
