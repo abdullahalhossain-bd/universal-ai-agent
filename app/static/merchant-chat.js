@@ -61,11 +61,21 @@
     return null;
   }
 
+  function hasRenderedMerchantMessage(messageId) {
+    if (!root || !messageId) return false;
+    var nodes = root.querySelectorAll("[data-merchant-message-id]");
+    var wanted = String(messageId);
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].getAttribute("data-merchant-message-id") === wanted) return true;
+    }
+    return false;
+  }
+
   function addMessage(text, role, messageId) {
     if (!root) return;
     var messages = root.querySelector(".messages");
     if (!messages) return;
-    if (messageId && messages.querySelector('[data-merchant-message-id="' + CSS.escape(String(messageId)) + '"]')) return;
+    if (messageId && hasRenderedMerchantMessage(messageId)) return;
     var el = document.createElement("div");
     el.className = "msg " + (role === "user" ? "user" : "merchant");
     if (messageId) el.setAttribute("data-merchant-message-id", String(messageId));
@@ -74,21 +84,9 @@
     messages.scrollTop = messages.scrollHeight;
   }
 
-  function existingMerchantIds() {
-    if (!root) return [];
-    var nodes = root.querySelectorAll("[data-merchant-message-id]");
-    var ids = [];
-    for (var i = 0; i < nodes.length; i++) ids.push(nodes[i].getAttribute("data-merchant-message-id"));
-    return ids;
-  }
-
-  function getConversation() {
-    return conversationId();
-  }
-
   function pollMerchantMessages() {
     if (!humanMode) return;
-    var conversation = getConversation();
+    var conversation = conversationId();
     fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversation), {
       headers: { "x-api-key": API_KEY }
     })
@@ -98,19 +96,38 @@
       })
       .then(function (data) {
         if (!data || !Array.isArray(data.messages)) return;
-        var existing = existingMerchantIds();
-        data.messages.forEach(function (message) {
-          if (!message || message.role !== "merchant" || !message.id) return;
-          var id = String(message.id);
-          if (existing.indexOf(id) !== -1 || id === lastMerchantMessageId) return;
-          addMessage("Store team: " + (message.content || ""), "merchant", id);
-          lastMerchantMessageId = id;
+
+        var merchantMessages = data.messages.filter(function (message) {
+          return message && message.role === "merchant" && message.id;
         });
-        if (data.messages.length) {
-          var merchantMessages = data.messages.filter(function (m) { return m && m.role === "merchant" && m.id; });
-          if (merchantMessages.length) lastMerchantMessageId = String(merchantMessages[merchantMessages.length - 1].id);
+        if (!merchantMessages.length) return;
+
+        var startIndex = 0;
+        if (lastMerchantMessageId !== null) {
+          var foundIndex = -1;
+          for (var i = 0; i < merchantMessages.length; i++) {
+            if (String(merchantMessages[i].id) === String(lastMerchantMessageId)) {
+              foundIndex = i;
+              break;
+            }
+          }
+          if (foundIndex >= 0) startIndex = foundIndex + 1;
         }
-        try { localStorage.setItem(POLL_KEY, JSON.stringify({ conversation_id: conversation, last_id: lastMerchantMessageId || null })); } catch (_) {}
+
+        for (var j = startIndex; j < merchantMessages.length; j++) {
+          var message = merchantMessages[j];
+          if (!hasRenderedMerchantMessage(message.id)) {
+            addMessage("Store team: " + (message.content || ""), "merchant", message.id);
+          }
+        }
+
+        lastMerchantMessageId = String(merchantMessages[merchantMessages.length - 1].id);
+        try {
+          localStorage.setItem(POLL_KEY, JSON.stringify({
+            conversation_id: conversation,
+            last_id: lastMerchantMessageId
+          }));
+        } catch (_) {}
       })
       .catch(function () {});
   }
@@ -122,7 +139,9 @@
       lastMerchantMessageId = null;
       try {
         var stored = JSON.parse(localStorage.getItem(POLL_KEY) || "null");
-        if (stored && stored.conversation_id === conversation && stored.last_id) lastMerchantMessageId = String(stored.last_id);
+        if (stored && stored.conversation_id === conversation && stored.last_id) {
+          lastMerchantMessageId = String(stored.last_id);
+        }
       } catch (_) {}
     }
     pollMerchantMessages();
@@ -168,11 +187,11 @@
         if (!response.ok) throw new Error(data.detail || ("HTTP " + response.status));
         return data;
       });
-    }).then(function (data) {
+    }).then(function () {
       addMessage(text, "user");
       input.value = "";
       input.style.height = "auto";
-      if (data && data.id) startMerchantPolling();
+      startMerchantPolling();
     }).catch(function (error) {
       addMessage("Message could not be sent. Please try again.", "merchant");
       console.error("Merchant chat error:", error);
