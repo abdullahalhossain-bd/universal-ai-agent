@@ -33,11 +33,7 @@ router = APIRouter(prefix="/v1/images", tags=["Images"])
 def _verify_conversation_access(db: Session, store_id: str, conversation_id: str | None, conversation_token: str | None) -> ChatSession | None:
     if not conversation_id:
         return None
-    session = (
-        db.query(ChatSession)
-        .filter(ChatSession.store_id == store_id, ChatSession.conversation_key == conversation_id)
-        .first()
-    )
+    session = db.query(ChatSession).filter(ChatSession.store_id == store_id, ChatSession.conversation_key == conversation_id).first()
     if session is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     if not conversation_token:
@@ -63,11 +59,9 @@ async def upload_image(
     raw_bytes = await file.read()
     if len(raw_bytes) > MAX_FILE_SIZE_BYTES:
         raise HTTPException(status_code=413, detail="Image too large")
-
     sniffed_mime = sniff_image_mime(raw_bytes)
     if sniffed_mime is None:
         raise HTTPException(status_code=400, detail="Unsupported or unrecognized image type")
-
     try:
         validate_image(mime_type=sniffed_mime, size=len(raw_bytes))
     except ValueError as exc:
@@ -77,17 +71,9 @@ async def upload_image(
     extension = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[sniffed_mime]
     storage_key = f"{store.id}/{uuid.uuid4()}.{extension}"
     storage = get_object_storage()
-
     await storage.upload(io.BytesIO(raw_bytes), storage_key)
     try:
-        image_record = ImageRepository(db).create(
-            store_id=store.id,
-            storage_key=storage_key,
-            mime_type=sniffed_mime,
-            size=len(raw_bytes),
-            image_hash=image_hash,
-            conversation_id=conversation_id,
-        )
+        image_record = ImageRepository(db).create(store_id=store.id, storage_key=storage_key, mime_type=sniffed_mime, size=len(raw_bytes), image_hash=image_hash, conversation_id=conversation_id)
     except Exception:
         db.rollback()
         try:
@@ -97,12 +83,7 @@ async def upload_image(
         raise
 
     url = await storage.get_url(storage_key)
-    return {
-        "image_id": image_record.id,
-        "url": url,
-        "mime_type": image_record.mime_type,
-        "size": image_record.size,
-    }
+    return {"image_id": image_record.id, "url": url, "mime_type": image_record.mime_type, "size": image_record.size}
 
 
 @router.post("/{image_id}/analyze", response_model=ImageChatResponse)
@@ -115,7 +96,6 @@ async def analyze_image(
 ):
     store = resolve_active_store(api_key=api_key, db=db)
     require_feature(store, FEATURE_IMAGE_SEARCH)
-
     image_record = ImageRepository(db).get(store_id=store.id, image_id=image_id)
     if image_record is None:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -125,9 +105,8 @@ async def analyze_image(
     _verify_conversation_access(db, store.id, request.conversation_id, x_conversation_token)
 
     service = ChatService(db=db)
-    return await service.handle_image(
-        store=store,
-        image_id=image_id,
-        conversation_id=request.conversation_id,
-        question=request.question,
-    )
+    result = await service.handle_image(store=store, image_id=image_id, conversation_id=request.conversation_id, question=request.question)
+    session = db.query(ChatSession).filter(ChatSession.store_id == store.id, ChatSession.conversation_key == result.get("conversation_id")).first()
+    if session is not None:
+        result["conversation_token"] = session.access_token
+    return result
