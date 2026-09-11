@@ -51,6 +51,11 @@ def _store_dict(store: Store) -> dict:
 def _client_ip(request: Request) -> str:
     return resolve_client_ip(peer_host=request.client.host if request.client else None, forwarded_for=request.headers.get("x-forwarded-for"))
 
+def _inbox_response(user: User, store: Store, token: str):
+    response = JSONResponse({"ok": True, "user": _user_dict(user), "store": _store_dict(store)})
+    set_inbox_cookies(response, token, issue_csrf_token())
+    return response
+
 @router.post("/signup", response_model=AuthResponse, status_code=201)
 async def signup(payload: SignupRequest, http_request: Request, db: Session = Depends(get_db)):
     await enforce_signup_rate_limit(client_ip=_client_ip(http_request))
@@ -72,7 +77,9 @@ async def signup(payload: SignupRequest, http_request: Request, db: Session = De
     db.add(APIKey(store_id=store.id, key_prefix=prefix, key_hash=key_hash, name="Default Key"))
     db.commit(); db.refresh(user); db.refresh(store)
     token = create_access_token(user_id=user.id, store_id=store.id, session_version=user.session_version)
-    return AuthResponse(access_token=token, user=_user_dict(user), store=_store_dict(store), api_key=raw_key)
+    response = JSONResponse({"access_token": token, "token_type": "bearer", "user": _user_dict(user), "store": _store_dict(store), "api_key": raw_key}, status_code=201)
+    set_inbox_cookies(response, token, issue_csrf_token())
+    return response
 
 @router.post("/login", response_model=AuthResponse)
 async def login(payload: LoginRequest, http_request: Request, db: Session = Depends(get_db)):
@@ -85,11 +92,13 @@ async def login(payload: LoginRequest, http_request: Request, db: Session = Depe
     if not verify_password(payload.password, user.password_hash):
         raise generic_error
     store = db.query(Store).filter(Store.id == user.store_id).first()
-    if store is None:
+    if store is None or store.status == "suspended":
         raise generic_error
     user.last_login_at = datetime.utcnow(); db.add(user); db.commit()
     token = create_access_token(user_id=user.id, store_id=store.id, session_version=user.session_version)
-    return AuthResponse(access_token=token, user=_user_dict(user), store=_store_dict(store))
+    response = JSONResponse({"access_token": token, "token_type": "bearer", "user": _user_dict(user), "store": _store_dict(store)}, status_code=200)
+    set_inbox_cookies(response, token, issue_csrf_token())
+    return response
 
 @router.post("/inbox/login")
 async def inbox_login(payload: LoginRequest, http_request: Request, db: Session = Depends(get_db)):
@@ -107,9 +116,18 @@ async def inbox_login(payload: LoginRequest, http_request: Request, db: Session 
         raise generic_error
     user.last_login_at = datetime.utcnow(); db.add(user); db.commit()
     token = create_access_token(user_id=user.id, store_id=store.id, session_version=user.session_version)
-    response = JSONResponse({"ok": True, "user": _user_dict(user), "store": _store_dict(store)})
-    set_inbox_cookies(response, token, issue_csrf_token())
-    return response
+    return _inbox_response(user, store, token)
+
+@router.post("/inbox/establish")
+async def establish_inbox_session(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Establish/refresh the browser Inbox session from an already authenticated dashboard session."""
+    store = db.query(Store).filter(Store.id == user.store_id).first()
+    if store is None:
+        raise HTTPException(status_code=401, detail="Store not found")
+    if store.status == "suspended":
+        raise HTTPException(status_code=403, detail="This store has been suspended. Contact support.")
+    token = create_access_token(user_id=user.id, store_id=store.id, session_version=user.session_version)
+    return _inbox_response(user, store, token)
 
 @router.get("/inbox/me")
 async def inbox_me(auth: tuple[User, Store] = Depends(get_current_inbox_user_and_store)):
