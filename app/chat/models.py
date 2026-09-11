@@ -17,7 +17,7 @@ class ChatSession(Base):
     conversation_key: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     customer_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("customers.id"), nullable=True, index=True)
     visitor_id: Mapped[str] = mapped_column(String(100), nullable=False)
-    access_token: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True, default=lambda: secrets.token_urlsafe(32))
+    access_token: Mapped[str] = mapped_column(String(128), nullable=False, index=True, default=lambda: secrets.token_urlsafe(32))
     mode: Mapped[str] = mapped_column(String(20), nullable=False, default="ai", server_default="ai")
     mode_owner: Mapped[str] = mapped_column(String(20), nullable=False, default="ai", server_default="ai")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="open", server_default="open", index=True)
@@ -28,6 +28,7 @@ class ChatSession(Base):
 
     __table_args__ = (
         UniqueConstraint("store_id", "conversation_key", name="uq_chat_sessions_store_conversation"),
+        UniqueConstraint("access_token", name="uq_chat_sessions_access_token"),
     )
 
 
