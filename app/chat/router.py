@@ -2,6 +2,7 @@ from uuid import uuid4
 import logging
 import uuid
 import hmac
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request, Response, HTTPException
 from sqlalchemy.orm import Session
@@ -50,34 +51,28 @@ def _discard_ai_after_takeover(db: Session, store_id: str, conversation_id: str,
     return True
 
 
-def _sync_customer(db: Session, store_id: str, session: ChatSession) -> Customer:
-    """Attach a conversation to a first-class store-scoped Customer.
-
-    Browser visitor_id is treated as an identity locator, never as a secret.
-    Email/phone merges are deliberately not automatic; that is reserved for
-    an explicit, auditable merge flow.
-    """
-    visitor = (session.visitor_id or "anonymous").strip() or "anonymous"
-    customer = None
+def _sync_customer(db: Session, store_id: str, session: ChatSession) -> Customer | None:
+    """Attach a conversation to a first-class customer without treating anonymous as an identity."""
+    visitor = (session.visitor_id or "").strip()
+    if not visitor or visitor == "anonymous":
+        return None
     identity = db.query(CustomerIdentity).filter(
         CustomerIdentity.store_id == store_id,
         CustomerIdentity.identity_type == "browser",
         CustomerIdentity.identity_value == visitor,
     ).first()
+    customer = None
     if identity is not None:
         customer = db.query(Customer).filter(Customer.id == identity.customer_id, Customer.store_id == store_id).first()
-
     if customer is None:
         customer = Customer(store_id=store_id, customer_key=uuid.uuid4().hex)
         db.add(customer)
         db.flush()
         db.add(CustomerIdentity(store_id=store_id, customer_id=customer.id, identity_type="browser", identity_value=visitor))
-
     session.customer_id = customer.id
-    customer.last_seen_at = __import__("datetime").datetime.utcnow()
+    customer.last_seen_at = datetime.utcnow()
     db.commit()
     db.refresh(session)
-    db.refresh(customer)
     return customer
 
 
@@ -98,11 +93,9 @@ def _sync_visitor_identity(db: Session, store_id: str, session: ChatSession, vis
 
 
 def _verify_conversation_token(session: ChatSession, supplied_token: str | None) -> None:
-    if not supplied_token:
-        raise HTTPException(status_code=401, detail="Conversation token required")
+    if not supplied_token: raise HTTPException(status_code=401, detail="Conversation token required")
     expected = str(session.access_token or "")
-    if not expected or not hmac.compare_digest(expected, supplied_token):
-        raise HTTPException(status_code=403, detail="Invalid conversation token")
+    if not expected or not hmac.compare_digest(expected, supplied_token): raise HTTPException(status_code=403, detail="Invalid conversation token")
 
 
 def _attach_conversation_token(result: dict, session: ChatSession | None) -> dict:
@@ -138,8 +131,7 @@ async def chat(http_request: Request, response: Response, request: ChatRequest, 
     if config is not None and not config.auto_reply_enabled:
         service = DynamicAttributeChatService(db=db)
         session = service._get_or_create_session(store_id=store.id, conversation_id=conversation_id)
-        if request.conversation_id:
-            _verify_conversation_token(session, http_request.headers.get("x-conversation-token"))
+        if request.conversation_id: _verify_conversation_token(session, http_request.headers.get("x-conversation-token"))
         _sync_visitor_identity(db, store.id, session, request.visitor_id)
         service._save_message(session_id=session.id, role="user", content=original_message)
         result = {"conversation_id": conversation_id, "type": "manual", "message": "ধন্যবাদ 😊 আপনার বার্তাটি আমাদের টিম পেয়েছে। একজন team member শিগগিরই উত্তর দেবেন।", "products": [], "sources": []}
@@ -148,9 +140,7 @@ async def chat(http_request: Request, response: Response, request: ChatRequest, 
 
     service = IntelligentCommerceChatService(db=db)
     preexisting_assistant_ids: set[str] = set()
-    if session is not None:
-        preexisting_assistant_ids = _assistant_message_ids(db, session.id)
-
+    if session is not None: preexisting_assistant_ids = _assistant_message_ids(db, session.id)
     result = await service.handle(store_id=store.id, request=request)
 
     final_session = db.query(ChatSession).filter(ChatSession.store_id == store.id, ChatSession.conversation_key == conversation_id).first()
@@ -165,6 +155,5 @@ async def chat(http_request: Request, response: Response, request: ChatRequest, 
             _log_query_event(db, store.id, original_message, manual_result)
             return _attach_conversation_token(manual_result, final_session)
 
-    if isinstance(result, dict) and not result.get("interaction_id"):
-        _log_query_event(db, store.id, original_message, result)
+    if isinstance(result, dict) and not result.get("interaction_id"): _log_query_event(db, store.id, original_message, result)
     return _attach_conversation_token(result, final_session)
