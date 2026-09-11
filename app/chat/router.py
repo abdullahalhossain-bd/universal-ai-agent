@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.chat.intelligent_service import IntelligentCommerceChatService
 from app.chat.dynamic_service import DynamicAttributeChatService
+from app.chat.models import ChatSession
 from app.chat.schemas import ChatRequest, ChatResponse
 from app.core.rate_limit import enforce_rate_limit
 from app.core.security import resolve_client_ip
@@ -62,10 +63,35 @@ async def chat(
     response.headers["X-RateLimit-Reset"] = str(ip_limit["reset"])
 
     original_message = request.message.strip()
+    conversation_id = request.conversation_id or uuid4().hex
+
+    # Per-conversation human takeover has higher priority than the global
+    # auto-reply setting. Once a merchant/customer explicitly switches a
+    # conversation to human mode, /v1/chat must not invoke the AI pipeline.
+    session = (
+        db.query(ChatSession)
+        .filter(
+            ChatSession.store_id == store.id,
+            ChatSession.conversation_key == conversation_id,
+        )
+        .first()
+    )
+    if session is not None and (session.mode or "ai") == "human":
+        service = DynamicAttributeChatService(db=db)
+        service._save_message(session_id=session.id, role="user", content=original_message)
+        result = {
+            "conversation_id": conversation_id,
+            "type": "manual",
+            "message": "আপনার বার্তাটি আমাদের টিমের কাছে পাঠানো হয়েছে। একজন team member আপনাকে উত্তর দেবেন।",
+            "products": [],
+            "sources": [],
+        }
+        _log_query_event(db, store.id, original_message, result)
+        return result
+
     config = db.query(AgentConfig).filter(AgentConfig.store_id == store.id).first()
     if config is not None and not config.auto_reply_enabled:
         service = DynamicAttributeChatService(db=db)
-        conversation_id = request.conversation_id or uuid4().hex
         session = service._get_or_create_session(store_id=store.id, conversation_id=conversation_id)
         service._save_message(session_id=session.id, role="user", content=original_message)
         result = {
