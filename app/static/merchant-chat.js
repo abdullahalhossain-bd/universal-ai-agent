@@ -1,4 +1,4 @@
-/* Universal Commerce AI — optional human merchant chat mode. */
+/* Universal Commerce AI — customer-to-merchant chat bridge. */
 (function () {
   "use strict";
 
@@ -7,10 +7,14 @@
   var API_BASE = ((script && script.getAttribute("data-api-base")) || location.origin).replace(/\/$/, "");
   if (!API_KEY) return;
 
-  var CONV_KEY = "ucai_widget_conv_" + API_KEY.slice(-8);
-  var VISITOR_KEY = "ucai_widget_visitor_" + API_KEY.slice(-8);
-  var POLL_KEY = "ucai_widget_merchant_poll_" + API_KEY.slice(-8);
-  var MODE_POLL_KEY = "ucai_widget_mode_poll_" + API_KEY.slice(-8);
+  /* Share the exact conversation/token storage used by widget.js. */
+  var PREFIX = "ucai_widget_" + API_KEY.slice(-8);
+  var CONV_KEY = PREFIX + "_conv";
+  var TOKEN_KEY = PREFIX + "_conv_token";
+  var VISITOR_KEY = PREFIX + "_visitor";
+  var POLL_KEY = PREFIX + "_merchant_poll";
+  var MODE_POLL_KEY = PREFIX + "_mode_poll";
+
   var root = null;
   var humanMode = false;
   var sendButton = null;
@@ -25,47 +29,37 @@
   var modeChanging = false;
 
   function makeId() {
-    try {
-      if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
-    } catch (_) {}
+    try { if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID(); } catch (_) {}
     return Date.now().toString(36) + Math.random().toString(36).slice(2);
   }
 
-  function conversationId() {
-    try {
-      var value = localStorage.getItem(CONV_KEY);
-      if (value) return value;
-      value = makeId();
-      localStorage.setItem(CONV_KEY, value);
-      return value;
-    } catch (_) {
-      return makeId();
-    }
-  }
-
   function getConversation() {
-    return conversationId();
+    try { return localStorage.getItem(CONV_KEY) || ""; } catch (_) { return ""; }
   }
 
-  function visitorId() {
+  function getToken() {
+    try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (_) { return ""; }
+  }
+
+  function getVisitor() {
     try {
       var value = localStorage.getItem(VISITOR_KEY);
       if (value) return value;
       value = makeId();
       localStorage.setItem(VISITOR_KEY, value);
       return value;
-    } catch (_) {
-      return "anonymous";
-    }
+    } catch (_) { return "anonymous"; }
   }
 
-  function findRoot() {
-    var nodes = document.body ? document.body.children : [];
-    for (var i = 0; i < nodes.length; i++) {
-      var r = nodes[i].shadowRoot;
-      if (r && r.querySelector(".panel") && r.querySelector(".composer textarea")) return r;
-    }
-    return null;
+  function authHeaders(extra) {
+    var headers = extra || {};
+    var token = getToken();
+    if (token) headers["x-conversation-token"] = token;
+    return headers;
+  }
+
+  function hasConversation() {
+    return !!getConversation() && !!getToken();
   }
 
   function hasRenderedMerchantMessage(messageId) {
@@ -86,79 +80,64 @@
     var el = document.createElement("div");
     el.className = "msg " + (role === "user" ? "user" : "merchant");
     if (messageId) el.setAttribute("data-merchant-message-id", String(messageId));
-    el.textContent = text;
+    el.textContent = text || "";
     messages.appendChild(el);
     messages.scrollTop = messages.scrollHeight;
   }
 
   function fetchCustomerState() {
     var conversation = getConversation();
+    var token = getToken();
+    if (!conversation || !token) return Promise.resolve(null);
     return fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversation), {
-      headers: { "x-api-key": API_KEY }
+      headers: authHeaders({ "x-api-key": API_KEY })
     }).then(function (response) {
+      if (response.status === 401 || response.status === 403) return null;
       if (!response.ok) return null;
       return response.json();
     });
   }
 
   function pollMerchantMessages() {
-    fetchCustomerState()
-      .then(function (data) {
-        if (!data) return;
+    fetchCustomerState().then(function (data) {
+      if (!data) return;
+      if (data.mode === "human" && !humanMode) renderMode(true);
+      else if (data.mode === "ai" && humanMode && data.mode_owner !== "merchant") renderMode(false);
+      if (!humanMode || !Array.isArray(data.messages)) return;
 
-        /* The server is authoritative. A merchant can take over or resume AI
-           from another browser, so mode must be observed even while the
-           customer is currently in AI mode. */
-        if (data.mode === "human" && !humanMode) renderMode(true);
-        else if (data.mode === "ai" && humanMode) renderMode(false);
+      var merchantMessages = data.messages.filter(function (message) {
+        return message && message.role === "merchant" && message.id;
+      });
+      if (!merchantMessages.length) return;
 
-        if (!humanMode || !Array.isArray(data.messages)) return;
-
-        var merchantMessages = data.messages.filter(function (message) {
-          return message && message.role === "merchant" && message.id;
-        });
-        if (!merchantMessages.length) return;
-
-        var startIndex = 0;
-        if (lastMerchantMessageId !== null) {
-          var foundIndex = -1;
-          for (var i = 0; i < merchantMessages.length; i++) {
-            if (String(merchantMessages[i].id) === String(lastMerchantMessageId)) {
-              foundIndex = i;
-              break;
-            }
-          }
-          if (foundIndex >= 0) startIndex = foundIndex + 1;
+      var startIndex = 0;
+      if (lastMerchantMessageId !== null) {
+        var foundIndex = -1;
+        for (var i = 0; i < merchantMessages.length; i++) {
+          if (String(merchantMessages[i].id) === String(lastMerchantMessageId)) { foundIndex = i; break; }
         }
+        if (foundIndex >= 0) startIndex = foundIndex + 1;
+      }
 
-        for (var j = startIndex; j < merchantMessages.length; j++) {
-          var message = merchantMessages[j];
-          if (!hasRenderedMerchantMessage(message.id)) {
-            addMessage("Store team: " + (message.content || ""), "merchant", message.id);
-          }
-        }
+      for (var j = startIndex; j < merchantMessages.length; j++) {
+        var message = merchantMessages[j];
+        if (!hasRenderedMerchantMessage(message.id)) addMessage("Store team: " + (message.content || ""), "merchant", message.id);
+      }
 
-        lastMerchantMessageId = String(merchantMessages[merchantMessages.length - 1].id);
-        try {
-          localStorage.setItem(POLL_KEY, JSON.stringify({
-            conversation_id: conversation,
-            last_id: lastMerchantMessageId
-          }));
-        } catch (_) {}
-      })
-      .catch(function () {});
+      lastMerchantMessageId = String(merchantMessages[merchantMessages.length - 1].id);
+      try { localStorage.setItem(POLL_KEY, JSON.stringify({ conversation_id: getConversation(), last_id: lastMerchantMessageId })); } catch (_) {}
+    }).catch(function () {});
   }
 
   function startMerchantPolling() {
+    if (!hasConversation()) return;
     var conversation = getConversation();
     if (initializedConversation !== conversation) {
       initializedConversation = conversation;
       lastMerchantMessageId = null;
       try {
         var stored = JSON.parse(localStorage.getItem(POLL_KEY) || "null");
-        if (stored && stored.conversation_id === conversation && stored.last_id) {
-          lastMerchantMessageId = String(stored.last_id);
-        }
+        if (stored && stored.conversation_id === conversation && stored.last_id) lastMerchantMessageId = String(stored.last_id);
       } catch (_) {}
     }
     pollMerchantMessages();
@@ -167,19 +146,14 @@
   }
 
   function stopMerchantPolling() {
-    if (pollingTimer) {
-      clearInterval(pollingTimer);
-      pollingTimer = null;
-    }
+    if (pollingTimer) { clearInterval(pollingTimer); pollingTimer = null; }
   }
 
   function syncModeFromServer() {
-    fetchCustomerState()
-      .then(function (data) {
-        if (!data || (data.mode !== "human" && data.mode !== "ai")) return;
-        renderMode(data.mode === "human");
-      })
-      .catch(function () {});
+    fetchCustomerState().then(function (data) {
+      if (!data || (data.mode !== "human" && data.mode !== "ai")) return;
+      renderMode(data.mode === "human");
+    }).catch(function () {});
   }
 
   function startModePolling() {
@@ -189,10 +163,7 @@
   }
 
   function stopModePolling() {
-    if (modePollingTimer) {
-      clearInterval(modePollingTimer);
-      modePollingTimer = null;
-    }
+    if (modePollingTimer) { clearInterval(modePollingTimer); modePollingTimer = null; }
   }
 
   function renderMode(enabled) {
@@ -207,15 +178,16 @@
       modeNote.textContent = enabled ? "You are chatting with the merchant. AI auto-replies are paused." : "AI assistant mode";
       modeNote.style.display = enabled ? "block" : "none";
     }
-    if (enabled) startMerchantPolling();
-    else stopMerchantPolling();
+    if (enabled) startMerchantPolling(); else stopMerchantPolling();
   }
 
   function setRemoteMode(mode) {
     var conversation = getConversation();
+    var token = getToken();
+    if (!conversation || !token) return Promise.reject(new Error("Start a chat first so the conversation can be securely connected."));
     return fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversation) + "/mode", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": API_KEY },
+      headers: authHeaders({ "content-type": "application/json", "x-api-key": API_KEY }),
       body: JSON.stringify({ mode: mode })
     }).then(function (response) {
       return response.json().catch(function () { return {}; }).then(function (data) {
@@ -227,29 +199,30 @@
 
   function setMode(enabled) {
     if (modeChanging || enabled === humanMode) return;
+    if (!hasConversation()) {
+      addMessage("Please send one message first. Then you can talk directly with the merchant.", "merchant");
+      input.focus();
+      return;
+    }
     modeChanging = true;
     var previous = humanMode;
     renderMode(enabled);
-    setRemoteMode(enabled ? "human" : "ai")
-      .catch(function (error) {
-        renderMode(previous);
-        addMessage("Could not change chat mode. Please try again.", "merchant");
-        console.error("Merchant chat mode error:", error);
-      })
-      .finally(function () {
-        modeChanging = false;
-      });
+    setRemoteMode(enabled ? "human" : "ai").catch(function (error) {
+      renderMode(previous);
+      addMessage("Could not connect to the merchant. Please try again.", "merchant");
+      console.error("Merchant chat mode error:", error);
+    }).finally(function () { modeChanging = false; });
   }
 
   function sendToMerchant() {
     var text = (input.value || "").trim();
-    if (!text) return;
-    var conversation = conversationId();
-    var visitor = visitorId();
+    if (!text || !hasConversation()) return;
+    var conversation = getConversation();
+    var visitor = getVisitor();
     sendButton.disabled = true;
     fetch(API_BASE + "/v1/messages/customer/" + encodeURIComponent(conversation), {
       method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": API_KEY },
+      headers: authHeaders({ "content-type": "application/json", "x-api-key": API_KEY }),
       body: JSON.stringify({ message: text, visitor_id: visitor })
     }).then(function (response) {
       return response.json().catch(function () { return {}; }).then(function (data) {
