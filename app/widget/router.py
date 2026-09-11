@@ -15,6 +15,7 @@ router = APIRouter(tags=["Widget"])
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 _WIDGET_PATH = _STATIC_DIR / "widget.js"
 _ENHANCED_WIDGET_PATH = _STATIC_DIR / "widget-enhanced.js"
+_PREMIUM_CSS_PATH = _STATIC_DIR / "premium-overrides.css"
 _ADMIN_PATH = _STATIC_DIR / "admin.html"
 _BRANDING_PATH = _STATIC_DIR / "branding.html"
 _PLATFORM_ADMIN_PATH = _STATIC_DIR / "platform-admin.html"
@@ -139,6 +140,16 @@ async def widget_enhanced_bundle() -> FileResponse:
     return FileResponse(
         _ENHANCED_WIDGET_PATH,
         media_type="application/javascript",
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+@router.get("/premium-overrides.css")
+async def premium_overrides_css() -> FileResponse:
+    """Premium visual layer, injected into the widget's shadow root."""
+    return FileResponse(
+        _PREMIUM_CSS_PATH,
+        media_type="text/css",
         headers={"Cache-Control": "public, max-age=300"},
     )
 
