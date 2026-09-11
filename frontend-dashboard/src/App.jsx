@@ -12,6 +12,7 @@ import DataSources from './pages/DataSources'
 import ChatPreview from './pages/ChatPreview'
 import Messages from './pages/Messages'
 import Usage from './pages/Usage'
+import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
 import AdminLogin from './pages/AdminLogin'
 import AdminDashboard from './pages/AdminDashboard'
@@ -32,10 +33,11 @@ function AppRoutes() {
       <Route path="/" element={<Overview />} />
       <Route path="/onboarding" element={<Onboarding />} />
       <Route path="/websites" element={<Websites />} />
-      <Route path="/api-keys" element={<ApiKeys />} />
       <Route path="/datasources" element={<DataSources />} />
+      <Route path="/api-keys" element={<ApiKeys />} />
       <Route path="/chat" element={<ChatPreview />} />
       <Route path="/messages" element={<Messages />} />
+      <Route path="/analytics" element={<Analytics />} />
       <Route path="/usage" element={<Usage />} />
       <Route path="/billing" element={<Billing />} />
       <Route path="/settings" element={<Settings />} />
