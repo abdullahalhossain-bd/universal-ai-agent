@@ -41,12 +41,7 @@ def _log_query_event(db: Session, store_id: str, message: str, result: dict) -> 
 
 
 def _assistant_message_ids(db: Session, session_id: str) -> set[str]:
-    """Snapshot assistant messages before an AI request starts.
-
-    Used only for the takeover race guard. We never delete messages that
-    existed before this request; if human takeover wins while AI is running,
-    only assistant messages created during this request window are removed.
-    """
+    """Snapshot assistant messages before an AI request starts."""
     rows = (
         db.query(ChatMessage.id)
         .filter(
@@ -66,12 +61,14 @@ def _discard_ai_after_takeover(
 ) -> bool:
     """Make a committed human takeover authoritative over in-flight AI.
 
-    The mode is checked again after the expensive AI call. If a merchant
-    took over meanwhile, assistant messages created during the request are
-    removed and the caller can return the normal human-mode acknowledgement.
+    The session row is refreshed from the database because the same SQLAlchemy
+    Session may already have an identity-mapped ChatSession from the AI call.
+    Without populate_existing(), a concurrent merchant takeover could remain
+    invisible to this request until the request ends.
     """
     session = (
         db.query(ChatSession)
+        .populate_existing()
         .filter(
             ChatSession.store_id == store_id,
             ChatSession.conversation_key == conversation_id,
