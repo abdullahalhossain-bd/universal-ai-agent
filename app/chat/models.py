@@ -1,3 +1,4 @@
+import secrets
 import uuid
 
 from datetime import datetime
@@ -41,9 +42,21 @@ class ChatSession(Base):
         index=True,
     )
 
+    # Pseudonymous browser/customer identity. This is NOT an authentication
+    # credential; customer conversation access is protected by access_token.
     visitor_id: Mapped[str] = mapped_column(
         String(100),
         nullable=False,
+    )
+
+    # High-entropy capability token used only by the public customer endpoints
+    # for this conversation. Never expose it to merchant-side APIs.
+    access_token: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        unique=True,
+        index=True,
+        default=lambda: secrets.token_urlsafe(32),
     )
 
     # Per-conversation control. "ai" is the default; "human" pauses AI.
