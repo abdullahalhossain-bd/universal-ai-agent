@@ -63,6 +63,13 @@ def _sync_visitor_identity(db: Session, store_id: str, session: ChatSession, vis
     db.refresh(session)
 
 
+def _attach_conversation_token(result: dict, session: ChatSession | None) -> dict:
+    if not isinstance(result, dict) or session is None:
+        return result
+    result["conversation_token"] = session.access_token
+    return result
+
+
 @router.post("", response_model=ChatResponse)
 async def chat(http_request: Request, response: Response, request: ChatRequest, store: Store = Depends(get_current_store), db: Session = Depends(get_db)):
     client_ip = resolve_client_ip(peer_host=http_request.client.host if http_request.client else None, forwarded_for=http_request.headers.get("x-forwarded-for"))
@@ -83,7 +90,7 @@ async def chat(http_request: Request, response: Response, request: ChatRequest, 
         service._save_message(session_id=session.id, role="user", content=original_message)
         result = {"conversation_id": conversation_id, "type": "manual", "message": "আপনার বার্তাটি আমাদের টিমের কাছে পাঠানো হয়েছে। একজন team member আপনাকে উত্তর দেবেন।", "products": [], "sources": []}
         _log_query_event(db, store.id, original_message, result)
-        return result
+        return _attach_conversation_token(result, session)
 
     config = db.query(AgentConfig).filter(AgentConfig.store_id == store.id).first()
     if config is not None and not config.auto_reply_enabled:
@@ -91,9 +98,9 @@ async def chat(http_request: Request, response: Response, request: ChatRequest, 
         session = service._get_or_create_session(store_id=store.id, conversation_id=conversation_id)
         _sync_visitor_identity(db, store.id, session, request.visitor_id)
         service._save_message(session_id=session.id, role="user", content=original_message)
-        result = {"conversation_id": conversation_id, "type": "manual", "message": "ধন্যবাদ 😊 আপনার বার্তাটি আমাদের টিম পেয়েছে। একজন team member শিগগিরই আপনাকে উত্তর দেবেন।", "products": [], "sources": []}
+        result = {"conversation_id": conversation_id, "type": "manual", "message": "ধন্যবাদ 😊 আপনার বার্তাটি আমাদের টিম পেয়েছে। একজন team member শিগগিরই উত্তর দেবেন।", "products": [], "sources": []}
         _log_query_event(db, store.id, original_message, result)
-        return result
+        return _attach_conversation_token(result, session)
 
     service = IntelligentCommerceChatService(db=db)
     preexisting_assistant_ids: set[str] = set()
@@ -111,10 +118,10 @@ async def chat(http_request: Request, response: Response, request: ChatRequest, 
         if takeover_won:
             manual_result = {"conversation_id": conversation_id, "type": "manual", "message": "আপনার বার্তাটি আমাদের টিমের কাছে পাঠানো হয়েছে। একজন team member আপনাকে উত্তর দেবেন।", "products": [], "sources": []}
             _log_query_event(db, store.id, original_message, manual_result)
-            return manual_result
+            return _attach_conversation_token(manual_result, final_session)
 
     if isinstance(result, dict) and not result.get("interaction_id"):
         _log_query_event(db, store.id, original_message, result)
-    return result
+    return _attach_conversation_token(result, final_session)
 
 # Audit checkpoint: keep the takeover guard explicitly documented so future changes do not remove the post-generation concurrency check accidentally.
