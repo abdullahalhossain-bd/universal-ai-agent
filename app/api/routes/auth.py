@@ -145,7 +145,7 @@ async def inbox_logout(
     response = JSONResponse({"ok": True}); clear_inbox_cookies(response); return response
 
 @router.post("/logout")
-def logout(user: User = Depends(get_current_user), http_response: JSONResponse = None, db: Session = Depends(get_db)):
+def logout(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Revoke all currently issued dashboard tokens and clear the browser Inbox session."""
     user.session_version += 1
     db.add(user); db.commit()
