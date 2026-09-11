@@ -18,19 +18,6 @@ from sqlalchemy.orm import (
 from app.db.database import Base
 
 
-# ---------------------------------
-# Chat session
-# ---------------------------------
-#
-# One row per (store_id, conversation_key) — see the unique
-# constraint below, which is what ChatService._get_or_create_session
-# relies on to resolve a race between two concurrent first messages
-# in the same conversation (app/chat/service.py catches the resulting
-# IntegrityError and re-reads the winner instead of raising a 500).
-# `conversation_key` is a client-supplied string, not a FK; it is
-# also what `ChatImage.conversation_id` (app/db/models.py) mirrors so
-# an uploaded photo can be linked before a session row exists.
-
 class ChatSession(Base):
 
     __tablename__ = "chat_sessions"
@@ -59,6 +46,16 @@ class ChatSession(Base):
         nullable=False,
     )
 
+    # Per-conversation control. "ai" is the default; "human" is a
+    # merchant/customer takeover and must prevent the normal AI pipeline
+    # from generating automatic replies for this conversation.
+    mode: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="ai",
+        server_default="ai",
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
@@ -80,19 +77,6 @@ class ChatSession(Base):
         ),
     )
 
-
-# ---------------------------------
-# Chat message
-# ---------------------------------
-#
-# `role` is one of "user" / "assistant" (real conversation turns,
-# returned by history/context queries) or the internal sentinel
-# "product_context" used by ChatService to persist the last shown
-# product-search result set (for pagination / "আরেকটা দেখাও" and for
-# resolving "এটা" references) — see _save_product_context /
-# _load_product_context in app/chat/service.py. That sentinel row's
-# `content` is a JSON blob, not user-facing text, which is why
-# `_load_history` filters `role.in_(["user", "assistant"])`.
 
 class ChatMessage(Base):
 
