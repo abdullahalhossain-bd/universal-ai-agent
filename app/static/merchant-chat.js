@@ -100,7 +100,15 @@
         return response.json();
       })
       .then(function (data) {
-        if (!data || !Array.isArray(data.messages)) return;
+        if (!data) return;
+
+        /* Merchant takeover/resume can happen from another browser. Mirror
+           the authoritative server mode so the customer UI changes without
+           requiring a page refresh. */
+        if (data.mode === "human" && !humanMode) renderMode(true);
+        else if (data.mode === "ai" && humanMode) renderMode(false);
+
+        if (!humanMode || !Array.isArray(data.messages)) return;
 
         var merchantMessages = data.messages.filter(function (message) {
           return message && message.role === "merchant" && message.id;
@@ -278,8 +286,6 @@
       if (!modeChanging && humanMode) input.focus();
     });
 
-    /* Keep the original AI button listener intact behind a replacement.
-       The replacement delegates to it whenever the customer is in AI mode. */
     var replacement = originalSend.cloneNode(true);
     originalSend.replaceWith(replacement);
     sendButton = replacement;
@@ -288,7 +294,6 @@
       else originalSend.click();
     });
 
-    /* Enter normally belongs to the AI widget. Capture it only in human mode. */
     input.addEventListener("keydown", function (event) {
       if (humanMode && event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
