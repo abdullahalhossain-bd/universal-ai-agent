@@ -104,6 +104,28 @@ def _attach_conversation_token(result: dict, session: ChatSession | None) -> dic
     return result
 
 
+async def _is_authenticated_dashboard_request(http_request: Request, db: Session, store: Store) -> bool:
+    """Return True only when the Bearer credential is a valid merchant JWT for this store.
+
+    Do not infer dashboard identity from the mere presence of an Authorization header.
+    This also makes the decision independent of whether a second credential (such as
+    x-api-key) was attached by a proxy or client. A valid JWT for another merchant does
+    not bypass the public conversation-token requirement for this store.
+    """
+    authorization = http_request.headers.get("authorization")
+    if not authorization:
+        return False
+
+    from app.auth.dashboard_auth import get_current_user
+
+    try:
+        user = await get_current_user(authorization=authorization, db=db)
+    except HTTPException:
+        return False
+
+    return str(user.store_id) == str(store.id)
+
+
 @router.post("", response_model=ChatResponse)
 async def chat(http_request: Request, response: Response, request: ChatRequest, store: Store = Depends(get_current_store), db: Session = Depends(get_db)):
     client_ip = resolve_client_ip(peer_host=http_request.client.host if http_request.client else None, forwarded_for=http_request.headers.get("x-forwarded-for"))
@@ -117,13 +139,10 @@ async def chat(http_request: Request, response: Response, request: ChatRequest, 
     conversation_id = request.conversation_id or uuid4().hex
     session = db.query(ChatSession).filter(ChatSession.store_id == store.id, ChatSession.conversation_key == conversation_id).first()
 
-    # Merchant dashboard requests are already authenticated by get_current_store()
-    # with a validated Bearer JWT. Customer/storefront requests use the
-    # conversation token because they authenticate with the public API key.
-    dashboard_authenticated = (
-        bool(http_request.headers.get("authorization"))
-        and not bool(http_request.headers.get("x-api-key"))
-    )
+    # Explicitly validate the merchant JWT against the resolved store. This is stronger
+    # than checking header presence and remains correct even if another credential is
+    # also present on the request.
+    dashboard_authenticated = await _is_authenticated_dashboard_request(http_request, db, store)
     if session is not None and not dashboard_authenticated:
         _verify_conversation_token(session, http_request.headers.get("x-conversation-token"))
         _sync_visitor_identity(db, store.id, session, request.visitor_id)
