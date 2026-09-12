@@ -15,7 +15,7 @@ async function request(path, { method='GET', body, auth=true, headers={}, token=
   if(body!==undefined) finalHeaders['Content-Type']='application/json';
   if(auth){const resolvedToken=token??getToken();if(resolvedToken) finalHeaders['Authorization']=`Bearer ${resolvedToken}`}
   if(!['GET','HEAD','OPTIONS'].includes(normalizedMethod)) { const csrf = getCookie(CSRF_COOKIE); if(csrf) finalHeaders['x-csrf-token'] = decodeURIComponent(csrf) }
-  const res=await fetch(`${API_BASE}${path}`,{method:normalizedMethod,headers:finalHeaders,credentials:'include',body:body!==undefined?JSON.stringify(body):undefined});
+  const res=await fetch(`${API_BASE}${path}`,{method:normalizedMethod,headers:finalHeaders,body:body!==undefined?JSON.stringify(body):undefined});
   let data=null; const text=await res.text(); if(text){try{data=JSON.parse(text)}catch{data=text}}
   if(!res.ok){const detail=data&&typeof data==='object'&&'detail' in data?data.detail:data;throw new ApiError(res.status,detail||`Request failed (${res.status})`)} return data
 }
