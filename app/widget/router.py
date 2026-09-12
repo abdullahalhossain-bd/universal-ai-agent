@@ -73,14 +73,6 @@ async def widget_bundle() -> Response:
       if (bubble) { bubble.setAttribute("aria-expanded", "false"); bubble.focus(); }
     });
   }
-  function loadMerchantMode() {
-    var human = document.createElement("script");
-    human.src = apiBase + "/merchant-chat.js";
-    human.async = true;
-    human.setAttribute("data-key", key);
-    human.setAttribute("data-api-base", apiBase);
-    document.head.appendChild(human);
-  }
   function loadCore(cfg) {
     var core = document.createElement("script");
     core.src = apiBase + "/widget-enhanced.js";
@@ -96,7 +88,6 @@ async def widget_bundle() -> Response:
         var root = findWidgetRoot();
         if (root) {
           applyBranding(root, cfg);
-          loadMerchantMode();
           return;
         }
         if (++tries < 40) setTimeout(waitForRoot, 25);
@@ -156,6 +147,16 @@ async def premium_overrides_css() -> FileResponse:
 
 @router.get("/merchant-chat.js")
 async def merchant_chat_bundle() -> FileResponse:
+    # NOTE: no longer loaded by the `/widget.js` bootstrap loader above.
+    # `widget-core.js` (served from `app/static/widget.js`) grew its own
+    # native "AI Assistant / লাইভ সাপোর্ট" mode switcher, message
+    # rendering, and polling — a full superset of what this file does.
+    # Loading both concurrently produced two independent mode-polling
+    # loops and a second, redundant "Talk to merchant" button injected
+    # into the same toolbar. Route kept only so a direct/cached
+    # `<script src=".../merchant-chat.js">` embed doesn't 404; do not
+    # wire this back into the loader without first removing the
+    # equivalent logic from widget.js, or the duplication comes back.
     return FileResponse(
         _MERCHANT_CHAT_PATH,
         media_type="application/javascript",
