@@ -45,14 +45,7 @@ def is_private_host(url: str) -> bool:
 
 
 async def _resolve_public_addresses(host: str, port: int) -> list[tuple[str, int, int, int]]:
-    """Resolve once and return only public addresses.
-
-    The resolver used by the actual HTTP connector consumes this same result,
-    so the socket is opened directly to the validated IP rather than resolving
-    the hostname a second time. This closes the classic DNS-rebinding TOCTOU
-    gap where validation resolves a public IP and the HTTP client subsequently
-    resolves a private IP.
-    """
+    """Resolve once and return only public addresses."""
     if _local_hosts_allowed():
         return []
     loop = asyncio.get_running_loop()
@@ -65,7 +58,7 @@ async def _resolve_public_addresses(host: str, port: int) -> list[tuple[str, int
         raise ValueError(f"Cannot resolve host {host!r}: {exc}") from exc
     addresses: list[tuple[str, int, int, int]] = []
     seen: set[str] = set()
-    for family, socktype, _proto, _canonname, sockaddr in infos:
+    for family, socktype, proto, _canonname, sockaddr in infos:
         ip_text = sockaddr[0]
         try:
             ip = ipaddress.ip_address(ip_text)
@@ -75,7 +68,7 @@ async def _resolve_public_addresses(host: str, port: int) -> list[tuple[str, int
             raise ValueError(f"Host {host!r} resolves to a private/internal address; refusing to fetch")
         if ip_text not in seen:
             seen.add(ip_text)
-            addresses.append((ip_text, family, socktype, port))
+            addresses.append((ip_text, family, proto, port))
     if not addresses:
         raise ValueError(f"Host {host!r} did not resolve to a public address")
     return addresses
@@ -113,7 +106,7 @@ class _PinnedResolver(aiohttp.abc.AbstractResolver):
         addresses = await _resolve_public_addresses(host, port)
         resolved = [
             {"hostname": host, "host": ip, "port": resolved_port, "family": family_, "proto": proto, "flags": 0}
-            for ip, family_, _socktype, resolved_port in addresses
+            for ip, family_, proto, resolved_port in addresses
             if family in (socket.AF_UNSPEC, family_)
         ]
         if not resolved:
