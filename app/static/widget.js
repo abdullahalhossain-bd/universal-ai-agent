@@ -8,7 +8,7 @@
 
   var API_BASE = ((script.getAttribute("data-api-base") || new URL(script.src, location.href).origin)).replace(/\/$/, "");
   var ACCENT = script.getAttribute("data-color") || "#6366f1";
-  var STORE_NAME = script.getAttribute("data-store-name") || script.getAttribute("data-store-name") || "Me1";
+  var STORE_NAME = script.getAttribute("data-store-name") || "Me1";
   var ASSISTANT_NAME = script.getAttribute("data-assistant-name") || "Shop AI";
   var LOGO = script.getAttribute("data-logo") || "";
   var GREETING = script.getAttribute("data-greeting") || "আমি আপনার AI শপিং সহকারী। যেকোনো পণ্য, স্টক বা অফার নিয়ে নির্দ্বিধায় জিজ্ঞেস করুন — যেমন: “laptop er dam koto?” অথবা “ki ki stock ache?”";
@@ -30,6 +30,7 @@
   var greeted = false;
   var unread = 0;
   var lastMerchantIds = {};
+  var lastMerchantMessageId = 0;
   var selectedImageId = null;
 
   function safeUrl(value) {
@@ -58,6 +59,7 @@
   }
   function clearConversation() {
     conversationId = null; conversationToken = null; merchantMode = false;
+    lastMerchantIds = {}; lastMerchantMessageId = 0;
     try { localStorage.removeItem(CONV_KEY); localStorage.removeItem(TOKEN_KEY); } catch (_) {}
   }
   function headers(extra) {
@@ -181,10 +183,19 @@
   }
   function syncMode() {
     if (!conversationId || !conversationToken) return;
-    request("/v1/messages/customer/" + encodeURIComponent(conversationId)).then(function (data) {
+    request(messagesUrl()).then(function (data) {
       if (data && (data.mode === "human" || data.mode === "ai")) { merchantMode = data.mode === "human"; renderMode(); }
       if (merchantMode && data && Array.isArray(data.messages)) renderMerchantMessages(data.messages);
     }).catch(function (e) { if (e.status === 401 || e.status === 403) { clearConversation(); renderMode(); } });
+  }
+  function messagesUrl() {
+    // Only ask for messages newer than the last one we've already
+    // rendered — mode/mode_owner are still returned every poll (see
+    // customer_messages in app/api/routes/messages.py), but a long-
+    // running human-mode conversation no longer re-downloads its
+    // entire history on every 5-second tick.
+    var base = "/v1/messages/customer/" + encodeURIComponent(conversationId);
+    return lastMerchantMessageId ? base + "?after_id=" + lastMerchantMessageId : base;
   }
   function renderMerchantMessages(list) {
     if (!Array.isArray(list)) return;
@@ -193,6 +204,8 @@
       var key = String(m.id);
       if (lastMerchantIds[key]) return;
       lastMerchantIds[key] = true;
+      var numericId = Number(m.id);
+      if (Number.isFinite(numericId) && numericId > lastMerchantMessageId) lastMerchantMessageId = numericId;
       add("merchant", "Store team: " + (m.content || ""));
     });
   }
@@ -200,7 +213,7 @@
     if (pollTimer || !conversationId || !conversationToken) return;
     pollTimer = setInterval(function () {
       if (!conversationId || !conversationToken) return;
-      request("/v1/messages/customer/" + encodeURIComponent(conversationId)).then(function (data) {
+      request(messagesUrl()).then(function (data) {
         if (!data) return;
         if (data.mode === "human" && !merchantMode) { merchantMode = true; renderMode(); }
         if (data.mode !== "human" && merchantMode && data.mode_owner !== "merchant") { merchantMode = false; renderMode(); }
