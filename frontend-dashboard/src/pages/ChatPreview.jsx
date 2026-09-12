@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { MessageSquareText, Send, UploadCloud, Sparkles, ExternalLink } from 'lucide-react'
 import { api, ApiError } from '../api/client'
-import { Alert, Button, Card, EmptyState, Input, PageHeader, Spinner } from '../components/ui'
+import { Alert, Button, Card, Input, PageHeader, Spinner } from '../components/ui'
 
 const safeUrl = (value) => {
   if (typeof value !== 'string') return null
@@ -30,7 +30,6 @@ export default function ChatPreview() {
   const [message, setMessage] = useState('')
   const [conversation, setConversation] = useState([])
   const [conversationId, setConversationId] = useState(null)
-  const [conversationToken, setConversationToken] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [imageId, setImageId] = useState('')
@@ -54,13 +53,11 @@ export default function ChatPreview() {
     setConversation((prev) => [...prev, { role: 'user', content: next }, { role: 'assistant', content: 'Thinking…' }])
 
     try {
-      const result = await api.post(
-        '/v1/chat',
-        { message: next, conversation_id: conversationId },
-        conversationToken ? { headers: { 'x-conversation-token': conversationToken } } : undefined,
-      )
+      const result = await api.post('/v1/chat', {
+        message: next,
+        conversation_id: conversationId,
+      })
       if (result?.conversation_id) setConversationId(result.conversation_id)
-      if (result?.conversation_token) setConversationToken(result.conversation_token)
 
       setConversation((prev) => {
         const items = [...prev]
@@ -123,14 +120,12 @@ export default function ChatPreview() {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${localStorage.getItem('merchant_console_token') || ''}`,
-          ...(conversationToken ? { 'x-conversation-token': conversationToken } : {}),
         },
         body: JSON.stringify({ question: imageQuestion.trim() || null, conversation_id: conversationId }),
       })
       const data = await result.json().catch(() => ({}))
       if (!result.ok) throw new ApiError(result.status, data.detail || 'Image analysis failed')
       if (data?.conversation_id) setConversationId(data.conversation_id)
-      if (data?.conversation_token) setConversationToken(data.conversation_token)
       setConversation((prev) => [
         ...prev,
         { role: 'user', content: `Image: ${imageQuestion.trim() || 'What is this product?'}` },
@@ -150,7 +145,6 @@ export default function ChatPreview() {
 
   const startNewChat = () => {
     setConversationId(null)
-    setConversationToken(null)
     setImageId('')
     setConversation([
       {
