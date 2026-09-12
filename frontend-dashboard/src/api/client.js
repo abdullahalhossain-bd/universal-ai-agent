@@ -29,12 +29,12 @@ function getCookie(name) {
 function parseErrorDetail(data, status) {
   if (data && typeof data === 'object' && 'detail' in data) {
     const detail = data.detail
-    if (Array.isArray(detail)) {
-      return detail.map(item => item?.msg || item?.message || String(item)).join('; ')
-    }
+    if (Array.isArray(detail)) return detail.map(item => item?.msg || item?.message || String(item)).join('; ')
     if (detail && typeof detail === 'object') return detail
+    if (data.errors?.length) return data.errors.map(item => `${item?.loc?.join?.('.') || 'request'}: ${item?.msg || 'invalid value'}`).join('; ')
     return detail
   }
+  if (data && typeof data === 'object' && data.errors?.length) return data.errors.map(item => `${item?.loc?.join?.('.') || 'request'}: ${item?.msg || 'invalid value'}`).join('; ')
   if (typeof data === 'string' && data.trim()) return data
   return `Request failed (${status})`
 }
@@ -74,9 +74,7 @@ async function request(path, { method = 'GET', body, auth = true, headers = {}, 
   if (text) {
     try { data = JSON.parse(text) } catch { data = text }
   }
-  if (!res.ok) {
-    throw new ApiError(res.status, parseErrorDetail(data, res.status))
-  }
+  if (!res.ok) throw new ApiError(res.status, parseErrorDetail(data, res.status))
   return data
 }
 
