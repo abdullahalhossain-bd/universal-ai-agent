@@ -26,14 +26,32 @@ def _invalid_session() -> HTTPException:
     return HTTPException(status_code=401, detail="Inbox session required")
 
 
+def _bearer_token(authorization: str | None) -> str | None:
+    if not authorization:
+        return None
+    scheme, _, value = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not value.strip():
+        return None
+    return value.strip()
+
+
 async def get_current_inbox_user(
     session_token: str | None = Cookie(default=None, alias=INBOX_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> User:
-    if not session_token:
+    # Prefer the Authorization header: on cross-origin dashboard deployments
+    # (dashboard and API on different domains) the HttpOnly session cookie
+    # can't be sent, since the API's CORS policy is wildcard (required for
+    # the embeddable widget on arbitrary storefront domains), and browsers
+    # refuse wildcard-origin + credentialed requests together. The dashboard
+    # already sends its normal Bearer token on every request, and it's the
+    # same signed JWT the cookie carries, so accept either.
+    token = _bearer_token(authorization) or (session_token.strip() if session_token else None)
+    if not token:
         raise _invalid_session()
     try:
-        payload = decode_access_token(session_token.strip())
+        payload = decode_access_token(token)
     except InvalidSessionToken:
         raise _invalid_session()
 
@@ -65,9 +83,18 @@ async def require_inbox_csrf(
     request: Request,
     csrf_cookie: str | None = Cookie(default=None, alias=INBOX_CSRF_COOKIE),
     csrf_header: str | None = Header(default=None, alias="x-csrf-token"),
+    authorization: str | None = Header(default=None),
 ) -> None:
-    """Require a double-submit CSRF token for inbox state changes."""
+    """Require a double-submit CSRF token for inbox state changes.
+
+    Skipped when the request used a Bearer token: CSRF exploits rely on the
+    browser attaching credentials (cookies) automatically to a forged
+    request; a Bearer header is never sent that way, so there's nothing for
+    the double-submit check to protect against in that case.
+    """
     if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return
+    if _bearer_token(authorization):
         return
     if not csrf_cookie or not csrf_header or not hmac.compare_digest(csrf_cookie, csrf_header):
         raise HTTPException(status_code=403, detail="CSRF validation failed")
