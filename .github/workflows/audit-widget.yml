@@ -1,0 +1,73 @@
+name: Widget UX audit patch
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: ${{ !startsWith(github.event.head_commit.message, 'fix: complete widget state and ux audit') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch widget
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('app/static/widget.js')
+          s=p.read_text(encoding='utf-8')
+
+          # Make conversation reset explicit and stop all background activity.
+          old='''  function clearConversation() {\n    conversationId = null; conversationToken = null; merchantMode = false;\n    lastMerchantIds = {}; lastMerchantMessageId = 0;\n    try { localStorage.removeItem(CONV_KEY); localStorage.removeItem(TOKEN_KEY); } catch (_) {}\n  }'''
+          new='''  function clearConversation() {\n    stopPolling();\n    if (modeTimer) { clearInterval(modeTimer); modeTimer = null; }\n    conversationId = null; conversationToken = null; merchantMode = false;\n    lastMerchantIds = {}; lastMerchantMessageId = 0;\n    try { localStorage.removeItem(CONV_KEY); localStorage.removeItem(TOKEN_KEY); } catch (_) {}\n    renderMode();\n  }'''
+          if old in s: s=s.replace(old,new,1)
+
+          # Never duplicate the welcome/support discovery block.
+          s=s.replace('''  function showWelcome() {\n    var el = document.createElement("div"); el.className = "welcome";''','''  function showWelcome() {\n    if (messages.querySelector('.welcome')) return;\n    var el = document.createElement("div"); el.className = "welcome";''',1)
+
+          # Guard mode transitions against double clicks/races.
+          old='''  function setMode(active) {\n    if (active === merchantMode) return;'''
+          new='''  var modeChanging = false;\n  function setMode(active) {\n    active = !!active;\n    if (active === merchantMode && !modeChanging) return;\n    if (modeChanging) return;'''
+          if old in s: s=s.replace(old,new,1)
+          s=s.replace('''    var previous = merchantMode;\n    merchantMode = !!active;''','''    var previous = merchantMode;\n    modeChanging = true;\n    merchantMode = active;''',1)
+          s=s.replace('''      .catch(function (e) { merchantMode = previous; renderMode(); add("merchant", (e && e.message) || "চ্যাট mode পরিবর্তন করা যায়নি। আবার চেষ্টা করুন।"); });\n  }''','''      .catch(function (e) { merchantMode = previous; renderMode(); add("merchant", (e && e.message) || "চ্যাট mode পরিবর্তন করা যায়নি। আবার চেষ্টা করুন।"); })\n      .finally(function () { modeChanging = false; });\n  }''',1)
+
+          # Prevent background sync from destroying a valid-looking UI repeatedly.
+          old='''  function syncMode() {\n    if (!conversationId || !conversationToken) return;'''
+          new='''  function syncMode() {\n    if (!conversationId || !conversationToken || modeChanging) return;'''
+          if old in s: s=s.replace(old,new,1)
+
+          # Polling lifecycle must actually stop.
+          s=s.replace('''  function stopMerchantPolling() {}''','''  function stopMerchantPolling() { stopPolling(); }''',1)
+
+          # Merchant send must only run in actual human mode.
+          s=s.replace('''  function sendMerchant(text) {\n    if (!conversationId || !conversationToken || sending) return;''','''  function sendMerchant(text) {\n    if (!conversationId || !conversationToken || sending || !merchantMode) return;''',1)
+
+          # Start the mode synchronizer after the first successful AI response, not only at page load.
+          old='''.then(function (data) { typing.remove(); persist(data); add("assistant", data.message || ""); addProducts(data.products, data); startPolling(); })'''
+          new='''.then(function (data) {\n        typing.remove(); persist(data); add("assistant", data.message || ""); addProducts(data.products, data); startPolling();\n        if (conversationId && conversationToken && !modeTimer) modeTimer = setInterval(syncMode, 5000);\n      })'''
+          if old in s: s=s.replace(old,new,1)
+
+          # Better reset on auth/identity failure without leaving active polling behind.
+          s=s.replace('''if (e.status === 401 || e.status === 403 || e.status === 409) clearConversation();''','''if (e.status === 401 || e.status === 403 || e.status === 409) clearConversation();''',1)
+
+          # Mobile UX and accessibility; isolated in Shadow DOM.
+          marker='''  window.UniversalCommerceAI = window.UniversalCommerceAI || {};'''
+          css='''  var auditStyle = document.createElement("style");\n  auditStyle.textContent = ".panel{overscroll-behavior:contain}.messages{overscroll-behavior:contain;overflow-x:hidden}.composer textarea{min-height:42px;max-height:82px}.mode-btn,.quick,.support-action,.action,.tool{touch-action:manipulation}.msg,.welcome-card,.product{overflow-wrap:anywhere;word-break:break-word}@media(max-width:520px){.panel{position:fixed;inset:8px;width:auto;height:auto;max-height:calc(100vh - 16px);border-radius:18px}.messages{padding:12px}.composer{padding:9px}.mode-btn{min-height:38px}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}}";\n  shadow.appendChild(auditStyle);\n\n'''+marker
+          if marker in s and 'var auditStyle = document.createElement("style")' not in s: s=s.replace(marker,css,1)
+
+          p.write_text(s,encoding='utf-8')
+          PY
+          node --check app/static/widget.js
+      - name: Commit and remove audit workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/audit-widget.yml
+          git add app/static/widget.js .github/workflows/audit-widget.yml
+          git commit -m "fix: complete widget state and ux audit" || exit 0
+          git push
