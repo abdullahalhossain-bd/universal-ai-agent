@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { MessageSquareText, Send, UploadCloud, Sparkles, ExternalLink } from 'lucide-react'
+import { Image as ImageIcon, MessageSquareText, Send, UploadCloud, Sparkles, ExternalLink, X, RefreshCw } from 'lucide-react'
 import { api, ApiError } from '../api/client'
 import { Alert, Button, Card, Input, PageHeader, Spinner } from '../components/ui'
 
@@ -26,6 +26,12 @@ const roleLabel = (role) => {
   return 'AI Assistant'
 }
 
+const formatFileSize = (bytes) => {
+  if (!bytes) return ''
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 export default function ChatPreview() {
   const [message, setMessage] = useState('')
   const [conversation, setConversation] = useState([])
@@ -33,6 +39,9 @@ export default function ChatPreview() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [imageId, setImageId] = useState('')
+  const [imageUrl, setImageUrl] = useState('')
+  const [imageName, setImageName] = useState('')
+  const [imageSize, setImageSize] = useState(0)
   const [imageQuestion, setImageQuestion] = useState('What is this product?')
   const [uploading, setUploading] = useState(false)
 
@@ -44,6 +53,10 @@ export default function ChatPreview() {
       },
     ])
   }, [])
+
+  useEffect(() => () => {
+    if (imageUrl?.startsWith('blob:')) URL.revokeObjectURL(imageUrl)
+  }, [imageUrl])
 
   const sendChat = async () => {
     const next = message.trim()
@@ -82,12 +95,34 @@ export default function ChatPreview() {
     }
   }
 
+  const clearUploadedImage = () => {
+    if (imageUrl?.startsWith('blob:')) URL.revokeObjectURL(imageUrl)
+    setImageId('')
+    setImageUrl('')
+    setImageName('')
+    setImageSize(0)
+    setError('')
+  }
+
   const uploadImage = async (e) => {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
+
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setError('Please choose a JPG, PNG, or WebP image.')
+      return
+    }
+
+    if (imageUrl?.startsWith('blob:')) URL.revokeObjectURL(imageUrl)
+    const localPreviewUrl = URL.createObjectURL(file)
+    setImageUrl(localPreviewUrl)
+    setImageName(file.name)
+    setImageSize(file.size)
+    setImageId('')
     setUploading(true)
     setError('')
+
     try {
       const formData = new FormData()
       formData.append('file', file)
@@ -98,9 +133,12 @@ export default function ChatPreview() {
       })
       const data = await result.json().catch(() => ({}))
       if (!result.ok) throw new ApiError(result.status, data.detail || 'Image upload failed')
+
       setImageId(data.image_id)
-      setError('Image uploaded successfully. Ask a question about it below.')
+      if (data.url) setImageUrl(data.url)
+      setError('')
     } catch (err) {
+      setImageId('')
       setError(err instanceof ApiError ? err.detail : 'Image upload failed.')
     } finally {
       setUploading(false)
@@ -115,20 +153,21 @@ export default function ChatPreview() {
     setLoading(true)
     setError('')
     try {
+      const question = imageQuestion.trim() || 'What is this product?'
       const result = await fetch(`/v1/images/${encodeURIComponent(imageId)}/analyze`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${localStorage.getItem('merchant_console_token') || ''}`,
         },
-        body: JSON.stringify({ question: imageQuestion.trim() || null, conversation_id: conversationId }),
+        body: JSON.stringify({ question, conversation_id: conversationId }),
       })
       const data = await result.json().catch(() => ({}))
       if (!result.ok) throw new ApiError(result.status, data.detail || 'Image analysis failed')
       if (data?.conversation_id) setConversationId(data.conversation_id)
       setConversation((prev) => [
         ...prev,
-        { role: 'user', content: `Image: ${imageQuestion.trim() || 'What is this product?'}` },
+        { role: 'user', content: question, image: imageUrl },
         {
           role: 'assistant',
           content: data.message || 'No visual summary returned.',
@@ -145,7 +184,7 @@ export default function ChatPreview() {
 
   const startNewChat = () => {
     setConversationId(null)
-    setImageId('')
+    clearUploadedImage()
     setConversation([
       {
         role: 'assistant',
@@ -164,7 +203,7 @@ export default function ChatPreview() {
 
       {error && (
         <div className="mb-5">
-          <Alert tone={error.includes('successfully') ? 'success' : 'warn'}>{error}</Alert>
+          <Alert tone="warn">{error}</Alert>
         </div>
       )}
 
@@ -186,6 +225,11 @@ export default function ChatPreview() {
               <div key={`${item.role}-${index}`}>
                 <div className={`rounded-lg px-3 py-2 text-sm ${item.role === 'user' ? 'ml-8 bg-accent text-white' : 'mr-8 bg-white text-text border border-line'}`}>
                   <div className="mb-1 text-[10px] font-medium uppercase opacity-60">{roleLabel(item.role)}</div>
+                  {item.image && (
+                    <div className="mb-2 overflow-hidden rounded-lg border border-white/20 bg-black/5">
+                      <img src={item.image} alt="Uploaded product" className="max-h-64 w-full object-contain" />
+                    </div>
+                  )}
                   <div className="whitespace-pre-wrap break-words">{item.content}</div>
                 </div>
 
@@ -261,25 +305,70 @@ export default function ChatPreview() {
             <Sparkles size={16} /> Image-enabled chat
           </div>
 
-          <label className="block">
-            <span className="mb-2 block text-sm font-medium text-text">Upload image</span>
-            <div className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-line bg-paper px-4 py-8 text-center text-sm text-muted">
-              <UploadCloud size={18} className="mr-2" />
-              <span>{uploading ? 'Uploading…' : 'Choose image'}</span>
-              <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={uploadImage} disabled={uploading} />
-            </div>
-          </label>
+          {!imageUrl ? (
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-text">Upload image</span>
+              <div className="group flex min-h-48 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-line bg-paper px-5 py-8 text-center transition hover:border-accent hover:bg-white">
+                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full border border-line bg-white shadow-sm transition group-hover:scale-105">
+                  <UploadCloud size={21} className="text-muted" />
+                </div>
+                <div className="text-sm font-semibold text-text">Upload a product image</div>
+                <div className="mt-1 text-xs text-muted">JPG, PNG or WebP · preview appears instantly</div>
+                <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={uploadImage} disabled={uploading} />
+              </div>
+            </label>
+          ) : (
+            <div className="overflow-hidden rounded-2xl border border-line bg-paper shadow-sm">
+              <div className="relative flex min-h-64 items-center justify-center bg-white p-3">
+                <img src={imageUrl} alt={imageName || 'Uploaded product'} className="max-h-80 w-full rounded-xl object-contain" />
+                {uploading && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[2px]">
+                    <div className="flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-medium text-text shadow-lg">
+                      <Spinner /> Uploading image…
+                    </div>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={clearUploadedImage}
+                  disabled={uploading}
+                  aria-label="Remove image"
+                  className="absolute right-5 top-5 flex h-8 w-8 items-center justify-center rounded-full bg-white/95 text-text shadow-md transition hover:bg-white disabled:opacity-50"
+                >
+                  <X size={15} />
+                </button>
+              </div>
 
-          {imageId && (
+              <div className="border-t border-line px-4 py-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-muted shadow-sm">
+                    <ImageIcon size={17} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-text">{imageName || 'Uploaded image'}</div>
+                    <div className="mt-0.5 text-[11px] text-muted">
+                      {uploading ? 'Uploading…' : imageId ? `Uploaded${imageSize ? ` · ${formatFileSize(imageSize)}` : ''}` : 'Upload failed — choose another image'}
+                    </div>
+                  </div>
+                  <label className="cursor-pointer rounded-lg border border-line bg-white p-2 text-muted transition hover:border-accent hover:text-text" title="Replace image">
+                    <RefreshCw size={15} />
+                    <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={uploadImage} disabled={uploading} />
+                  </label>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {imageUrl && imageId && (
             <>
               <Input
                 id="image-question"
-                label="Image question"
+                label="What would you like to know?"
                 value={imageQuestion}
                 onChange={(e) => setImageQuestion(e.target.value)}
                 className="mt-4"
               />
-              <Button className="mt-3 w-full" onClick={askImageQuestion} disabled={loading || !imageQuestion.trim()}>
+              <Button className="mt-3 w-full" onClick={askImageQuestion} disabled={loading || uploading || !imageQuestion.trim()}>
                 {loading ? <Spinner /> : <Sparkles size={16} />}
                 Analyze image
               </Button>
