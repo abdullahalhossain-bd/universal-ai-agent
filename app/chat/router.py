@@ -116,7 +116,15 @@ async def chat(http_request: Request, response: Response, request: ChatRequest, 
     original_message = request.message.strip()
     conversation_id = request.conversation_id or uuid4().hex
     session = db.query(ChatSession).filter(ChatSession.store_id == store.id, ChatSession.conversation_key == conversation_id).first()
-    if session is not None:
+
+    # Merchant dashboard requests are already authenticated by get_current_store()
+    # with a validated Bearer JWT. Customer/storefront requests use the
+    # conversation token because they authenticate with the public API key.
+    dashboard_authenticated = (
+        bool(http_request.headers.get("authorization"))
+        and not bool(http_request.headers.get("x-api-key"))
+    )
+    if session is not None and not dashboard_authenticated:
         _verify_conversation_token(session, http_request.headers.get("x-conversation-token"))
         _sync_visitor_identity(db, store.id, session, request.visitor_id)
 
@@ -131,7 +139,8 @@ async def chat(http_request: Request, response: Response, request: ChatRequest, 
     if config is not None and not config.auto_reply_enabled:
         service = DynamicAttributeChatService(db=db)
         session = service._get_or_create_session(store_id=store.id, conversation_id=conversation_id)
-        if request.conversation_id: _verify_conversation_token(session, http_request.headers.get("x-conversation-token"))
+        if request.conversation_id and not dashboard_authenticated:
+            _verify_conversation_token(session, http_request.headers.get("x-conversation-token"))
         _sync_visitor_identity(db, store.id, session, request.visitor_id)
         service._save_message(session_id=session.id, role="user", content=original_message)
         result = {"conversation_id": conversation_id, "type": "manual", "message": "ধন্যবাদ 😊 আপনার বার্তাটি আমাদের টিম পেয়েছে। একজন team member শিগগিরই উত্তর দেবেন।", "products": [], "sources": []}
