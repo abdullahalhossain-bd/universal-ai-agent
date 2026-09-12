@@ -44,7 +44,6 @@ async def enforce_customer_rate_limit(request: Request) -> None:
     api_key = request.headers.get("x-api-key", "")
     visitor_id = request.headers.get("x-visitor-id", "")
     api_identity = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:24] if api_key else "anonymous-key"
-    visitor_identity = hashlib.sha256(visitor_id.encode("utf-8")).hexdigest()[:24] if visitor_id else "anonymous-visitor"
 
     limit = 30 if request.method in {"POST", "PUT", "PATCH", "DELETE"} else 120
     endpoint = path.split("/", 4)[4] if len(path.split("/")) > 4 else "unknown"
@@ -52,9 +51,11 @@ async def enforce_customer_rate_limit(request: Request) -> None:
     buckets = [
         (f"customer-rate:ip:{client_ip}", 120),
         (f"customer-rate:api:{api_identity}", 300),
-        (f"customer-rate:visitor:{visitor_identity}", 60),
         (f"customer-rate:endpoint:{endpoint}", limit),
     ]
+    if visitor_id:
+        visitor_identity = hashlib.sha256(visitor_id.encode("utf-8")).hexdigest()[:24]
+        buckets.insert(2, (f"customer-rate:visitor:{visitor_identity}", 60))
 
     try:
         for bucket, bucket_limit in buckets:
