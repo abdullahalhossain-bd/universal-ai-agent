@@ -170,7 +170,17 @@ def _looks_like_product_search(query: str, search_terms: str, attributes: dict, 
     if any(token in PRODUCT_ACTION_WORDS for token in tokens): return len(tokens) >= 2
     non_knowledge = [token for token in tokens if token not in KNOWLEDGE_WORDS and token not in KNOWLEDGE_FILLER_WORDS]
     if non_knowledge and any(token in KNOWLEDGE_WORDS for token in tokens): return True
-    return 1 <= len(tokens) <= 4 and not any(token in KNOWLEDGE_WORDS for token in tokens)
+    # No catalog attribute, price filter, or explicit "show me / I want" action
+    # word was found. Guessing that arbitrary leftover text is a product name
+    # causes far more false positives (chit-chat, typos, greetings that will
+    # never all fit in one fixed list) than it catches genuine product names —
+    # real product names are already caught upstream via store_entities
+    # (fuzzy-matched against the merchant's actual catalog, see
+    # _resolve_store_entities) or via the attribute/price/action-word checks
+    # above. So don't guess here based on word count alone; let it fall through
+    # to intent UNKNOWN, which already tries a semantic knowledge-base search
+    # before giving a friendly conversational fallback.
+    return False
 
 def _knowledge_score(text: str) -> int:
     normalized = _normalize_entity_text(text)
@@ -215,6 +225,6 @@ def plan(query: str, store_terms: set[str] | None = None):
     if knowledge_score > 0:
         return PlannedAction(intent=Intent.KNOWLEDGE_SEARCH, knowledge_query=query, confidence=0.75)
     tokens = search_terms.split()
-    if tokens:
+    if tokens and generic_product:
         return PlannedAction(intent=Intent.PRODUCT_SEARCH, product_filters=ProductFilters(product_name=search_terms, in_stock=in_stock, attributes=attributes), confidence=0.70)
     return PlannedAction(intent=Intent.UNKNOWN, confidence=0.30)
