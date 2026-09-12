@@ -1,23 +1,35 @@
 """Redis-backed rate limiting for public customer endpoints.
 
-Limits are shared across Render instances/workers.  The limiter uses the
+Limits are shared across Render instances/workers. The limiter uses the
 trusted-proxy client-IP resolver and layered identities so a caller cannot
-bypass the protection simply by rotating conversation IDs or visitor IDs.
+bypass protection simply by rotating conversation IDs or visitor IDs.
 """
 
 import hashlib
+import logging
 
 from fastapi import HTTPException, Request
 
 from app.core.redis import redis_client
 from app.core.security import resolve_client_ip
 
+logger = logging.getLogger(__name__)
 
-async def _hit(bucket: str, limit: int) -> bool:
-    current = await redis_client.incr(bucket)
-    if current == 1:
-        await redis_client.expire(bucket, 60)
-    return current > limit
+# INCR + EXPIRE must be one atomic operation. Otherwise a worker crash between
+# the two commands can leave a permanent bucket in Redis and silently disable
+# the intended rate limit for that identity.
+_HIT_SCRIPT = """
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return current
+"""
+
+
+async def _hit(bucket: str, limit: int, window_seconds: int = 60) -> bool:
+    current = await redis_client.eval(_HIT_SCRIPT, 1, bucket, window_seconds)
+    return int(current) > limit
 
 
 async def enforce_customer_rate_limit(request: Request) -> None:
@@ -34,8 +46,6 @@ async def enforce_customer_rate_limit(request: Request) -> None:
     api_identity = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:24] if api_key else "anonymous-key"
     visitor_identity = hashlib.sha256(visitor_id.encode("utf-8")).hexdigest()[:24] if visitor_id else "anonymous-visitor"
 
-    # State-changing customer requests are tighter; GET history/polling gets
-    # a higher ceiling so normal chat UIs are not throttled unnecessarily.
     limit = 30 if request.method in {"POST", "PUT", "PATCH", "DELETE"} else 120
     endpoint = path.split("/", 4)[4] if len(path.split("/")) > 4 else "unknown"
 
@@ -52,7 +62,11 @@ async def enforce_customer_rate_limit(request: Request) -> None:
                 raise HTTPException(status_code=429, detail="Too many customer requests. Please try again shortly.")
     except HTTPException:
         raise
-    except Exception:
-        # Keep customer chat available if Redis has a transient outage. The
-        # failure is intentionally isolated here rather than breaking requests.
+    except Exception as exc:
+        # A state-changing public request can trigger paid LLM/vision work, so
+        # failing open on Redis outage creates an avoidable cost-abuse path.
+        # Reads may remain available for resilience, but mutations fail closed.
+        logger.exception("Customer rate limiter unavailable: %s", exc)
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            raise HTTPException(status_code=503, detail="Customer request protection is temporarily unavailable. Please retry shortly.") from exc
         return
