@@ -132,8 +132,13 @@ def test_checkout_session_rejects_unbillable_plan(client, monkeypatch, db_sessio
 # ---------------------------------------------------------------------------
 
 
-def _fake_event(event_type: str, obj: dict) -> dict:
-    return {"type": event_type, "data": {"object": obj}}
+def _fake_event(event_type: str, obj: dict, *, event_id: str | None = None) -> dict:
+    # Real Stripe events always carry a top-level `id` (the event's own
+    # id, distinct from `data.object.id`) — `_claim_webhook_event` uses
+    # it as the idempotency-ledger primary key. Default to a fresh
+    # unique id per call so unrelated tests never collide on the
+    # `billing_webhook_events` unique constraint.
+    return {"id": event_id or f"evt_{uuid.uuid4().hex[:24]}", "type": event_type, "data": {"object": obj}}
 
 
 @requires_postgres

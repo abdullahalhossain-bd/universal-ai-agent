@@ -33,11 +33,20 @@ def _probe_extension(engine) -> bool:
     try:
         with engine.connect() as conn:
             try:
-                conn.execute(
-                    sqlalchemy.text(
-                        "CREATE EXTENSION IF NOT EXISTS vector"
+                # Use a SAVEPOINT (begin_nested) rather than the plain
+                # connection transaction: if CREATE EXTENSION fails,
+                # PostgreSQL marks the whole transaction aborted and the
+                # `SELECT 1 FROM pg_extension` probe right below would
+                # also raise (InFailedSqlTransaction) instead of
+                # returning a clean "not present" result. begin_nested()
+                # rolls back only to the savepoint on error, leaving the
+                # connection usable for the following query.
+                with conn.begin_nested():
+                    conn.execute(
+                        sqlalchemy.text(
+                            "CREATE EXTENSION IF NOT EXISTS vector"
+                        )
                     )
-                )
                 conn.commit()
             except Exception as exc:
                 logger.warning(

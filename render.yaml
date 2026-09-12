@@ -26,6 +26,16 @@ services:
         value: "false"
       - key: LOG_JSON
         value: "true"
+      # This deployment already runs dedicated `sync-worker` and
+      # `sync-scheduler` services below. `run_sync_inline` defaults to
+      # `true` (see app/core/config.py), so without this override the
+      # web dyno would *also* spin up its own inline worker + scheduler
+      # in-process (app/main.py's lifespan hook) — three processes
+      # doing the same sync job instead of two, wasting web-dyno CPU
+      # and depending entirely on the Redis per-datasource lock to
+      # avoid concurrent runs stepping on each other.
+      - key: RUN_SYNC_INLINE
+        value: "false"
       - key: STORAGE_BACKEND
         value: local
       - key: IMAGE_STORAGE_PATH

@@ -274,7 +274,7 @@
     if (!file || sending) return;
     setSending(true); preview.classList.add("show"); previewName.textContent = "ছবি আপলোড হচ্ছে…";
     var form = new FormData(); form.append("file", file); if (conversationId) form.append("conversation_id", conversationId);
-    fetch(API_BASE + "/v1/images", { method: "POST", headers: { "x-api-key": API_KEY }, body: form })
+    fetch(API_BASE + "/v1/images", { method: "POST", headers: headers(), body: form })
       .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
       .then(function (data) { selectedImageId = data.image_id; previewName.textContent = "ছবি প্রস্তুত: " + (file.name || "image"); add("user", "📷 " + (file.name || "ছবি") + " পাঠিয়েছি।"); return request("/v1/images/" + encodeURIComponent(selectedImageId) + "/analyze", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversation_id: conversationId, question: input.value.trim() || null }) }); })
       .then(function (data) { persist(data); add("assistant", data.message || "ছবিটি দেখেছি।"); addProducts(data.products, data); clearImage(); startPolling(); })

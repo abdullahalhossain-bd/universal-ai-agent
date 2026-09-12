@@ -1,4 +1,10 @@
-﻿from xml.etree import ElementTree
+﻿# Sitemaps are fetched from arbitrary, untrusted third-party websites during
+# crawling, so this must not use the stdlib xml.etree.ElementTree parser
+# directly: it has no protection against entity-expansion ("billion laughs")
+# or quadratic-blowup denial-of-service payloads embedded in a DOCTYPE.
+# defusedxml wraps the same ElementTree API but rejects DTDs/entities outright.
+from defusedxml import ElementTree
+from defusedxml.common import DefusedXmlException
 
 
 def parse_sitemap(xml_text: str):
@@ -20,7 +26,7 @@ def parse_sitemap(xml_text: str):
                         elem.text.strip()
                     )
 
-    except ElementTree.ParseError:
+    except (ElementTree.ParseError, DefusedXmlException):
 
         return []
 

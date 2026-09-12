@@ -41,7 +41,24 @@ def upgrade() -> None:
 
     # Mirror 0002: make sure the extension exists (it does on every
     # pgvector-enabled server), then check the catalog directly.
-    conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    #
+    # Guarded with a SAVEPOINT (begin_nested), not a bare call: unlike
+    # 0002 (which only ever *checks* pg_extension), this migration is
+    # exactly the one that runs on databases that skipped 0001/0002's
+    # own vector setup — so we cannot assume the extension was ever
+    # successfully created. On a server where the `vector` extension
+    # isn't installed at all, an unguarded call here would raise
+    # NotSupportedError and abort every migration in the chain from
+    # this point on, permanently, on every future deploy. Catching the
+    # exception without a savepoint would not be enough either: once a
+    # statement fails, PostgreSQL marks the whole transaction aborted
+    # and the very next statement (the pg_extension SELECT below)
+    # would itself raise InFailedSqlTransaction.
+    try:
+        with conn.begin_nested():
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    except Exception:
+        pass
 
     pgvector_available = conn.execute(
         text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")

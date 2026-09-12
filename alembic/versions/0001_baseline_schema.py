@@ -52,10 +52,22 @@ def _knowledge_embedding_column() -> sa.types.TypeEngine:
         return sa.Text()
 
     try:
-        bind.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector"))
-        present = bind.execute(
-            sa.text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
-        ).first()
+        # Run inside a SAVEPOINT (begin_nested), not directly on the
+        # migration's outer transaction. A plain try/except here is not
+        # enough: on PostgreSQL, once a statement fails the whole
+        # enclosing transaction is marked aborted and every statement
+        # after it raises InFailedSqlTransaction, including the
+        # CREATE TABLE calls later in this same migration. That turned
+        # "pgvector extension not installed" into "baseline migration
+        # cannot create any table" on a fresh database. begin_nested()
+        # issues a SAVEPOINT and automatically rolls back to it (only)
+        # on exception, so a failed CREATE EXTENSION here can't poison
+        # the rest of the migration.
+        with bind.begin_nested():
+            bind.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector"))
+            present = bind.execute(
+                sa.text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+            ).first()
     except Exception:
         return sa.Text()
 

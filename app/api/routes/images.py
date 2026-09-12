@@ -54,22 +54,7 @@ async def upload_image(
 ):
     store = resolve_active_store(api_key=api_key, db=db)
     require_feature(store, FEATURE_IMAGE_SEARCH)
-
-    # The browser widget historically submitted conversation_id in the
-    # multipart form but could not attach the conversation token to this
-    # request. Keep the upload endpoint backward-compatible without
-    # weakening conversation security: when a token is present, verify and
-    # bind the image to that conversation; when it is absent, upload the
-    # image as an unbound image and require the token later at /analyze.
-    # This also prevents an untrusted caller from attaching an image to an
-    # arbitrary conversation merely by knowing its public conversation id.
-    verified_session = None
-    persisted_conversation_id = None
-    if conversation_id and x_conversation_token:
-        verified_session = _verify_conversation_access(
-            db, store.id, conversation_id, x_conversation_token
-        )
-        persisted_conversation_id = verified_session.conversation_key
+    _verify_conversation_access(db, store.id, conversation_id, x_conversation_token)
 
     raw_bytes = await file.read()
     if len(raw_bytes) > MAX_FILE_SIZE_BYTES:
@@ -88,14 +73,7 @@ async def upload_image(
     storage = get_object_storage()
     await storage.upload(io.BytesIO(raw_bytes), storage_key)
     try:
-        image_record = ImageRepository(db).create(
-            store_id=store.id,
-            storage_key=storage_key,
-            mime_type=sniffed_mime,
-            size=len(raw_bytes),
-            image_hash=image_hash,
-            conversation_id=persisted_conversation_id,
-        )
+        image_record = ImageRepository(db).create(store_id=store.id, storage_key=storage_key, mime_type=sniffed_mime, size=len(raw_bytes), image_hash=image_hash, conversation_id=conversation_id)
     except Exception:
         db.rollback()
         try:
