@@ -88,3 +88,33 @@ async def test_customer_rate_limit_fails_closed_for_state_changes(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await customer_rate_limit.enforce_customer_rate_limit(request)
     assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_customer_rate_limit_does_not_use_shared_anonymous_visitor_bucket(monkeypatch):
+    from app.core import customer_rate_limit
+
+    buckets = []
+
+    async def fake_hit(bucket, limit, window_seconds=60):
+        buckets.append(bucket)
+        return False
+
+    monkeypatch.setattr(customer_rate_limit, "_hit", fake_hit)
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/v1/messages/customer/conversation",
+        "headers": [(b"x-api-key", b"public-key")],
+        "client": ("127.0.0.1", 12345),
+        "scheme": "http",
+        "server": ("testserver", 80),
+        "query_string": b"",
+        "root_path": "",
+        "http_version": "1.1",
+    }
+    await customer_rate_limit.enforce_customer_rate_limit(Request(scope))
+
+    assert all("customer-rate:visitor:" not in bucket for bucket in buckets)
+    assert any(bucket.startswith("customer-rate:ip:") for bucket in buckets)
+    assert any(bucket.startswith("customer-rate:api:") for bucket in buckets)
