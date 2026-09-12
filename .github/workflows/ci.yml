@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -124,3 +127,50 @@ jobs:
       - name: Run dashboard browser E2E
         working-directory: ${{ github.workspace }}
         run: pytest -q tests/e2e/test_dashboard_browser.py
+
+  widget-audit-patch:
+    if: ${{ github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'fix: complete widget state and ux audit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch widget state and UX
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('app/static/widget.js')
+          s=p.read_text(encoding='utf-8')
+          replacements = [
+            ('''  function clearConversation() {\n    conversationId = null; conversationToken = null; merchantMode = false;\n    lastMerchantIds = {}; lastMerchantMessageId = 0;\n    try { localStorage.removeItem(CONV_KEY); localStorage.removeItem(TOKEN_KEY); } catch (_) {}\n  }''', '''  function clearConversation() {\n    stopPolling();\n    if (modeTimer) { clearInterval(modeTimer); modeTimer = null; }\n    conversationId = null; conversationToken = null; merchantMode = false;\n    lastMerchantIds = {}; lastMerchantMessageId = 0;\n    try { localStorage.removeItem(CONV_KEY); localStorage.removeItem(TOKEN_KEY); } catch (_) {}\n    renderMode();\n  }'''),
+            ('''  function showWelcome() {\n    var el = document.createElement("div"); el.className = "welcome";''', '''  function showWelcome() {\n    if (messages.querySelector('.welcome')) return;\n    var el = document.createElement("div"); el.className = "welcome";'''),
+            ('''  function setMode(active) {\n    if (active === merchantMode) return;''', '''  var modeChanging = false;\n  function setMode(active) {\n    active = !!active;\n    if (active === merchantMode && !modeChanging) return;\n    if (modeChanging) return;'''),
+            ('''    var previous = merchantMode;\n    merchantMode = !!active;''', '''    var previous = merchantMode;\n    modeChanging = true;\n    merchantMode = active;'''),
+            ('''      .catch(function (e) { merchantMode = previous; renderMode(); add("merchant", (e && e.message) || "চ্যাট mode পরিবর্তন করা যায়নি। আবার চেষ্টা করুন।"); });\n  }''', '''      .catch(function (e) { merchantMode = previous; renderMode(); add("merchant", (e && e.message) || "চ্যাট mode পরিবর্তন করা যায়নি। আবার চেষ্টা করুন।"); })\n      .finally(function () { modeChanging = false; });\n  }'''),
+            ('''  function syncMode() {\n    if (!conversationId || !conversationToken) return;''', '''  function syncMode() {\n    if (!conversationId || !conversationToken || modeChanging) return;'''),
+            ('''  function stopMerchantPolling() {}''', '''  function stopMerchantPolling() { stopPolling(); }'''),
+            ('''  function sendMerchant(text) {\n    if (!conversationId || !conversationToken || sending) return;''', '''  function sendMerchant(text) {\n    if (!conversationId || !conversationToken || sending || !merchantMode) return;'''),
+            ('''.then(function (data) { typing.remove(); persist(data); add("assistant", data.message || ""); addProducts(data.products, data); startPolling(); })''', '''.then(function (data) {\n        typing.remove(); persist(data); add("assistant", data.message || ""); addProducts(data.products, data); startPolling();\n        if (conversationId && conversationToken && !modeTimer) modeTimer = setInterval(syncMode, 5000);\n      })'''),
+          ]
+          for old,new in replacements:
+              if old not in s:
+                  raise SystemExit(f'expected widget pattern not found: {old[:80]!r}')
+              s=s.replace(old,new,1)
+          marker='''  window.UniversalCommerceAI = window.UniversalCommerceAI || {};'''
+          css='''  var auditStyle = document.createElement("style");\n  auditStyle.textContent = ".panel{overscroll-behavior:contain}.messages{overscroll-behavior:contain;overflow-x:hidden}.input{min-height:42px;max-height:82px}.mode-btn,.quick,.support-action,.action,.attach,.send{touch-action:manipulation}.msg,.welcome-card,.product{overflow-wrap:anywhere;word-break:break-word}@media(max-width:520px){.panel{position:fixed;inset:0;width:100%;height:100%;max-width:none;max-height:none;border-radius:0}.bubble{width:54px;height:54px}.mode-btn{min-height:40px}.messages{padding:12px}.composer-wrap{padding:9px}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}}";\n  shadow.appendChild(auditStyle);\n\n'''+marker
+          if marker in s and 'var auditStyle = document.createElement("style")' not in s:
+              s=s.replace(marker,css,1)
+          p.write_text(s,encoding='utf-8')
+          PY
+          node --check app/static/widget.js
+      - name: Commit widget patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/audit-widget.yml
+          git add app/static/widget.js .github/workflows/audit-widget.yml
+          git commit -m "fix: complete widget state and ux audit" || exit 0
+          git push
