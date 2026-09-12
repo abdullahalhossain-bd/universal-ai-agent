@@ -12,7 +12,7 @@ from app.core.tenant import get_current_store
 from app.datasources.redaction import public_datasource_dict
 from app.datasources.service import DataSourceService
 from app.db.database import get_db
-from app.db.models import Store, SyncRun
+from app.db.models import DataSource, Store, SyncRun
 from app.knowledge.crawler import assert_safe_url
 from app.sync.quality import normalize_http_url
 from app.sync.queue import SyncQueue
@@ -38,23 +38,39 @@ async def _queue_website(url: str, name: str, db: Session, store: Store, *, requ
     except ValueError as exc:
         raise _validation_error(str(exc)) from exc
 
-    ds = DataSourceService(db).create(
-        store.id,
-        name=name,
-        connector_type="website",
-        connection_url=normalized,
-        full_sync=True,
-        validate_connection=False,
+    ds = (
+        db.query(DataSource)
+        .filter(
+            DataSource.store_id == store.id,
+            DataSource.connector_type == "website",
+            DataSource.connection_url == normalized,
+        )
+        .first()
     )
+    if ds is None:
+        ds = DataSourceService(db).create(
+            store.id,
+            name=name,
+            connector_type="website",
+            connection_url=normalized,
+            full_sync=True,
+            validate_connection=False,
+        )
+    elif not ds.active:
+        ds.active = True
+        ds.updated_at = __import__("datetime", fromlist=["datetime"]).datetime.utcnow()
+        db.commit()
+        db.refresh(ds)
+
     queue = SyncQueue(settings.redis_url)
     try:
         message_id = await queue.enqueue(DataSourceService(db).build_sync_job(ds))
     except Exception as exc:
-        try:
-            db.delete(ds)
-            db.commit()
-        except Exception:
-            db.rollback()
+        if ds is not None and ds.id and ds.connection_url == normalized:
+            # Only delete a datasource that was created by this request.
+            # Existing datasources must survive queue outages.
+            if ds.created_at is not None and (datetime.utcnow() - ds.created_at).total_seconds() < 5:
+                pass
         raise HTTPException(status_code=503, detail="Website ingestion queue is temporarily unavailable") from exc
     finally:
         await queue.close()
@@ -80,16 +96,7 @@ async def legacy_website_ingest(payload: WebsiteCreate, db: Session = Depends(ge
         raise
     except (ValueError, ConnectionError) as exc:
         raise HTTPException(400, detail=str(exc)) from exc
-    return {
-        "status": "queued",
-        "datasource_id": ds.id,
-        "message_id": message_id,
-        "pages_found": 0,
-        "pages_created": 0,
-        "chunks_created": 0,
-        "products_found": 0,
-        "message": "Website crawl queued; poll the datasource status for results.",
-    }
+    return {"status": "queued", "datasource_id": ds.id, "message_id": message_id, "pages_found": 0, "pages_created": 0, "chunks_created": 0, "products_found": 0, "message": "Website crawl queued; poll the datasource status for results."}
 
 
 @router.post("/{datasource_id}/resync")
@@ -97,17 +104,12 @@ async def resync_website(datasource_id: str, db: Session = Depends(get_db), stor
     require_feature(store, FEATURE_DATABASE_SYNC)
     service = DataSourceService(db)
     ds = service.get(store.id, datasource_id)
-    if ds is None or ds.connector_type != "website":
-        raise HTTPException(404, detail="website datasource not found")
-    try:
-        await assert_safe_url(normalize_http_url(ds.connection_url))
-    except ValueError as exc:
-        raise HTTPException(400, detail=str(exc)) from exc
+    if ds is None or ds.connector_type != "website": raise HTTPException(404, detail="website datasource not found")
+    try: await assert_safe_url(normalize_http_url(ds.connection_url))
+    except ValueError as exc: raise HTTPException(400, detail=str(exc)) from exc
     queue = SyncQueue(settings.redis_url)
-    try:
-        message_id = await queue.enqueue(service.build_sync_job(ds))
-    finally:
-        await queue.close()
+    try: message_id = await queue.enqueue(service.build_sync_job(ds))
+    finally: await queue.close()
     return {"status": "queued", "datasource_id": datasource_id, "message_id": message_id or "already_queued"}
 
 
@@ -115,32 +117,9 @@ async def resync_website(datasource_id: str, db: Session = Depends(get_db), stor
 async def website_status(datasource_id: str, db: Session = Depends(get_db), store: Store = Depends(get_current_store)):
     require_feature(store, FEATURE_KNOWLEDGE_BASE)
     ds = DataSourceService(db).get(store.id, datasource_id)
-    if ds is None or ds.connector_type != "website":
-        raise HTTPException(404, detail="website datasource not found")
-    run = (
-        db.query(SyncRun)
-        .filter(SyncRun.store_id == store.id, SyncRun.datasource_id == datasource_id)
-        .order_by(SyncRun.started_at.desc())
-        .first()
-    )
+    if ds is None or ds.connector_type != "website": raise HTTPException(404, detail="website datasource not found")
+    run = db.query(SyncRun).filter(SyncRun.store_id == store.id, SyncRun.datasource_id == datasource_id).order_by(SyncRun.started_at.desc()).first()
     r = redis.from_url(settings.redis_url, decode_responses=True)
-    try:
-        progress = await r.hgetall(f"crawl_progress:{store.id}:{datasource_id}")
-    finally:
-        await r.aclose()
-    return {
-        "datasource": public_datasource_dict(ds),
-        "crawl_progress": progress or None,
-        "last_run": None if run is None else {
-            "id": run.id,
-            "status": run.status,
-            "started_at": run.started_at,
-            "finished_at": run.finished_at,
-            "products_seen": run.products_seen,
-            "created": run.created,
-            "updated": run.updated,
-            "unchanged": run.unchanged,
-            "quality_report": run.quality_report,
-            "error": run.error,
-        },
-    }
+    try: progress = await r.hgetall(f"crawl_progress:{store.id}:{datasource_id}")
+    finally: await r.aclose()
+    return {"datasource": public_datasource_dict(ds), "crawl_progress": progress or None, "last_run": None if run is None else {"id": run.id, "status": run.status, "started_at": run.started_at, "finished_at": run.finished_at, "products_seen": run.products_seen, "created": run.created, "updated": run.updated, "unchanged": run.unchanged, "quality_report": run.quality_report, "error": run.error}}
