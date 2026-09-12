@@ -133,12 +133,13 @@ class SyncQueue:
             'retry_group_id', ARGV[5])
         return redis.call('xack', KEYS[2], ARGV[6], ARGV[4])
         """
+        raw_job = job if isinstance(job, str) else json.dumps(job, separators=(",", ":"), sort_keys=True)
         return await self.redis.eval(
             script,
             2,
             DLQ_STREAM,
             STREAM,
-            json.dumps(job, separators=(",", ":"), sort_keys=True),
+            raw_job,
             str(attempt),
             str(error)[:4000],
             message_id,
@@ -232,7 +233,7 @@ class SyncQueue:
                 logger.error("Dead-lettering malformed sync queue message=%s error=%s", message_id, exc)
                 await self._dead_letter(
                     message_id,
-                    {"raw_job": str(fields.get("job", ""))[:10000]},
+                    str(fields.get("job", ""))[:10000],
                     fields.get("attempt", "0"),
                     f"malformed queue message: {exc}",
                     fields.get("retry_group_id", ""),

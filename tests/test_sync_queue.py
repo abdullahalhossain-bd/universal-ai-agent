@@ -55,3 +55,14 @@ async def test_dlq_ack_and_write_use_one_atomic_script():
     assert key_count == 2
     assert "xadd" in script and "xack" in script
     assert args[-2:] == ("group-1", GROUP)
+
+
+@pytest.mark.asyncio
+async def test_malformed_message_keeps_raw_job_in_dlq_script():
+    queue = SyncQueue.__new__(SyncQueue)
+    queue.redis = FakeRedis()
+
+    await queue._decode_entries([("1-0", {"job": "not-json", "attempt": "0"})])
+
+    _, _, args = queue.redis.evals[0]
+    assert args[2] == "not-json"

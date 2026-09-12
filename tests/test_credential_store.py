@@ -111,6 +111,8 @@ def db_session():
     from sqlalchemy.orm import sessionmaker
 
     from app.db.database import Base
+    from app.chat.models import ChatMessage, ChatSession  # noqa: F401  (register foreign-key tables)
+    from app.db.customer import Customer, CustomerAuditLog, CustomerIdentity, CustomerIdentityHistory  # noqa: F401  (register foreign-key tables)
     from app.db.models import DataSource, Store  # noqa: F401  (register tables)
 
     engine = create_engine("sqlite:///:memory:")
