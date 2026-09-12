@@ -1,9 +1,15 @@
 <?php
-include_once('./stripe/stripe/init.php');
+$autoload = __DIR__ . '/stripe/stripe/init.php';
+if (!is_file($autoload)) {
+    throw new RuntimeException('Stripe SDK is missing. Install the Stripe dependency before enabling payments.');
+}
+require_once $autoload;
 
-$publishableKey="pk_test_Your_Stripe_Publishable_Key";
+$publishableKey = getenv('STRIPE_PUBLISHABLE_KEY') ?: '';
+$secretKey = getenv('STRIPE_SECRET_KEY') ?: '';
 
-$secretKey="sk_test_Your_Stripe_Secret_Key";
+if ($publishableKey === '' || $secretKey === '') {
+    throw new RuntimeException('Stripe credentials are not configured. Set STRIPE_PUBLISHABLE_KEY and STRIPE_SECRET_KEY.');
+}
 
 \Stripe\Stripe::setApiKey($secretKey);
-?>
