@@ -21,7 +21,7 @@ if ($search_term === '' && $category === '') {
 
 $conditions = [];
 $params = [];
-types = '';
+$types = '';
 
 if ($search_term !== '') {
     $tokens = preg_split('/\s+/u', $search_term, -1, PREG_SPLIT_NO_EMPTY);
@@ -49,9 +49,7 @@ if (!$countStmt) {
     http_response_code(500);
     exit('Search temporarily unavailable.');
 }
-if ($types !== '') {
-    $countStmt->bind_param($types, ...$params);
-}
+$countStmt->bind_param($types, ...$params);
 $countStmt->execute();
 $countResult = $countStmt->get_result()->fetch_assoc();
 $totalProducts = (int)($countResult['total'] ?? 0);
