@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -38,17 +40,15 @@ async def _queue_website(url: str, name: str, db: Session, store: Store, *, requ
     except ValueError as exc:
         raise _validation_error(str(exc)) from exc
 
-    ds = (
-        db.query(DataSource)
-        .filter(
-            DataSource.store_id == store.id,
-            DataSource.connector_type == "website",
-            DataSource.connection_url == normalized,
-        )
-        .first()
-    )
+    service = DataSourceService(db)
+    ds = db.query(DataSource).filter(
+        DataSource.store_id == store.id,
+        DataSource.connector_type == "website",
+        DataSource.connection_url == normalized,
+    ).first()
+    created_here = False
     if ds is None:
-        ds = DataSourceService(db).create(
+        ds = service.create(
             store.id,
             name=name,
             connector_type="website",
@@ -56,21 +56,23 @@ async def _queue_website(url: str, name: str, db: Session, store: Store, *, requ
             full_sync=True,
             validate_connection=False,
         )
+        created_here = True
     elif not ds.active:
         ds.active = True
-        ds.updated_at = __import__("datetime", fromlist=["datetime"]).datetime.utcnow()
+        ds.updated_at = datetime.utcnow()
         db.commit()
         db.refresh(ds)
 
     queue = SyncQueue(settings.redis_url)
     try:
-        message_id = await queue.enqueue(DataSourceService(db).build_sync_job(ds))
+        message_id = await queue.enqueue(service.build_sync_job(ds))
     except Exception as exc:
-        if ds is not None and ds.id and ds.connection_url == normalized:
-            # Only delete a datasource that was created by this request.
-            # Existing datasources must survive queue outages.
-            if ds.created_at is not None and (datetime.utcnow() - ds.created_at).total_seconds() < 5:
-                pass
+        if created_here:
+            try:
+                db.delete(ds)
+                db.commit()
+            except Exception:
+                db.rollback()
         raise HTTPException(status_code=503, detail="Website ingestion queue is temporarily unavailable") from exc
     finally:
         await queue.close()
