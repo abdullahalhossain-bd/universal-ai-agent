@@ -36,6 +36,9 @@
     var choices = buildChoices().slice(0, 3);
     if (!choices.length) { if (existing) existing.remove(); return; }
     if (!existing) { existing = document.createElement("div"); existing.className="ucai-quick-replies"; var composer=root.querySelector(".composer"); if(composer)composer.parentNode.insertBefore(existing,composer); }
+    var current = Array.prototype.map.call(existing.children, function (b) { return b.textContent; });
+    var unchanged = current.length === choices.length && current.every(function (t, i) { return t === choices[i]; });
+    if (unchanged) return; // nothing to update — rewriting anyway would re-trigger the MutationObserver and loop forever
     existing.innerHTML = "";
     choices.forEach(function(text){var b=document.createElement("button");b.type="button";b.className="ucai-quick";b.textContent=text;b.addEventListener("click",function(){var input=root.querySelector("textarea"),send=root.querySelector(".composer button");if(!input)return;input.value=text;input.dispatchEvent(new Event("input",{bubbles:true}));input.focus();if(send)send.click();});existing.appendChild(b);});
   }
