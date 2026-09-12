@@ -42,6 +42,7 @@ async def test_pinned_resolver_returns_validated_public_ip(monkeypatch):
     assert resolved[0]["hostname"] == "example.test"
     assert resolved[0]["host"] == "93.184.216.34"
     assert resolved[0]["port"] == 443
+    assert resolved[0]["proto"] == socket.IPPROTO_TCP
 
 
 @pytest.mark.asyncio
@@ -57,7 +58,7 @@ async def test_customer_rate_limit_uses_atomic_redis_script(monkeypatch):
 
     monkeypatch.setattr(customer_rate_limit, "redis_client", FakeRedis())
     assert await customer_rate_limit._hit("bucket:test", 5, 60) is False
-    assert calls and calls[0][1:] == ("bucket:test", 60)
+    assert calls and calls[0][1:] == (1, "bucket:test", 60)
     assert "INCR" in calls[0][0] and "EXPIRE" in calls[0][0]
 
 
