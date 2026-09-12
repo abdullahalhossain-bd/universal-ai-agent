@@ -137,13 +137,31 @@ def _set_mode(session: ChatSession, mode: str, db: Session, owner: str = "mercha
     return {"conversation_id": session.conversation_key, "mode": session.mode, "mode_owner": session.mode_owner}
 
 
+def _apply_after_cursor(query, db: Session, session_id: str, after_id: str | None):
+    """Apply a lossless `(created_at, id)` cursor to a message query."""
+    if not after_id:
+        return query
+    cursor = db.query(ChatMessage.created_at).filter(
+        ChatMessage.id == after_id,
+        ChatMessage.session_id == session_id,
+    ).scalar()
+    if cursor is None:
+        return query
+    return query.filter(
+        or_(
+            ChatMessage.created_at > cursor,
+            and_(ChatMessage.created_at == cursor, ChatMessage.id > after_id),
+        )
+    )
+
+
 @router.get("/conversations")
 def list_conversations(auth: tuple[User, Store] = Depends(get_current_inbox_user_and_store), db: Session = Depends(get_db)):
     _user, store = auth
     sessions = db.query(ChatSession).filter(ChatSession.store_id == store.id).order_by(ChatSession.updated_at.desc()).limit(100).all()
     result = []
     for session in sessions:
-        last = db.query(ChatMessage).filter(ChatMessage.session_id == session.id).order_by(ChatMessage.created_at.desc()).first()
+        last = db.query(ChatMessage).filter(ChatMessage.session_id == session.id).order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc()).first()
         result.append({"conversation_id": session.conversation_key, "session_id": session.id, "visitor_id": session.visitor_id, "customer_id": session.customer_id, "identity": _conversation_identity(db, session), "mode": session.mode or "ai", "mode_owner": session.mode_owner or "ai", "status": session.status or "open", "created_at": session.created_at, "updated_at": session.updated_at, "last_message": _message_row(last) if last else None})
     db.commit()
     return result
@@ -231,13 +249,7 @@ def customer_messages(conversation_id: str, after_id: str | None = None, x_api_k
     if session is None: return {"conversation_id": conversation_id, "mode": "ai", "mode_owner": "ai", "identity": _profile_row(None), "messages": []}
     _require_customer_conversation(session, x_conversation_token)
     query = db.query(ChatMessage).filter(ChatMessage.session_id == session.id, ChatMessage.role.in_(["assistant", "merchant"]))
-    if after_id is not None:
-        cursor = db.query(ChatMessage.created_at).filter(ChatMessage.id == after_id, ChatMessage.session_id == session.id).scalar()
-        if cursor is not None:
-            # UUIDs are not chronological, but they are a stable deterministic
-            # tie-breaker for messages sharing the same timestamp. Using both
-            # columns prevents same-timestamp rows from being skipped.
-            query = query.filter(or_(ChatMessage.created_at > cursor, and_(ChatMessage.created_at == cursor, ChatMessage.id > after_id)))
+    query = _apply_after_cursor(query, db, session.id, after_id)
     messages = query.order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc()).all()
     return {"conversation_id": conversation_id, "mode": session.mode or "ai", "mode_owner": session.mode_owner or "ai", "identity": _conversation_identity(db, session), "messages": [_message_row(item) for item in messages]}
 
