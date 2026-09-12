@@ -2,7 +2,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, and_
 from sqlalchemy.orm import Session
 
 from app.auth.api_key import get_api_key
@@ -71,27 +71,18 @@ def _upsert_profile(db: Session, store_id: str, visitor_id: str, name=None, emai
         profile = VisitorProfile(store_id=store_id, visitor_id=visitor_id)
         db.add(profile)
     if name is not None and name.strip(): profile.name = name.strip()
-    # Email/phone supplied by a public visitor are deliberately kept out of the
-    # trusted Customer/CustomerIdentity records until a merchant-controlled
-    # linking flow is used. They remain legacy visitor metadata for compatibility.
     if email is not None: profile.email = str(email).strip().lower()
     if phone is not None and phone.strip(): profile.phone = phone.strip()
     return profile
 
 
 def _sync_customer_profile(db: Session, session: ChatSession, name=None, email=None, phone=None, actor_type="customer", actor_id=None):
-    """Synchronize only non-sensitive profile data from a conversation.
-
-    Public email/phone input never creates or moves a trusted CustomerIdentity.
-    Secure email/phone linking is merchant-only through customer_management.py.
-    """
     if not session.customer_id:
         return None
     customer = _get_customer(db, session.store_id, session.customer_id)
     if customer is None or customer.merged_into_customer_id:
         return None
-    if isinstance(name, str) and name.strip():
-        customer.name = name.strip()
+    if isinstance(name, str) and name.strip(): customer.name = name.strip()
     customer.last_seen_at = datetime.utcnow()
     customer.updated_at = datetime.utcnow()
     return customer
@@ -102,8 +93,7 @@ def _sync_customer_from_profile(db: Session, session: ChatSession):
     customer = _get_customer(db, session.store_id, session.customer_id)
     if customer is None or customer.merged_into_customer_id: return None
     profile = _get_profile(db, session.store_id, session.visitor_id)
-    if profile and profile.name and not customer.name:
-        customer.name = profile.name
+    if profile and profile.name and not customer.name: customer.name = profile.name
     customer.last_seen_at = datetime.utcnow()
     return customer
 
@@ -164,7 +154,7 @@ def get_conversation(conversation_id: str, auth: tuple[User, Store] = Depends(ge
     _user, store = auth
     session = _find_session(db, store.id, conversation_id)
     if session is None: raise HTTPException(status_code=404, detail="Conversation not found")
-    messages = db.query(ChatMessage).filter(ChatMessage.session_id == session.id, ChatMessage.role.in_(["user", "assistant", "merchant"])).order_by(ChatMessage.created_at.asc()).all()
+    messages = db.query(ChatMessage).filter(ChatMessage.session_id == session.id, ChatMessage.role.in_(["user", "assistant", "merchant"])).order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc()).all()
     return _conversation_row(session, messages, db)
 
 
@@ -203,10 +193,8 @@ def merge_customers(payload: CustomerMergeRequest, auth: tuple[User, Store] = De
     for identity in db.query(CustomerIdentity).filter(CustomerIdentity.store_id == store.id, CustomerIdentity.customer_id == source.id).all():
         duplicate = db.query(CustomerIdentity).filter(CustomerIdentity.store_id == store.id, CustomerIdentity.customer_id == target.id, CustomerIdentity.identity_type == identity.identity_type, CustomerIdentity.identity_value == identity.identity_value).first()
         identity_value = identity.identity_value; identity_type = identity.identity_type
-        if duplicate:
-            db.delete(identity); action = "identity_deduplicated"
-        else:
-            identity.customer_id = target.id; identity.updated_at = now; action = "identity_moved"
+        if duplicate: db.delete(identity); action = "identity_deduplicated"
+        else: identity.customer_id = target.id; identity.updated_at = now; action = "identity_moved"
         db.add(CustomerIdentityHistory(store_id=store.id, customer_id=target.id, action=action, identity_type=identity_type, identity_value=identity_value, from_customer_id=source.id, to_customer_id=target.id, actor_type="merchant", actor_id=user.id, created_at=now))
     for session in db.query(ChatSession).filter(ChatSession.store_id == store.id, ChatSession.customer_id == source.id).all(): session.customer_id = target.id
     for field in ("name", "email", "phone"):
@@ -243,24 +231,14 @@ def customer_messages(conversation_id: str, after_id: str | None = None, x_api_k
     if session is None: return {"conversation_id": conversation_id, "mode": "ai", "mode_owner": "ai", "identity": _profile_row(None), "messages": []}
     _require_customer_conversation(session, x_conversation_token)
     query = db.query(ChatMessage).filter(ChatMessage.session_id == session.id, ChatMessage.role.in_(["assistant", "merchant"]))
-    # `after_id` lets the widget's mode/message poll (every few seconds,
-    # for as long as a conversation stays open) fetch only what's new
-    # instead of the entire message history every time. mode/mode_owner
-    # are cheap columns and always returned in full regardless, since
-    # the poller needs those on every tick to detect a merchant takeover.
-    #
-    # ChatMessage.id is a random UUID (see app/chat/models.py), not a
-    # sequential integer, so "id > after_id" would compare UUID strings
-    # lexicographically — unrelated to send order and effectively
-    # random. Cursor on `created_at` instead: look up the referenced
-    # message's timestamp and keep only rows strictly after it. If the
-    # id doesn't resolve (stale client cache, wrong session, garbage
-    # input), fail open to the full history rather than silently
-    # dropping messages the widget hasn't seen yet.
     if after_id is not None:
         cursor = db.query(ChatMessage.created_at).filter(ChatMessage.id == after_id, ChatMessage.session_id == session.id).scalar()
-        if cursor is not None: query = query.filter(ChatMessage.created_at > cursor)
-    messages = query.order_by(ChatMessage.created_at.asc()).all()
+        if cursor is not None:
+            # UUIDs are not chronological, but they are a stable deterministic
+            # tie-breaker for messages sharing the same timestamp. Using both
+            # columns prevents same-timestamp rows from being skipped.
+            query = query.filter(or_(ChatMessage.created_at > cursor, and_(ChatMessage.created_at == cursor, ChatMessage.id > after_id)))
+    messages = query.order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc()).all()
     return {"conversation_id": conversation_id, "mode": session.mode or "ai", "mode_owner": session.mode_owner or "ai", "identity": _conversation_identity(db, session), "messages": [_message_row(item) for item in messages]}
 
 
@@ -299,8 +277,7 @@ def customer_message(conversation_id: str, payload: CustomerMessageRequest, x_ap
     if session.visitor_id != visitor: raise HTTPException(status_code=409, detail="Visitor identity does not match this conversation")
     session.mode = "human"
     if session.mode_owner != "merchant": session.mode_owner = "customer"
-    session.status = "open"
-    session.read_at = None
+    session.status = "open"; session.read_at = None
     _upsert_profile(db, store_id, session.visitor_id, payload.name, payload.email, payload.phone)
     _sync_customer_profile(db, session, payload.name, None, None, actor_type="customer")
     message = ChatMessage(session_id=session.id, role="user", content=payload.message.strip()); db.add(message); session.updated_at = datetime.utcnow(); db.commit(); db.refresh(message)
