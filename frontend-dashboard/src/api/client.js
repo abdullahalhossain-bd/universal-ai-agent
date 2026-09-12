@@ -21,20 +21,32 @@ export class ApiError extends Error {
   }
 }
 
+export function getApiErrorMessage(err, fallback = 'Something went wrong. Please try again.') {
+  if (err instanceof ApiError) {
+    if (typeof err.detail === 'object' && err.detail?.message) return err.detail.message
+    if (typeof err.detail === 'string' && err.detail.trim() && err.detail !== 'Invalid request payload.') return err.detail
+    return err.message || fallback
+  }
+  return err?.message || fallback
+}
+
 function getCookie(name) {
   const prefix = `${name}=`
   return document.cookie.split(';').map(v => v.trim()).find(v => v.startsWith(prefix))?.slice(prefix.length) || ''
 }
 
 function parseErrorDetail(data, status) {
+  // Prefer structured validation errors over the generic FastAPI detail.
+  if (data && typeof data === 'object' && data.errors?.length) {
+    const message = data.errors.map(item => `${item?.loc?.join?.('.') || 'request'}: ${item?.msg || 'invalid value'}`).join('; ')
+    return message || data.detail || `Request failed (${status})`
+  }
   if (data && typeof data === 'object' && 'detail' in data) {
     const detail = data.detail
     if (Array.isArray(detail)) return detail.map(item => item?.msg || item?.message || String(item)).join('; ')
     if (detail && typeof detail === 'object') return detail
-    if (data.errors?.length) return data.errors.map(item => `${item?.loc?.join?.('.') || 'request'}: ${item?.msg || 'invalid value'}`).join('; ')
     return detail
   }
-  if (data && typeof data === 'object' && data.errors?.length) return data.errors.map(item => `${item?.loc?.join?.('.') || 'request'}: ${item?.msg || 'invalid value'}`).join('; ')
   if (typeof data === 'string' && data.trim()) return data
   return `Request failed (${status})`
 }
