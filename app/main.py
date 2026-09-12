@@ -22,7 +22,7 @@ from app.knowledge.chunk import KnowledgePage, KnowledgeChunk
 from app.usage.models import UsageRecord
 from app.api.routes.products import router as products_router
 from app.api.routes.datasources import router as datasources_router
-from app.api.routes.websites import router as websites_router, legacy_router as dynamic_knowledge_router
+from app.api.routes.websites import router as websites_router
 from app.api.routes.sync_issues import router as sync_issues_router
 from app.api.routes.sync_quality import router as sync_quality_router
 from app.api.routes.sync_diff import router as sync_diff_router
@@ -96,7 +96,7 @@ from app.core.middleware import RequestContextMiddleware
 app.add_middleware(RequestContextMiddleware)
 from app.core.customer_rate_limit_middleware import CustomerRateLimitMiddleware
 app.add_middleware(CustomerRateLimitMiddleware)
-app.include_router(chat_router); app.include_router(messages_router); app.include_router(customer_management_router); app.include_router(images_router); app.include_router(media_router); app.include_router(stores_router); app.include_router(auth_router); app.include_router(api_keys_router); app.include_router(billing_router); app.include_router(admin_router); app.include_router(admin_analytics_router); app.include_router(admin_queue_router); app.include_router(products_router); app.include_router(sync_quality_router); app.include_router(sync_diff_router); app.include_router(datasources_router); app.include_router(websites_router); app.include_router(dynamic_knowledge_router); app.include_router(sync_issues_router); app.include_router(knowledge_router); app.include_router(behavior_router); app.include_router(analytics_router); app.include_router(discovery_v1_router,prefix="/v1"); app.include_router(mapping_v1_router,prefix="/v1"); app.include_router(widget_router)
+app.include_router(chat_router); app.include_router(messages_router); app.include_router(customer_management_router); app.include_router(images_router); app.include_router(media_router); app.include_router(stores_router); app.include_router(auth_router); app.include_router(api_keys_router); app.include_router(billing_router); app.include_router(admin_router); app.include_router(admin_analytics_router); app.include_router(admin_queue_router); app.include_router(products_router); app.include_router(sync_quality_router); app.include_router(sync_diff_router); app.include_router(datasources_router); app.include_router(websites_router); app.include_router(sync_issues_router); app.include_router(knowledge_router); app.include_router(behavior_router); app.include_router(analytics_router); app.include_router(discovery_v1_router,prefix="/v1"); app.include_router(mapping_v1_router,prefix="/v1"); app.include_router(widget_router)
 _CHAT_DIR=Path(__file__).resolve().parent.parent/"frontend"/"chat"
 if _CHAT_DIR.is_dir(): app.mount("/chat",StaticFiles(directory=str(_CHAT_DIR),html=True),name="chat-ui")
 _SYNC_DIAGNOSTICS_DIR=Path(__file__).resolve().parent.parent/"frontend"/"sync-diagnostics"
