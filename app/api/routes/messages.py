@@ -238,11 +238,29 @@ def merchant_reply(conversation_id: str, payload: ReplyRequest, auth: tuple[User
 
 
 @router.get("/customer/{conversation_id}")
-def customer_messages(conversation_id: str, x_api_key: str | None = Header(default=None, alias="x-api-key"), x_conversation_token: str | None = Header(default=None, alias="x-conversation-token"), api_key: APIKey = Depends(get_api_key), db: Session = Depends(get_db)):
+def customer_messages(conversation_id: str, after_id: str | None = None, x_api_key: str | None = Header(default=None, alias="x-api-key"), x_conversation_token: str | None = Header(default=None, alias="x-conversation-token"), api_key: APIKey = Depends(get_api_key), db: Session = Depends(get_db)):
     store_id = _authorized_customer(api_key, x_api_key); session = _find_session(db, store_id, conversation_id)
     if session is None: return {"conversation_id": conversation_id, "mode": "ai", "mode_owner": "ai", "identity": _profile_row(None), "messages": []}
     _require_customer_conversation(session, x_conversation_token)
-    messages = db.query(ChatMessage).filter(ChatMessage.session_id == session.id, ChatMessage.role.in_(["assistant", "merchant"])).order_by(ChatMessage.created_at.asc()).all()
+    query = db.query(ChatMessage).filter(ChatMessage.session_id == session.id, ChatMessage.role.in_(["assistant", "merchant"]))
+    # `after_id` lets the widget's mode/message poll (every few seconds,
+    # for as long as a conversation stays open) fetch only what's new
+    # instead of the entire message history every time. mode/mode_owner
+    # are cheap columns and always returned in full regardless, since
+    # the poller needs those on every tick to detect a merchant takeover.
+    #
+    # ChatMessage.id is a random UUID (see app/chat/models.py), not a
+    # sequential integer, so "id > after_id" would compare UUID strings
+    # lexicographically — unrelated to send order and effectively
+    # random. Cursor on `created_at` instead: look up the referenced
+    # message's timestamp and keep only rows strictly after it. If the
+    # id doesn't resolve (stale client cache, wrong session, garbage
+    # input), fail open to the full history rather than silently
+    # dropping messages the widget hasn't seen yet.
+    if after_id is not None:
+        cursor = db.query(ChatMessage.created_at).filter(ChatMessage.id == after_id, ChatMessage.session_id == session.id).scalar()
+        if cursor is not None: query = query.filter(ChatMessage.created_at > cursor)
+    messages = query.order_by(ChatMessage.created_at.asc()).all()
     return {"conversation_id": conversation_id, "mode": session.mode or "ai", "mode_owner": session.mode_owner or "ai", "identity": _conversation_identity(db, session), "messages": [_message_row(item) for item in messages]}
 
 
