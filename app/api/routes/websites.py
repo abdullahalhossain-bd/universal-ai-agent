@@ -33,8 +33,15 @@ def _validation_error(message: str, field: str = "url") -> HTTPException:
     )
 
 
-async def _queue_website(url: str, name: str, db: Session, store: Store):
-    require_feature(store, FEATURE_DATABASE_SYNC)
+async def _queue_website(
+    url: str,
+    name: str,
+    db: Session,
+    store: Store,
+    *,
+    required_feature=FEATURE_DATABASE_SYNC,
+):
+    require_feature(store, required_feature)
     try:
         normalized = normalize_http_url(url)
         await assert_safe_url(normalized)
@@ -52,22 +59,19 @@ async def _queue_website(url: str, name: str, db: Session, store: Store):
     queue = SyncQueue(settings.redis_url)
     try:
         message_id = await queue.enqueue(DataSourceService(db).build_sync_job(ds))
-    except Exception:
-        # Do not leave an orphan datasource if the durable queue cannot accept it.
-        db.rollback()
+    except Exception as exc:
+        # The datasource was committed by DataSourceService.create(). Remove it
+        # if the durable queue is unavailable so a failed request cannot leave an
+        # unusable datasource behind.
         try:
             db.delete(ds)
             db.commit()
         except Exception:
             db.rollback()
-        raise HTTPException(status_code=503, detail="Website ingestion queue is temporarily unavailable")
+        raise HTTPException(status_code=503, detail="Website ingestion queue is temporarily unavailable") from exc
     finally:
         await queue.close()
-    if message_id is None:
-        # A job for this datasource is already queued. Return the datasource rather
-        # than creating another crawl.
-        message_id = "already_queued"
-    return ds, message_id
+    return ds, message_id or "already_queued"
 
 
 @router.post("")
@@ -92,7 +96,13 @@ async def legacy_website_ingest(
     store: Store = Depends(get_current_store),
 ):
     try:
-        ds, message_id = await _queue_website(payload.url, "Website", db, store)
+        ds, message_id = await _queue_website(
+            payload.url,
+            "Website",
+            db,
+            store,
+            required_feature=__import__("app.core.features", fromlist=["FEATURE_KNOWLEDGE_BASE"]).FEATURE_KNOWLEDGE_BASE,
+        )
     except HTTPException:
         raise
     except (ValueError, ConnectionError) as exc:
@@ -102,6 +112,8 @@ async def legacy_website_ingest(
         "datasource_id": ds.id,
         "message_id": message_id,
         "pages_found": 0,
+        "pages_created": 0,
+        "chunks_created": 0,
         "products_found": 0,
         "message": "Website crawl queued; poll the datasource status for results.",
     }
@@ -128,7 +140,7 @@ async def resync_website(
         message_id = await queue.enqueue(service.build_sync_job(ds))
     finally:
         await queue.close()
-    return {"status": "queued", "datasource_id": datasource_id, "message_id": message_id}
+    return {"status": "queued", "datasource_id": datasource_id, "message_id": message_id or "already_queued"}
 
 
 @router.get("/{datasource_id}/status")
