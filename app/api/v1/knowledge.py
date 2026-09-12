@@ -1,113 +1,50 @@
-from fastapi import (
-    APIRouter,
-    Depends,
-    HTTPException,
-)
-
-from pydantic import (
-    BaseModel,
-    Field,
-    HttpUrl,
-)
-
-from app.core.tenant import (
-    get_current_store,
-)
-
-from app.core.features import (
-    FEATURE_KNOWLEDGE_BASE,
-    require_feature,
-)
-
-from app.core.config import settings
-
-from app.db.database import get_db
-
-from app.db.models import Store
-
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
+from urllib.parse import urlparse
 
-from app.knowledge.service import (
-    KnowledgeService,
-)
+from app.core.tenant import get_current_store
+from app.core.features import FEATURE_KNOWLEDGE_BASE, require_feature
+from app.core.config import settings
+from app.db.database import get_db
+from app.db.models import Store
+from app.knowledge.search import KnowledgeSearchEngine
+from app.knowledge.search_models import KnowledgeSearchRequest
+from app.knowledge.embedding_service import KnowledgeEmbeddingService
+from app.knowledge.vector_search import VectorKnowledgeSearch
+from app.knowledge.hybrid_search import HybridKnowledgeSearch
+from app.knowledge.chunk import KnowledgePage
+from app.api.routes.websites import _queue_website
 
-from app.knowledge.search import (
-    KnowledgeSearchEngine,
-)
-
-from app.knowledge.search_models import (
-    KnowledgeSearchRequest,
-)
-
-from app.knowledge.embedding_service import (
-    KnowledgeEmbeddingService,
-)
-
-from app.knowledge.vector_search import (
-    VectorKnowledgeSearch,
-)
-
-from app.knowledge.hybrid_search import (
-    HybridKnowledgeSearch,
-)
-
-
-router = APIRouter(
-    prefix="/v1/knowledge",
-    tags=["Knowledge"],
-)
+router = APIRouter(prefix="/v1/knowledge", tags=["Knowledge"])
 
 
 @router.get("/websites")
 def list_websites(
-    store: Store = Depends(
-        get_current_store
-    ),
+    store: Store = Depends(get_current_store),
     db: Session = Depends(get_db),
 ):
-    """
-    Dashboard-facing summary of everything /ingest has crawled for
-    this store so far, grouped by domain (a single `/ingest` call can
-    crawl many pages under one site). Read-only, store-scoped.
-    """
-    from urllib.parse import urlparse
-    from sqlalchemy import func
-
-    from app.knowledge.chunk import KnowledgePage
-
+    """Dashboard-facing, strictly store-scoped website knowledge summary."""
     pages = (
-        db.query(
-            KnowledgePage.url,
-            KnowledgePage.title,
-            KnowledgePage.crawled_at,
-        )
+        db.query(KnowledgePage.url, KnowledgePage.title, KnowledgePage.crawled_at)
         .filter(KnowledgePage.store_id == store.id)
         .all()
     )
-
     sites: dict[str, dict] = {}
     for url, title, crawled_at in pages:
         domain = urlparse(url).netloc or url
-        entry = sites.setdefault(
-            domain,
-            {"domain": domain, "page_count": 0, "last_crawled_at": None},
-        )
+        entry = sites.setdefault(domain, {"domain": domain, "page_count": 0, "last_crawled_at": None})
         entry["page_count"] += 1
-        if crawled_at and (
-            entry["last_crawled_at"] is None or crawled_at > entry["last_crawled_at"]
-        ):
+        if crawled_at and (entry["last_crawled_at"] is None or crawled_at > entry["last_crawled_at"]):
             entry["last_crawled_at"] = crawled_at
-
-    _ = func  # imported for symmetry with the rest of the codebase's query style
-
+    _ = func
     return {
         "count": len(sites),
         "websites": [
             {
                 **site,
-                "last_crawled_at": (
-                    site["last_crawled_at"].isoformat() if site["last_crawled_at"] else None
-                ),
+                "last_crawled_at": site["last_crawled_at"].isoformat() if site["last_crawled_at"] else None,
             }
             for site in sorted(sites.values(), key=lambda s: s["domain"])
         ],
@@ -115,175 +52,76 @@ def list_websites(
 
 
 class WebsiteIngestRequest(BaseModel):
-
-    website_url: HttpUrl
+    website_url: str = Field(min_length=1, max_length=2048)
 
 
 @router.post("/ingest")
 async def ingest_website(
     payload: WebsiteIngestRequest,
-    store: Store = Depends(
-        get_current_store
-    ),
+    store: Store = Depends(get_current_store),
+    db: Session = Depends(get_db),
 ):
-
     require_feature(store, FEATURE_KNOWLEDGE_BASE)
-
-    service = KnowledgeService(
-        settings.database_url
-    )
-
     try:
-        result = await service.ingest(
-            store_id=store.id,
-            website_url=str(
-                payload.website_url
-            ),
-        )
-    except ValueError as exc:
-        # SSRF guard: private/internal/unresolvable targets are
-        # refused by the crawler. A client mistake — 400, not 500.
-        raise HTTPException(
-            status_code=400,
-            detail=str(exc),
-        ) from exc
-
-    return result
+        ds, message_id = await _queue_website(payload.website_url, "Website", db, store)
+    except HTTPException:
+        raise
+    except (ValueError, ConnectionError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": "queued",
+        "datasource_id": ds.id,
+        "message_id": message_id,
+        "pages_found": 0,
+        "pages_created": 0,
+        "chunks_created": 0,
+        "products_found": 0,
+        "message": "Website crawl queued; poll the datasource status for results.",
+    }
 
 
 @router.post("/search")
 async def search_knowledge(
     payload: KnowledgeSearchRequest,
-    store: Store = Depends(
-        get_current_store
-    ),
+    store: Store = Depends(get_current_store),
 ):
-
-    engine = KnowledgeSearchEngine(
-        settings.database_url
-    )
-
-    results = engine.search(
-        store_id=store.id,
-        query=payload.query,
-        limit=payload.limit,
-    )
-
-    return {
-        "count": len(results),
-        "results": [
-            result.model_dump()
-            for result in results
-        ],
-    }
+    engine = KnowledgeSearchEngine(settings.database_url)
+    results = engine.search(store_id=store.id, query=payload.query, limit=payload.limit)
+    return {"count": len(results), "results": [result.model_dump() for result in results]}
 
 
 @router.post("/embeddings/generate")
-async def generate_embeddings(
-    store: Store = Depends(
-        get_current_store
-    ),
-):
+async def generate_embeddings(store: Store = Depends(get_current_store)):
     try:
-        service = KnowledgeEmbeddingService(
-            settings.database_url
-        )
+        service = KnowledgeEmbeddingService(settings.database_url)
     except RuntimeError as exc:
-        # sentence-transformers not installed.
-        raise HTTPException(
-            status_code=503,
-            detail=str(exc),
-        )
-
-    count = (
-        service.generate_missing_embeddings(
-            store_id=store.id
-        )
-    )
-
-    return {
-        "embeddings_created": count,
-    }
+        raise HTTPException(status_code=503, detail=str(exc))
+    count = service.generate_missing_embeddings(store_id=store.id)
+    return {"embeddings_created": count}
 
 
 @router.post("/semantic-search")
 async def semantic_search(
     payload: KnowledgeSearchRequest,
-    store: Store = Depends(
-        get_current_store
-    ),
+    store: Store = Depends(get_current_store),
 ):
     try:
-        engine = VectorKnowledgeSearch(
-            settings.database_url
-        )
+        engine = VectorKnowledgeSearch(settings.database_url)
+        results = engine.search(store_id=store.id, query=payload.query, limit=payload.limit)
     except RuntimeError as exc:
-        # sentence-transformers not installed.
-        raise HTTPException(
-            status_code=503,
-            detail=str(exc),
-        )
-
-    results = engine.search(
-        store_id=store.id,
-        query=payload.query,
-        limit=payload.limit,
-    )
-
-    return {
-        "count": len(results),
-        "results": results,
-    }
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"count": len(results), "results": results}
 
 
 @router.post("/hybrid-search")
 async def hybrid_search(
     payload: KnowledgeSearchRequest,
-    store: Store = Depends(
-        get_current_store
-    ),
+    store: Store = Depends(get_current_store),
 ):
-
     try:
-        # Construction can already raise: the hybrid engine
-        # instantiates the vector path, which requires
-        # sentence-transformers. Cover BOTH construction and
-        # search with the same graceful-degradation contract.
-        engine = HybridKnowledgeSearch(
-            settings.database_url
-        )
-
-        results = engine.search(
-            store_id=api_key.store_id,
-            query=payload.query,
-            limit=payload.limit,
-        )
+        engine = HybridKnowledgeSearch(settings.database_url)
+        results = engine.search(store_id=store.id, query=payload.query, limit=payload.limit)
     except RuntimeError as exc:
-        # sentence-transformers not installed — same graceful
-        # degradation contract as /semantic-search.
-        raise HTTPException(
-            status_code=503,
-            detail=str(exc),
-        ) from exc
-
-    normalized = []
-
-    for result in results:
-
-        if hasattr(
-            result,
-            "model_dump",
-        ):
-
-            normalized.append(
-                result.model_dump()
-            )
-
-        else:
-
-            normalized.append(result)
-
-    return {
-        "count": len(normalized),
-        "results": normalized,
-    }
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    normalized = [result.model_dump() if hasattr(result, "model_dump") else result for result in results]
+    return {"count": len(normalized), "results": normalized}
