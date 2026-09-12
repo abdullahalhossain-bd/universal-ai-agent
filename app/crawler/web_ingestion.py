@@ -80,9 +80,10 @@ def extract_products_from_structured_data(structured: list[dict], page_url: str)
     return [row for row in rows if row.get("name")]
 
 
-async def ingest_website(db, store, datasource, *, max_pages: int | None = None, max_depth: int = 5):
+async def ingest_website(db, store, datasource, *, max_pages: int | None = None, max_depth: int | None = None):
     limits = get_crawl_limits(store.plan)
-    page_limit = max_pages or int(limits.get("max_pages", 100))
+    page_limit = max_pages or int(limits.get("max_pages", settings.crawler_max_pages))
+    depth_limit = settings.crawler_max_depth if max_depth is None else max(0, int(max_depth))
     progress_key = f"crawl_progress:{store.id}:{datasource.id}"
     progress = redis.from_url(settings.redis_url, decode_responses=True)
     last_progress = {"pages_crawled": 0, "pages_failed": 0, "queued": 0, "max_pages": page_limit}
@@ -97,10 +98,14 @@ async def ingest_website(db, store, datasource, *, max_pages: int | None = None,
 
     await report(last_progress)
     try:
-        pages = await WebsiteCrawler(max_pages=page_limit, max_depth=max_depth).crawl(
-            datasource.connection_url,
-            progress_callback=report,
+        crawler = WebsiteCrawler(
+            max_pages=page_limit,
+            max_depth=depth_limit,
+            concurrency=settings.crawler_concurrency,
+            requests_per_second=settings.crawler_requests_per_second,
+            max_retries=settings.crawler_max_retries,
         )
+        pages = await crawler.crawl(datasource.connection_url, progress_callback=report)
         product_rows = []
         seen_products = set()
         chunker = TextChunker()
@@ -120,11 +125,10 @@ async def ingest_website(db, store, datasource, *, max_pages: int | None = None,
                 continue
             canonical_url = _canonical_url(page["url"], datasource.connection_url)
             content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-            existing = (
-                db.query(KnowledgePage)
-                .filter(KnowledgePage.store_id == store.id, KnowledgePage.url == canonical_url)
-                .first()
-            )
+            existing = db.query(KnowledgePage).filter(
+                KnowledgePage.store_id == store.id,
+                KnowledgePage.url == canonical_url,
+            ).first()
             page_type = classify_page(canonical_url, page.get("title"), content, structured)
 
             if existing and existing.content_hash == content_hash:
@@ -238,10 +242,6 @@ async def run_website_sync(job: dict):
         ds.last_sync_status = status
         ds.last_sync_error = run.error
         db.commit()
-
-        # Data-quality/partial results are durable and should not cause the worker
-        # to crawl the entire site again. Infrastructure exceptions still raise and
-        # are retried by the durable queue.
         return SimpleNamespace(
             created=result["products_created"],
             updated=result["products_updated"],
