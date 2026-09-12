@@ -34,6 +34,10 @@ def list_datasources(db:Session=Depends(get_db),store:Store=Depends(get_current_
  require_feature(store,FEATURE_DATABASE_SYNC);items=DataSourceService(db).list_for_store(store.id);return {"count":len(items),"items":[public_datasource_dict(ds) for ds in items]}
 @router.post("/debug/egress-ip")
 async def debug_egress_ip(store:Store=Depends(get_current_store)):
+ # Debug-only: blocked in production/prod environments.
+ env={(settings.environment or "").lower().strip(),(settings.app_env or "").lower().strip()}
+ if env.intersection({"production","prod"}):
+  raise HTTPException(status_code=404,detail="Not found")
  require_feature(store,FEATURE_DATABASE_SYNC);import httpx
  try:
   async with httpx.AsyncClient(timeout=8) as client:r=await client.get("https://api.ipify.org?format=json");r.raise_for_status();return {"egress_ip":r.json().get("ip")}
