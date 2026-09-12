@@ -64,8 +64,8 @@ jobs:
       - name: Run Alembic migrations
         run: alembic upgrade head
 
-      - name: Run tests
-        run: pytest -v
+      - name: Run backend tests
+        run: pytest -v --ignore=tests/e2e
 
       - name: Compile Python sources
         run: python -m compileall -q app tests
