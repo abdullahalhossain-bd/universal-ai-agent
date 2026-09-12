@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 from urllib.parse import urlparse
 
@@ -21,16 +20,9 @@ router = APIRouter(prefix="/v1/knowledge", tags=["Knowledge"])
 
 
 @router.get("/websites")
-def list_websites(
-    store: Store = Depends(get_current_store),
-    db: Session = Depends(get_db),
-):
+def list_websites(store: Store = Depends(get_current_store), db: Session = Depends(get_db)):
     """Dashboard-facing, strictly store-scoped website knowledge summary."""
-    pages = (
-        db.query(KnowledgePage.url, KnowledgePage.title, KnowledgePage.crawled_at)
-        .filter(KnowledgePage.store_id == store.id)
-        .all()
-    )
+    pages = db.query(KnowledgePage.url, KnowledgePage.title, KnowledgePage.crawled_at).filter(KnowledgePage.store_id == store.id).all()
     sites: dict[str, dict] = {}
     for url, title, crawled_at in pages:
         domain = urlparse(url).netloc or url
@@ -38,17 +30,7 @@ def list_websites(
         entry["page_count"] += 1
         if crawled_at and (entry["last_crawled_at"] is None or crawled_at > entry["last_crawled_at"]):
             entry["last_crawled_at"] = crawled_at
-    _ = func
-    return {
-        "count": len(sites),
-        "websites": [
-            {
-                **site,
-                "last_crawled_at": site["last_crawled_at"].isoformat() if site["last_crawled_at"] else None,
-            }
-            for site in sorted(sites.values(), key=lambda s: s["domain"])
-        ],
-    }
+    return {"count": len(sites), "websites": [{**site, "last_crawled_at": site["last_crawled_at"].isoformat() if site["last_crawled_at"] else None} for site in sorted(sites.values(), key=lambda s: s["domain"])]}
 
 
 class WebsiteIngestRequest(BaseModel):
@@ -56,35 +38,19 @@ class WebsiteIngestRequest(BaseModel):
 
 
 @router.post("/ingest")
-async def ingest_website(
-    payload: WebsiteIngestRequest,
-    store: Store = Depends(get_current_store),
-    db: Session = Depends(get_db),
-):
+async def ingest_website(payload: WebsiteIngestRequest, store: Store = Depends(get_current_store), db: Session = Depends(get_db)):
     require_feature(store, FEATURE_KNOWLEDGE_BASE)
     try:
-        ds, message_id = await _queue_website(payload.website_url, "Website", db, store)
+        ds, message_id = await _queue_website(payload.website_url, "Website", db, store, required_feature=FEATURE_KNOWLEDGE_BASE)
     except HTTPException:
         raise
     except (ValueError, ConnectionError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {
-        "status": "queued",
-        "datasource_id": ds.id,
-        "message_id": message_id,
-        "pages_found": 0,
-        "pages_created": 0,
-        "chunks_created": 0,
-        "products_found": 0,
-        "message": "Website crawl queued; poll the datasource status for results.",
-    }
+    return {"status": "queued", "datasource_id": ds.id, "message_id": message_id, "pages_found": 0, "pages_created": 0, "chunks_created": 0, "products_found": 0, "message": "Website crawl queued; poll the datasource status for results."}
 
 
 @router.post("/search")
-async def search_knowledge(
-    payload: KnowledgeSearchRequest,
-    store: Store = Depends(get_current_store),
-):
+async def search_knowledge(payload: KnowledgeSearchRequest, store: Store = Depends(get_current_store)):
     engine = KnowledgeSearchEngine(settings.database_url)
     results = engine.search(store_id=store.id, query=payload.query, limit=payload.limit)
     return {"count": len(results), "results": [result.model_dump() for result in results]}
@@ -101,10 +67,7 @@ async def generate_embeddings(store: Store = Depends(get_current_store)):
 
 
 @router.post("/semantic-search")
-async def semantic_search(
-    payload: KnowledgeSearchRequest,
-    store: Store = Depends(get_current_store),
-):
+async def semantic_search(payload: KnowledgeSearchRequest, store: Store = Depends(get_current_store)):
     try:
         engine = VectorKnowledgeSearch(settings.database_url)
         results = engine.search(store_id=store.id, query=payload.query, limit=payload.limit)
@@ -114,10 +77,7 @@ async def semantic_search(
 
 
 @router.post("/hybrid-search")
-async def hybrid_search(
-    payload: KnowledgeSearchRequest,
-    store: Store = Depends(get_current_store),
-):
+async def hybrid_search(payload: KnowledgeSearchRequest, store: Store = Depends(get_current_store)):
     try:
         engine = HybridKnowledgeSearch(settings.database_url)
         results = engine.search(store_id=store.id, query=payload.query, limit=payload.limit)
