@@ -113,7 +113,7 @@ async def resync_website(datasource_id: str, db: Session = Depends(get_db), stor
 
 @router.get("/{datasource_id}/status")
 async def website_status(datasource_id: str, db: Session = Depends(get_db), store: Store = Depends(get_current_store)):
-    require_feature(store, FEATURE_DATABASE_SYNC)
+    require_feature(store, FEATURE_KNOWLEDGE_BASE)
     ds = DataSourceService(db).get(store.id, datasource_id)
     if ds is None or ds.connector_type != "website":
         raise HTTPException(404, detail="website datasource not found")
