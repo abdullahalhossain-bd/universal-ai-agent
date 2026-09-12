@@ -1,0 +1,15 @@
+{
+  "completed_requests": 500,
+  "concurrency": 50,
+  "elapsed_seconds": 3.283,
+  "latency_ms": {
+    "p50": 208.89,
+    "p95": 358.99,
+    "p99": 386.85
+  },
+  "requests": 500,
+  "results": {
+    "200": 500
+  },
+  "rps": 152.3
+}

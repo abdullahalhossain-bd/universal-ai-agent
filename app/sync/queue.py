@@ -123,6 +123,29 @@ class SyncQueue:
     async def ack(self, message_id):
         await self.redis.xack(STREAM, GROUP, message_id)
 
+    async def _dead_letter(self, message_id, job, attempt, error, retry_group_id=""):
+        script = """
+        redis.call('xadd', KEYS[1], '*',
+            'job', ARGV[1],
+            'attempt', ARGV[2],
+            'error', ARGV[3],
+            'source_message_id', ARGV[4],
+            'retry_group_id', ARGV[5])
+        return redis.call('xack', KEYS[2], ARGV[6], ARGV[4])
+        """
+        return await self.redis.eval(
+            script,
+            2,
+            DLQ_STREAM,
+            STREAM,
+            json.dumps(job, separators=(",", ":"), sort_keys=True),
+            str(attempt),
+            str(error)[:4000],
+            message_id,
+            str(retry_group_id),
+            GROUP,
+        )
+
     async def requeue_or_dlq(self, message_id, job, attempt, error):
         attempt = int(attempt)
         group_id = str(job.get("_retry_group_id") or uuid.uuid4())
@@ -130,14 +153,7 @@ class SyncQueue:
         base_job["_retry_group_id"] = group_id
         base_job["_retry_attempt"] = attempt
         if attempt >= MAX_ATTEMPTS:
-            await self.redis.xadd(DLQ_STREAM, {
-                "job": json.dumps(base_job, separators=(",", ":"), sort_keys=True),
-                "attempt": str(attempt),
-                "error": str(error)[:4000],
-                "source_message_id": message_id,
-                "retry_group_id": group_id,
-            })
-            await self.ack(message_id)
+            await self._dead_letter(message_id, base_job, attempt, error, group_id)
             return "dead_letter"
         delayed_entry = {
             "job": json.dumps(base_job, separators=(",", ":"), sort_keys=True),
@@ -146,8 +162,20 @@ class SyncQueue:
             "retry_group_id": group_id,
         }
         raw = json.dumps(delayed_entry, separators=(",", ":"), sort_keys=True)
-        await self.redis.zadd(DELAYED_KEY, {raw: time.time() + retry_delay(attempt)})
-        await self.ack(message_id)
+        script = """
+        redis.call('zadd', KEYS[1], ARGV[1], ARGV[2])
+        return redis.call('xack', KEYS[2], ARGV[3], ARGV[4])
+        """
+        await self.redis.eval(
+            script,
+            2,
+            DELAYED_KEY,
+            STREAM,
+            time.time() + retry_delay(attempt),
+            raw,
+            GROUP,
+            message_id,
+        )
         return "retry"
 
     async def defer_message(self, message_id, job, attempt, delay: float = 1.0):
@@ -160,8 +188,20 @@ class SyncQueue:
             "retry_group_id": str(payload.get("_retry_group_id") or uuid.uuid4()),
         }
         raw = json.dumps(delayed_entry, separators=(",", ":"), sort_keys=True)
-        await self.redis.zadd(DELAYED_KEY, {raw: time.time() + max(0.25, float(delay))})
-        await self.ack(message_id)
+        script = """
+        redis.call('zadd', KEYS[1], ARGV[1], ARGV[2])
+        return redis.call('xack', KEYS[2], ARGV[3], ARGV[4])
+        """
+        await self.redis.eval(
+            script,
+            2,
+            DELAYED_KEY,
+            STREAM,
+            time.time() + max(0.25, float(delay)),
+            raw,
+            GROUP,
+            message_id,
+        )
 
     async def stats(self) -> dict[str, int]:
         try:
@@ -185,15 +225,16 @@ class SyncQueue:
                     raise ValueError("job payload is not an object")
                 attempt = int(fields.get("attempt", payload.get("_retry_attempt", 0)))
                 payload["_retry_attempt"] = attempt
+                if fields.get("retry_group_id"):
+                    payload["_retry_group_id"] = fields["retry_group_id"]
                 out.append((message_id, payload, attempt))
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 logger.error("Dead-lettering malformed sync queue message=%s error=%s", message_id, exc)
-                await self.redis.xadd(DLQ_STREAM, {
-                    "job": str(fields.get("job", ""))[:10000],
-                    "attempt": str(fields.get("attempt", "0")),
-                    "error": f"malformed queue message: {exc}"[:4000],
-                    "source_message_id": message_id,
-                    "retry_group_id": str(fields.get("retry_group_id", "")),
-                })
-                await self.ack(message_id)
+                await self._dead_letter(
+                    message_id,
+                    {"raw_job": str(fields.get("job", ""))[:10000]},
+                    fields.get("attempt", "0"),
+                    f"malformed queue message: {exc}",
+                    fields.get("retry_group_id", ""),
+                )
         return out

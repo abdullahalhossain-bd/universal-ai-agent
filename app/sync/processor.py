@@ -17,13 +17,17 @@ from app.sync.media_health import verify_and_persist_media_health
 
 logger = logging.getLogger("app.sync.processor")
 
+
+class SyncJobTerminalError(Exception):
+    """A queued job no longer has an active datasource to process."""
+
 def _resolve_job(job, db):
     store_id = job.get("store_id") or job.get("tenant_id"); datasource_id = job.get("datasource_id")
     if not datasource_id:
         return {"store_id": store_id, "datasource_id": None, "connector_type": job.get("connector_type"), "connection_url": job.get("connection_url"), "api_base_url": job.get("api_base_url"), "table_name": job.get("table_name"), "mapping": job.get("mapping") or {}, "full_sync": bool(job.get("full_sync", True)), "job_type": job.get("job_type", "product_sync")}
     ds = db.query(DataSource).filter(DataSource.id == datasource_id, DataSource.store_id == store_id).first()
-    if ds is None: raise LookupError(f"datasource {datasource_id} not found for store {store_id}")
-    if not ds.active: raise PermissionError(f"datasource {datasource_id} is inactive")
+    if ds is None: raise SyncJobTerminalError(f"datasource {datasource_id} not found for store {store_id}")
+    if not ds.active: raise SyncJobTerminalError(f"datasource {datasource_id} is inactive")
     decrypted = get_credential_store().decrypt(ds.connection_url) if ds.connection_url else None
     return {"store_id": store_id, "datasource_id": ds.id, "connector_type": ds.connector_type, "connection_url": decrypted or job.get("connection_url"), "api_base_url": ds.api_base_url, "table_name": ds.table_name or job.get("table_name"), "mapping": ds.mapping or job.get("mapping") or {}, "full_sync": bool(ds.full_sync if "full_sync" not in job else job.get("full_sync", True)), "job_type": job.get("job_type", "product_sync")}
 
@@ -187,5 +191,11 @@ async def process_sync(job):
         # Queue is the authoritative retry layer. Keeping this call to one
         # execution prevents processor+queue retry multiplication.
         return await run_with_retry(attempt_once, attempts=1, base_delay=1.0, max_delay=15.0, logger=logger)
+    except SyncJobTerminalError as exc:
+        store_id = job.get("store_id") or job.get("tenant_id") or ""
+        result = SyncResult(store_id=store_id)
+        result.errors.append(str(exc))
+        result.data_quality["terminal"] = "datasource_inactive_or_deleted"
+        return result
     except Exception as exc:
         store_id = job.get("store_id") or job.get("tenant_id") or ""; result = SyncResult(store_id=store_id); result.errors.append(str(exc)); result.data_quality["retry"] = {"retry_group_id": group_id, "attempts": attempt[0], "exhausted": True}; return result

@@ -78,6 +78,16 @@ async def run_worker(redis_url: str | None = None):
                 result = await process_sync(job)
 
             if result.errors:
+                if result.data_quality.get("terminal"):
+                    await queue.ack(message_id)
+                    await queue.clear_enqueue_marker(datasource_id)
+                    logger.info(
+                        "Sync skipped terminal datasource=%s message=%s reason=%s",
+                        datasource_id,
+                        message_id,
+                        result.data_quality["terminal"],
+                    )
+                    return
                 outcome = await queue.requeue_or_dlq(
                     message_id, job, attempt + 1, "; ".join(result.errors)
                 )
