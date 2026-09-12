@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, Check, Copy, Database, Globe, KeyRound, Code2, ExternalLink } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { api, ApiError } from '../api/client'
+import { api, getApiErrorMessage } from '../api/client'
 import { Alert, Badge, Button, Card, Input, Spinner } from '../components/ui'
 
 const STEPS = [
@@ -10,6 +10,17 @@ const STEPS = [
   { id: 'api', label: 'API key', icon: KeyRound },
   { id: 'install', label: 'Install', icon: Code2 },
 ]
+
+function normalizeWebsiteUrl(value) {
+  const raw = String(value || '').trim()
+  if (!raw) throw new Error('Please enter a website URL.')
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`
+  let parsed
+  try { parsed = new URL(candidate) } catch { throw new Error('Please enter a valid website URL, such as https://example.com.') }
+  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) throw new Error('Website URL must use http or https.')
+  if (parsed.username || parsed.password) throw new Error('Website URL must not contain a username or password.')
+  return parsed.toString()
+}
 
 export default function Onboarding() {
   const navigate = useNavigate()
@@ -72,11 +83,12 @@ export default function Onboarding() {
     setWorking(true)
     setError('')
     try {
-      const result = await api.post('/v1/knowledge/ingest', { website_url: websiteUrl })
+      const normalized = normalizeWebsiteUrl(websiteUrl)
+      const result = await api.post('/v1/knowledge/ingest', { website_url: normalized })
       setWebsiteState((current) => ({ ...(current || {}), count: Math.max(1, current?.count || 0), websites: current?.websites || [], lastResult: result }))
       setStep(1)
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : 'We could not crawl that website.')
+      setError(getApiErrorMessage(err, 'We could not queue that website.'))
     } finally {
       setWorking(false)
     }
@@ -102,7 +114,7 @@ export default function Onboarding() {
       setDatasource(created)
       setStep(2)
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : err.message || 'We could not connect to that database.')
+      setError(getApiErrorMessage(err, 'We could not connect to that database.'))
     } finally {
       setWorking(false)
     }
@@ -116,7 +128,7 @@ export default function Onboarding() {
       setIssuedKey(created.api_key)
       setKeys((current) => [...current, created])
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : 'Failed to create API key.')
+      setError(getApiErrorMessage(err, 'Failed to create API key.'))
     } finally {
       setWorking(false)
     }
@@ -140,129 +152,49 @@ export default function Onboarding() {
         <div className="mb-8 text-center">
           <Badge tone="accent">Quick setup</Badge>
           <h1 className="mt-3 font-display text-3xl font-semibold">Get your AI agent live</h1>
-          <p className="mx-auto mt-2 max-w-xl text-sm text-muted">
-            Connect your storefront and product database, create an API key, then install the chat widget.
-          </p>
+          <p className="mx-auto mt-2 max-w-xl text-sm text-muted">Connect your storefront and product database, create an API key, then install the chat widget.</p>
         </div>
 
         <div className="mb-6 grid grid-cols-2 gap-2 md:grid-cols-4">
           {STEPS.map((item, index) => {
             const Icon = item.icon
             const complete = index < step
-            return (
-              <button key={item.id} type="button" onClick={() => index <= step && setStep(index)} className={`rounded-lg border px-3 py-3 text-left ${index === step ? 'border-accent bg-accent-soft' : 'border-line bg-card'}`}>
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  {complete ? <Check size={16} /> : <Icon size={16} />}
-                  {index + 1}. {item.label}
-                </div>
-              </button>
-            )
+            return <button key={item.id} type="button" onClick={() => index <= step && setStep(index)} className={`rounded-lg border px-3 py-3 text-left ${index === step ? 'border-accent bg-accent-soft' : 'border-line bg-card'}`}><div className="flex items-center gap-2 text-sm font-medium">{complete ? <Check size={16} /> : <Icon size={16} />}{index + 1}. {item.label}</div></button>
           })}
         </div>
 
         {error && <div className="mb-5"><Alert>{error}</Alert></div>}
 
         <Card className="p-6">
-          {step === 0 && (
-            <>
-              <h2 className="font-display text-xl font-semibold">Connect your website</h2>
-              <p className="mt-1 text-sm text-muted">We will crawl your storefront so the assistant can answer questions about products, policies, and shipping.</p>
-              <div className="mt-6">
-                <Input label="Website URL" type="url" required value={websiteUrl} onChange={(e) => setWebsiteUrl(e.target.value)} placeholder="https://yourstore.com" />
-              </div>
-              {hasWebsite && <p className="mt-3 text-sm text-success">✓ A website is already connected. You can re-crawl it or continue.</p>}
-              <div className="mt-6 flex justify-end gap-2">
-                <Button variant="secondary" onClick={() => setStep(1)}>Skip for now</Button>
-                <Button onClick={connectWebsite} disabled={working || !websiteUrl}>
-                  {working && <Spinner />}{working ? 'Crawling…' : hasWebsite ? 'Re-crawl & continue' : 'Connect & continue'} <ArrowRight size={16} />
-                </Button>
-              </div>
-            </>
-          )}
+          {step === 0 && <>
+            <h2 className="font-display text-xl font-semibold">Connect your website</h2>
+            <p className="mt-1 text-sm text-muted">We will crawl your storefront so the assistant can answer questions about products, policies, and shipping.</p>
+            <div className="mt-6"><Input label="Website URL" type="url" required value={websiteUrl} onChange={(e) => setWebsiteUrl(e.target.value)} placeholder="https://yourstore.com" /></div>
+            {hasWebsite && <p className="mt-3 text-sm text-success">✓ A website is already connected. You can re-crawl it or continue.</p>}
+            <div className="mt-6 flex justify-end gap-2"><Button variant="secondary" onClick={() => setStep(1)}>Skip for now</Button><Button onClick={connectWebsite} disabled={working || !websiteUrl.trim()}>{working && <Spinner />}{working ? 'Starting…' : hasWebsite ? 'Re-crawl & continue' : 'Connect & continue'} <ArrowRight size={16} /></Button></div>
+          </>}
 
-          {step === 1 && (
-            <>
-              <h2 className="font-display text-xl font-semibold">Connect your product database</h2>
-              <p className="mt-1 text-sm text-muted">Validate the connection first, then save it for catalog syncing.</p>
-              {hasDatabase ? (
-                <div className="mt-6 rounded-lg border border-line bg-paper p-4">
-                  <div className="font-medium">{datasource.name}</div>
-                  <div className="mt-1 text-sm text-muted">{datasource.connector_type} · {datasource.table_name || 'No table selected'}</div>
-                  <div className="mt-2 text-sm text-success">✓ Database connected</div>
-                </div>
-              ) : (
-                <div className="mt-6 space-y-4">
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <Input label="Connection name" value={db.name} onChange={setField('name')} />
-                    <label className="block"><span className="mb-1.5 block text-sm font-medium">Database</span><select value={db.connector_type} onChange={setField('connector_type')} className="w-full rounded-lg border border-line bg-white px-3.5 py-2.5 text-sm"><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option></select></label>
-                  </div>
-                  <Input label="Connection URL" type="password" value={db.connection_url} onChange={setField('connection_url')} placeholder="postgresql://user:password@host:5432/dbname" />
-                  <Input label="Product table (optional)" value={db.table_name} onChange={setField('table_name')} placeholder="products" />
-                  <p className="text-xs text-muted">The API encrypts the saved connection URL and redacts secrets from responses.</p>
-                </div>
-              )}
-              <div className="mt-6 flex justify-between gap-2">
-                <Button variant="secondary" onClick={() => setStep(0)}>Back</Button>
-                {hasDatabase ? <Button onClick={() => setStep(2)}>Continue <ArrowRight size={16} /></Button> : <Button onClick={connectDatabase} disabled={working || !db.connection_url}>{working && <Spinner />}{working ? 'Connecting…' : 'Test & connect'} <ArrowRight size={16} /></Button>}
-              </div>
-            </>
-          )}
+          {step === 1 && <>
+            <h2 className="font-display text-xl font-semibold">Connect your product database</h2>
+            <p className="mt-1 text-sm text-muted">Validate the connection first, then save it for catalog syncing.</p>
+            {hasDatabase ? <div className="mt-6 rounded-lg border border-line bg-paper p-4"><div className="font-medium">{datasource.name}</div><div className="mt-1 text-sm text-muted">{datasource.connector_type} · {datasource.table_name || 'No table selected'}</div><div className="mt-2 text-sm text-success">✓ Database connected</div></div> : <div className="mt-6 space-y-4"><div className="grid gap-4 md:grid-cols-2"><Input label="Connection name" value={db.name} onChange={setField('name')} /><label className="block"><span className="mb-1.5 block text-sm font-medium">Database</span><select value={db.connector_type} onChange={setField('connector_type')} className="w-full rounded-lg border border-line bg-white px-3.5 py-2.5 text-sm"><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option></select></label></div><Input label="Connection URL" type="password" value={db.connection_url} onChange={setField('connection_url')} placeholder="postgresql://user:password@host:5432/dbname" /><Input label="Product table (optional)" value={db.table_name} onChange={setField('table_name')} placeholder="products" /><p className="text-xs text-muted">The API encrypts the saved connection URL and redacts secrets from responses.</p></div>}
+            <div className="mt-6 flex justify-between gap-2"><Button variant="secondary" onClick={() => setStep(0)}>Back</Button>{hasDatabase ? <Button onClick={() => setStep(2)}>Continue <ArrowRight size={16} /></Button> : <Button onClick={connectDatabase} disabled={working || !db.connection_url}>{working && <Spinner />}{working ? 'Connecting…' : 'Test & connect'} <ArrowRight size={16} /></Button>}</div>
+          </>}
 
-          {step === 2 && (
-            <>
-              <h2 className="font-display text-xl font-semibold">Your API key</h2>
-              <p className="mt-1 text-sm text-muted">Use an active key to authenticate the chat widget on your storefront.</p>
-              {issuedKey ? (
-                <div className="mt-6 rounded-lg border border-accent/30 bg-accent-soft/40 p-4">
-                  <div className="text-xs font-medium uppercase tracking-wide text-muted">Copy now — shown once</div>
-                  <div className="mt-2 flex items-center gap-2 rounded-lg border border-line bg-white p-3">
-                    <code className="min-w-0 flex-1 truncate text-sm">{issuedKey}</code>
-                    <Button size="sm" variant="secondary" onClick={() => copyText(issuedKey)}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? 'Copied' : 'Copy'}</Button>
-                  </div>
-                </div>
-              ) : activeKey ? (
-                <div className="mt-6 rounded-lg border border-line bg-paper p-4">
-                  <div className="flex items-center gap-2 text-sm font-medium"><Check size={16} /> API key already active</div>
-                  <p className="mt-1 text-xs text-muted">For security, the full existing key cannot be displayed again.</p>
-                  <Button className="mt-4" onClick={createKey} disabled={working}>{working && <Spinner />}{working ? 'Creating…' : 'Create a new install key'}</Button>
-                </div>
-              ) : (
-                <div className="mt-6 rounded-lg border border-line bg-paper p-4"><p className="text-sm text-muted">Create a production widget key to finish setup.</p><Button className="mt-4" onClick={createKey} disabled={working}>{working && <Spinner />}{working ? 'Creating…' : 'Create API key'}</Button></div>
-              )}
-              <div className="mt-6 flex justify-between gap-2"><Button variant="secondary" onClick={() => setStep(1)}>Back</Button><Button onClick={() => setStep(3)}>Continue <ArrowRight size={16} /></Button></div>
-            </>
-          )}
+          {step === 2 && <>
+            <h2 className="font-display text-xl font-semibold">Your API key</h2>
+            <p className="mt-1 text-sm text-muted">Use an active key to authenticate the chat widget on your storefront.</p>
+            {issuedKey ? <div className="mt-6 rounded-lg border border-accent/30 bg-accent-soft/40 p-4"><div className="text-xs font-medium uppercase tracking-wide text-muted">Copy now — shown once</div><div className="mt-2 flex items-center gap-2 rounded-lg border border-line bg-white p-3"><code className="min-w-0 flex-1 truncate text-sm">{issuedKey}</code><Button size="sm" variant="secondary" onClick={() => copyText(issuedKey)}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? 'Copied' : 'Copy'}</Button></div></div> : activeKey ? <div className="mt-6 rounded-lg border border-line bg-paper p-4"><div className="flex items-center gap-2 text-sm font-medium"><Check size={16} /> API key already active</div><p className="mt-1 text-xs text-muted">For security, the full existing key cannot be displayed again.</p><Button className="mt-4" onClick={createKey} disabled={working}>{working && <Spinner />}{working ? 'Creating…' : 'Create a new install key'}</Button></div> : <div className="mt-6 rounded-lg border border-line bg-paper p-4"><p className="text-sm text-muted">Create a production widget key to finish setup.</p><Button className="mt-4" onClick={createKey} disabled={working}>{working && <Spinner />}{working ? 'Creating…' : 'Create API key'}</Button></div>}
+            <div className="mt-6 flex justify-between gap-2"><Button variant="secondary" onClick={() => setStep(1)}>Back</Button><Button onClick={() => setStep(3)}>Continue <ArrowRight size={16} /></Button></div>
+          </>}
 
-          {step === 3 && (
-            <>
-              <h2 className="font-display text-xl font-semibold">Install the chat widget</h2>
-              <p className="mt-1 text-sm text-muted">Paste this snippet before the closing <code>&lt;/body&gt;</code> tag on your storefront.</p>
-              {installCode ? (
-                <div className="mt-6">
-                  <div className="rounded-lg border border-line bg-[#111] p-4 text-xs text-white">
-                    <pre className="overflow-x-auto whitespace-pre-wrap break-all">{installCode}</pre>
-                  </div>
-                  <Button className="mt-3" onClick={() => copyText(installCode)} variant="secondary">{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? 'Copied' : 'Copy install code'}</Button>
-                  <div className="mt-5 rounded-lg border border-line bg-paper p-4">
-                    <div className="flex items-center gap-2 text-sm font-medium"><Check size={16} /> Ready to install</div>
-                    <p className="mt-1 text-xs text-muted">Keep this API key private. It is intended for your storefront widget configuration.</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-6 rounded-lg border border-line bg-paper p-4">
-                  <p className="text-sm text-muted">You do not have a newly issued key available in this setup session.</p>
-                  <p className="mt-1 text-xs text-muted">Create a new key from API Keys so the full secret can be shown once and copied into this snippet.</p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <Button onClick={() => navigate('/api-keys')}>Open API Keys <ExternalLink size={15} /></Button>
-                    <Button variant="secondary" onClick={finish}>Finish setup</Button>
-                  </div>
-                </div>
-              )}
-              <div className="mt-6 flex justify-between gap-2"><Button variant="secondary" onClick={() => setStep(2)}>Back</Button><Button onClick={finish}>Go to dashboard <ArrowRight size={16} /></Button></div>
-            </>
-          )}
+          {step === 3 && <>
+            <h2 className="font-display text-xl font-semibold">Install the chat widget</h2>
+            <p className="mt-1 text-sm text-muted">Paste this snippet before the closing <code>&lt;/body&gt;</code> tag on your storefront.</p>
+            {installCode ? <div className="mt-6"><div className="rounded-lg border border-line bg-[#111] p-4 text-xs text-white"><pre className="overflow-x-auto whitespace-pre-wrap break-all">{installCode}</pre></div><Button className="mt-3" onClick={() => copyText(installCode)} variant="secondary">{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? 'Copied' : 'Copy install code'}</Button><div className="mt-5 rounded-lg border border-line bg-paper p-4"><div className="flex items-center gap-2 text-sm font-medium"><Check size={16} /> Ready to install</div><p className="mt-1 text-xs text-muted">Keep this API key private. It is intended for your storefront widget configuration.</p></div></div> : <div className="mt-6 rounded-lg border border-line bg-paper p-4"><p className="text-sm text-muted">You do not have a newly issued key available in this setup session.</p><p className="mt-1 text-xs text-muted">Create a new key from API Keys so the full secret can be shown once and copied into this snippet.</p><div className="mt-4 flex flex-wrap gap-2"><Button onClick={() => navigate('/api-keys')}>Open API Keys <ExternalLink size={15} /></Button><Button variant="secondary" onClick={finish}>Finish setup</Button></div></div>}
+            <div className="mt-6 flex justify-between gap-2"><Button variant="secondary" onClick={() => setStep(2)}>Back</Button><Button onClick={finish}>Go to dashboard <ArrowRight size={16} /></Button></div>
+          </>}
         </Card>
-
         <div className="mt-5 text-center text-xs text-muted">You can change these settings later from the dashboard.</div>
       </div>
     </div>
