@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 import redis.asyncio as redis
@@ -24,11 +24,27 @@ legacy_router = APIRouter(prefix="/v1/knowledge", tags=["Knowledge"])
 
 
 class WebsiteCreate(BaseModel):
-    url: str = Field(min_length=1, max_length=2048)
+    # /v1/websites uses `url`; the legacy /v1/knowledge/ingest contract uses
+    # `website_url`. Accept both at the boundary so router ordering cannot
+    # turn a valid dashboard payload into FastAPI's generic 422 response.
+    url: str | None = Field(default=None, min_length=1, max_length=2048)
+    website_url: str | None = Field(default=None, min_length=1, max_length=2048)
     name: str = Field(default="Website", min_length=1, max_length=120)
 
+    @model_validator(mode="after")
+    def require_one_url(self):
+        if not self.url and not self.website_url:
+            raise ValueError("website URL is required")
+        if self.url and self.website_url and self.url.strip() != self.website_url.strip():
+            raise ValueError("provide only one website URL")
+        return self
 
-def _validation_error(message: str, field: str = "url") -> HTTPException:
+    @property
+    def resolved_url(self) -> str:
+        return (self.website_url or self.url or "").strip()
+
+
+def _validation_error(message: str, field: str = "website_url") -> HTTPException:
     return HTTPException(
         status_code=422,
         detail={"error": "VALIDATION_ERROR", "message": message, "field": field},
@@ -85,7 +101,7 @@ async def _queue_website(url: str, name: str, db: Session, store: Store, *, requ
 @router.post("")
 async def add_website(payload: WebsiteCreate, db: Session = Depends(get_db), store: Store = Depends(get_current_store)):
     try:
-        ds, message_id = await _queue_website(payload.url, payload.name, db, store)
+        ds, message_id = await _queue_website(payload.resolved_url, payload.name, db, store)
     except HTTPException:
         raise
     except (ValueError, ConnectionError) as exc:
@@ -96,7 +112,7 @@ async def add_website(payload: WebsiteCreate, db: Session = Depends(get_db), sto
 @legacy_router.post("/ingest")
 async def legacy_website_ingest(payload: WebsiteCreate, db: Session = Depends(get_db), store: Store = Depends(get_current_store)):
     try:
-        ds, message_id = await _queue_website(payload.url, "Website", db, store, required_feature=FEATURE_KNOWLEDGE_BASE)
+        ds, message_id = await _queue_website(payload.resolved_url, "Website", db, store, required_feature=FEATURE_KNOWLEDGE_BASE)
     except HTTPException:
         raise
     except (ValueError, ConnectionError) as exc:
