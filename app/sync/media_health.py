@@ -30,14 +30,17 @@ async def verify_and_persist_media_health(db: Session, *, store_id: str, datasou
     cutoff = datetime.utcnow() - _recheck_after()
 
     while True:
+        # Apply the cursor predicate before LIMIT. SQLAlchemy 2.x rejects
+        # Query.filter() after LIMIT/OFFSET, which previously dead-lettered
+        # every multi-batch media-health sync in production.
         q = db.query(Product).filter(
             Product.store_id == store_id,
             Product.source_datasource_id == datasource_id,
             Product.is_active.is_(True),
-        ).order_by(Product.id).limit(batch_size)
+        )
         if last_id is not None:
             q = q.filter(Product.id > last_id)
-        products = q.all()
+        products = q.order_by(Product.id).limit(batch_size).all()
         if not products:
             break
         last_id = products[-1].id
