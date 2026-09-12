@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     trusted_proxies: str = ""
     crawler_max_page_bytes: int = 2_000_000
     crawler_max_pages: int = 50
+    crawler_max_depth: int = 5
+    crawler_concurrency: int = 8
+    crawler_requests_per_second: float = 4.0
+    crawler_max_retries: int = 3
     crawler_timeout_seconds: float = 15.0
     reservation_ttl_seconds: int = 300
     auto_create_tables: bool = True
