@@ -132,7 +132,11 @@ export default function Billing() {
                   <h3 className="font-display text-base font-semibold text-text">{plan.label}</h3>
                   {isCurrent && <Badge tone="accent">Current</Badge>}
                 </div>
-                <div className="mt-3 font-display text-2xl font-semibold text-text">${plan.monthly_budget.toFixed(0)}<span className="text-sm font-normal text-muted"> / mo budget</span></div>
+                <div className="mt-3 font-display text-2xl font-semibold text-text">
+                  {plan.billable
+                    ? <>${plan.monthly_budget.toFixed(0)}<span className="text-sm font-normal text-muted"> / mo budget</span></>
+                    : 'Free'}
+                </div>
                 <ul className="mt-4 space-y-2 text-sm text-muted">
                   <li className="flex items-center gap-2"><Check size={14} className="text-success" /> AI chat assistant</li>
                   <li className="flex items-center gap-2"><Check size={14} className="text-success" /> Website + product knowledge</li>
