@@ -15,12 +15,38 @@ def normalize_name(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip().casefold())
 
 
-def valid_http_url(value: object) -> bool:
-    if not isinstance(value, str) or not value.strip():
-        return False
+def normalize_http_url(value: object) -> str:
+    """Normalize a merchant-entered public website URL without weakening SSRF checks."""
+    if not isinstance(value, str):
+        raise ValueError("website URL must be a string")
+    raw = value.strip()
+    if not raw:
+        raise ValueError("website URL is required")
+    if any(ord(ch) < 32 for ch in raw):
+        raise ValueError("website URL contains invalid control characters")
+    candidate = raw if "://" in raw else f"https://{raw}"
     try:
-        parsed = urlparse(value.strip())
-        return parsed.scheme.casefold() in URL_SCHEMES and bool(parsed.netloc)
+        parsed = urlparse(candidate)
+        scheme = parsed.scheme.casefold()
+        if scheme not in URL_SCHEMES or not parsed.hostname:
+            raise ValueError("website URL must use http or https")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("website URL must not contain username or password")
+        # Accessing .port validates malformed/out-of-range ports.
+        _ = parsed.port
+        if any(ch.isspace() for ch in parsed.netloc):
+            raise ValueError("website URL contains invalid whitespace")
+    except ValueError as exc:
+        if str(exc).startswith("website URL"):
+            raise
+        raise ValueError("website URL is invalid") from exc
+    return candidate
+
+
+def valid_http_url(value: object) -> bool:
+    try:
+        normalize_http_url(value)
+        return True
     except ValueError:
         return False
 
@@ -58,45 +84,17 @@ def analyze_rows(rows: list[dict]) -> dict:
                 if float(stock) < 0: add("invalid_stock", product)
             except (TypeError, ValueError): add("invalid_stock", product)
         currency = product.get("currency")
-        if currency and str(currency).upper() not in VALID_CURRENCIES: add("invalid_currency", product)
-        url = product.get("product_url")
-        if url and not valid_http_url(url): add("malformed_url", product)
-        image = product.get("image_url")
-        if image and not valid_http_url(image): add("invalid_image_url", product)
-
-    duplicate_ids = {k: v for k, v in ids.items() if k and v > 1}
-    duplicate_skus = {k: v for k, v in skus.items() if v > 1}
-    duplicate_names = {k: v for k, v in names.items() if v > 1}
-    return {
-        "invalid": dict(invalid),
-        "duplicates": {
-            "duplicate_id_count": sum(v - 1 for v in duplicate_ids.values()),
-            "duplicate_sku_count": sum(v - 1 for v in duplicate_skus.values()),
-            "possible_duplicate_name_count": sum(v - 1 for v in duplicate_names.values()),
-            "sample_ids": list(duplicate_ids)[:20],
-            "sample_skus": list(duplicate_skus)[:20],
-            "sample_names": list(duplicate_names)[:20],
-        },
-    }
-
-
-def schema_analysis(raw: dict, previous_mapping: dict | None = None) -> dict:
-    current = discover_mapping_with_confidence(raw, previous_mapping or {})
-    previous = previous_mapping or {}
-    changes = []
-    for field, candidate in current.items():
-        old = previous.get(field)
-        old = old.get("column") if isinstance(old, dict) else old
-        if candidate and old and old != candidate["column"]:
-            changes.append({"field": field, "previous": old, "current": candidate["column"], "confidence_pct": candidate["confidence_pct"]})
-    return {"current": current, "changes": changes, "changed": bool(changes)}
-
-
-def repair_suggestions(schema: dict, quality: dict) -> list[dict]:
-    suggestions = []
-    for field, candidate in schema.get("current", {}).items():
-        if not candidate or candidate.get("confidence_pct", 0) < 85: continue
-        missing = quality.get("fields", {}).get(field, {}).get("missing", 0)
-        if missing:
-            suggestions.append({"field": field, "column": candidate["column"], "confidence_pct": candidate["confidence_pct"], "missing": missing, "action": "apply_mapping"})
-    return suggestions
+        if currency and str(currency).upper() not in VALID_CURRENCIES:
+            add("invalid_currency", product)
+        if not valid_http_url(product.get("product_url")):
+            add("invalid_product_url", product)
+    for key, count in ids.items():
+        if key and count > 1:
+            invalid["duplicate_id"].append({"id": key, "count": count})
+    for key, count in skus.items():
+        if key and count > 1:
+            invalid["duplicate_sku"].append({"sku": key, "count": count})
+    for key, count in names.items():
+        if key and count > 1:
+            invalid["duplicate_name"].append({"name": key, "count": count})
+    return {"invalid": dict(invalid), "counts": {key: len(value) for key, value in invalid.items()}}
