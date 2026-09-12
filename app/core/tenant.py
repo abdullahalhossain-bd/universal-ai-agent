@@ -11,6 +11,7 @@ from fastapi import Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
 from app.auth.api_key import get_api_key
+from app.db.database import get_db
 from app.db.models import APIKey, Store
 
 
@@ -23,6 +24,7 @@ class TenantContext:
 
 
 async def get_current_store(
+    db: Session = Depends(get_db),
     x_api_key: str | None = Header(default=None, alias="x-api-key"),
     authorization: str | None = Header(default=None),
 ) -> Store:
@@ -32,34 +34,34 @@ async def get_current_store(
     This is important for dashboard requests: a stale/injected public API
     key must never cause the request to be resolved as a customer request
     and then trigger conversation-token authentication.
+
+    Uses the request-scoped DB session from Depends(get_db) so the
+    returned Store stays attached for the remainder of the request.
     """
-    from app.db.database import SessionLocal
+    if authorization:
+        from app.auth.dashboard_auth import get_current_user
 
-    db = SessionLocal()
-    try:
-        if authorization:
-            from app.auth.dashboard_auth import get_current_user
+        user = await get_current_user(authorization=authorization, db=db)
+        store = db.query(Store).filter(Store.id == user.store_id).first()
+    elif x_api_key:
+        api_key = await get_api_key(x_api_key=x_api_key, db=db)
+        store = db.query(Store).filter(Store.id == api_key.store_id).first()
+    else:
+        raise HTTPException(
+            status_code=401,
+            detail="API key or session token required",
+        )
 
-            user = await get_current_user(authorization=authorization, db=db)
-            store = db.query(Store).filter(Store.id == user.store_id).first()
-        elif x_api_key:
-            api_key = await get_api_key(x_api_key=x_api_key, db=db)
-            store = db.query(Store).filter(Store.id == api_key.store_id).first()
-        else:
-            raise HTTPException(status_code=401, detail="API key or session token required")
+    if store is None:
+        raise HTTPException(status_code=401, detail="Store not found")
 
-        if store is None:
-            raise HTTPException(status_code=401, detail="Store not found")
+    if store.status == "suspended":
+        raise HTTPException(
+            status_code=403,
+            detail="This store has been suspended. Contact support.",
+        )
 
-        if store.status == "suspended":
-            raise HTTPException(
-                status_code=403,
-                detail="This store has been suspended. Contact support.",
-            )
-
-        return store
-    finally:
-        db.close()
+    return store
 
 
 def get_current_store_id(
