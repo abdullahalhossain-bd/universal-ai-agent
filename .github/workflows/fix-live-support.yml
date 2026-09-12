@@ -1,0 +1,230 @@
+name: Apply live support widget fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: ${{ !startsWith(github.event.head_commit.message, 'fix: repair live support widget state') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch widget state machine
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('app/static/widget.js')
+          s = p.read_text(encoding='utf-8')
+
+          old = '''  function clearConversation() {
+    conversationId = null; conversationToken = null; merchantMode = false;
+    lastMerchantIds = {}; lastMerchantMessageId = 0;
+    try { localStorage.removeItem(CONV_KEY); localStorage.removeItem(TOKEN_KEY); } catch (_) {}
+  }'''
+          new = '''  function clearConversation() {
+    stopPolling();
+    if (modeTimer) { clearInterval(modeTimer); modeTimer = null; }
+    conversationId = null; conversationToken = null; merchantMode = false;
+    lastMerchantIds = {}; lastMerchantMessageId = 0;
+    try { localStorage.removeItem(CONV_KEY); localStorage.removeItem(TOKEN_KEY); } catch (_) {}
+    renderMode();
+  }
+  function resetConversationState() {
+    stopPolling();
+    if (modeTimer) { clearInterval(modeTimer); modeTimer = null; }
+    conversationId = null; conversationToken = null; merchantMode = false;
+    lastMerchantIds = {}; lastMerchantMessageId = 0;
+    try { localStorage.removeItem(CONV_KEY); localStorage.removeItem(TOKEN_KEY); } catch (_) {}
+    renderMode();
+  }'''
+          if old not in s: raise SystemExit('clearConversation block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''  function showWelcome() {
+    var el = document.createElement("div"); el.className = "welcome";'''
+          new = '''  function showWelcome() {
+    if (messages.querySelector('.welcome')) return;
+    var el = document.createElement("div"); el.className = "welcome";'''
+          if old not in s: raise SystemExit('showWelcome block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''  function setMode(active) {
+    if (active === merchantMode) return;
+    if (!conversationId || !conversationToken) {
+      add("merchant", "প্রথমে AI-কে একটি message পাঠান। তারপর সরাসরি merchant-এর সাথে কথা বলতে পারবেন।");
+      input.focus();
+      return;
+    }
+    var previous = merchantMode;
+    merchantMode = !!active;
+    renderMode();
+    request("/v1/messages/customer/" + encodeURIComponent(conversationId) + "/mode", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: merchantMode ? "human" : "ai" }) })
+      .then(function (data) { merchantMode = data && data.mode === "human"; renderMode(); })
+      .catch(function (e) { merchantMode = previous; renderMode(); add("merchant", (e && e.message) || "চ্যাট mode পরিবর্তন করা যায়নি। আবার চেষ্টা করুন।"); });
+  }'''
+          new = '''  var modeChanging = false;
+  function setMode(active) {
+    active = !!active;
+    if (active === merchantMode && !modeChanging) return;
+    if (!conversationId || !conversationToken) {
+      if (!messages.querySelector('.support-required')) {
+        var notice = add("merchant", "প্রথমে AI-কে একটি message পাঠান। তারপর সরাসরি merchant-এর সাথে কথা বলতে পারবেন।");
+        notice.classList.add('support-required');
+      }
+      input.focus();
+      return;
+    }
+    if (modeChanging) return;
+    modeChanging = true;
+    var previous = merchantMode;
+    merchantMode = active;
+    renderMode();
+    request("/v1/messages/customer/" + encodeURIComponent(conversationId) + "/mode", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: active ? "human" : "ai" }) })
+      .then(function (data) {
+        if (data && (data.mode === "human" || data.mode === "ai")) merchantMode = data.mode === "human";
+        else merchantMode = active;
+        renderMode();
+      })
+      .catch(function (e) {
+        merchantMode = previous;
+        renderMode();
+        if (e.status === 401 || e.status === 403 || e.status === 409) {
+          add("merchant", friendly(e.status));
+        } else {
+          add("merchant", (e && e.message) || "চ্যাট mode পরিবর্তন করা যায়নি। আবার চেষ্টা করুন।");
+        }
+      })
+      .finally(function () { modeChanging = false; });
+  }'''
+          if old not in s: raise SystemExit('setMode block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''  function syncMode() {
+    if (!conversationId || !conversationToken) return;
+    request(messagesUrl()).then(function (data) {
+      if (data && (data.mode === "human" || data.mode === "ai")) { merchantMode = data.mode === "human"; renderMode(); }
+      if (merchantMode && data && Array.isArray(data.messages)) renderMerchantMessages(data.messages);
+    }).catch(function (e) { if (e.status === 401 || e.status === 403) { clearConversation(); renderMode(); } });
+  }'''
+          new = '''  function syncMode() {
+    if (!conversationId || !conversationToken || modeChanging) return;
+    request(messagesUrl()).then(function (data) {
+      if (data && (data.mode === "human" || data.mode === "ai")) { merchantMode = data.mode === "human"; renderMode(); }
+      if (merchantMode && data && Array.isArray(data.messages)) renderMerchantMessages(data.messages);
+    }).catch(function (e) {
+      if (e.status === 401 || e.status === 403 || e.status === 409) {
+        resetConversationState();
+        if (!messages.querySelector('.conversation-reset')) {
+          var notice = add("merchant", friendly(e.status));
+          notice.classList.add('conversation-reset');
+        }
+      }
+    });
+  }'''
+          if old not in s: raise SystemExit('syncMode block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''  function startPolling() {
+    if (pollTimer || !conversationId || !conversationToken) return;
+    pollTimer = setInterval(function () {
+      if (!conversationId || !conversationToken) return;
+      request(messagesUrl()).then(function (data) {
+        if (!data) return;
+        if (data.mode === "human" && !merchantMode) { merchantMode = true; renderMode(); }
+        if (data.mode !== "human" && merchantMode && data.mode_owner !== "merchant") { merchantMode = false; renderMode(); }
+        if (merchantMode) renderMerchantMessages(data.messages);
+      }).catch(function (e) { if (e.status === 401 || e.status === 403) { clearConversation(); stopPolling(); renderMode(); } });
+    }, 5000);
+  }
+  function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+  function startMerchantPolling() { startPolling(); }
+  function stopMerchantPolling() {}'''
+          new = '''  function startPolling() {
+    if (pollTimer || !conversationId || !conversationToken) return;
+    pollTimer = setInterval(function () {
+      if (!conversationId || !conversationToken) { stopPolling(); return; }
+      request(messagesUrl()).then(function (data) {
+        if (!data) return;
+        if (data.mode === "human" && !merchantMode) { merchantMode = true; renderMode(); }
+        if (data.mode !== "human" && merchantMode && data.mode_owner !== "merchant") { merchantMode = false; renderMode(); }
+        if (merchantMode) renderMerchantMessages(data.messages);
+      }).catch(function (e) {
+        if (e.status === 401 || e.status === 403 || e.status === 409) {
+          resetConversationState();
+          if (!messages.querySelector('.conversation-reset')) {
+            var notice = add("merchant", friendly(e.status));
+            notice.classList.add('conversation-reset');
+          }
+        }
+      });
+    }, 5000);
+  }
+  function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+  function startMerchantPolling() { startPolling(); }
+  function stopMerchantPolling() { stopPolling(); }'''
+          if old not in s: raise SystemExit('polling block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''      .then(function (data) { typing.remove(); persist(data); add("assistant", data.message || ""); addProducts(data.products, data); startPolling(); })
+      .catch(function (e) { typing.remove(); if (e.status === 401 || e.status === 403 || e.status === 409) clearConversation(); add("assistant", friendly(e.status)); })'''
+          new = '''      .then(function (data) {
+        typing.remove();
+        persist(data);
+        add("assistant", data.message || "");
+        addProducts(data.products, data);
+        if (conversationId && conversationToken) {
+          startPolling();
+          if (!modeTimer) modeTimer = setInterval(syncMode, 5000);
+        }
+      })
+      .catch(function (e) {
+        typing.remove();
+        if (e.status === 401 || e.status === 403 || e.status === 409) resetConversationState();
+        add("assistant", friendly(e.status));
+      })'''
+          if old not in s: raise SystemExit('sendMessage block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''  function sendMerchant(text) {
+    if (!conversationId || !conversationToken || sending) return;
+    setSending(true);'''
+          new = '''  function sendMerchant(text) {
+    if (!conversationId || !conversationToken || sending || !merchantMode) return;
+    setSending(true);'''
+          if old not in s: raise SystemExit('sendMerchant guard not found')
+          s = s.replace(old, new, 1)
+
+          old = '''  if (conversationId && conversationToken) {
+    modeTimer = setInterval(syncMode, 5000);
+  }'''
+          new = '''  if (conversationId && conversationToken) {
+    modeTimer = setInterval(syncMode, 5000);
+    syncMode();
+  }'''
+          if old not in s: raise SystemExit('modeTimer block not found')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s, encoding='utf-8')
+          print('patched', p)
+          PY
+
+          node --check app/static/widget.js
+
+      - name: Commit patch and remove one-time workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/fix-live-support.yml
+          git add app/static/widget.js .github/workflows/fix-live-support.yml
+          git commit -m "fix: repair live support widget state" || exit 0
+          git push
