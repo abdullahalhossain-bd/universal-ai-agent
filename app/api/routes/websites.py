@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 import redis.asyncio as redis
 
 from app.core.config import settings
-from app.core.features import FEATURE_DATABASE_SYNC, require_feature
+from app.core.features import FEATURE_DATABASE_SYNC, FEATURE_KNOWLEDGE_BASE, require_feature
 from app.core.tenant import get_current_store
 from app.datasources.redaction import public_datasource_dict
 from app.datasources.service import DataSourceService
@@ -27,20 +27,10 @@ class WebsiteCreate(BaseModel):
 
 
 def _validation_error(message: str, field: str = "url") -> HTTPException:
-    return HTTPException(
-        status_code=422,
-        detail={"error": "VALIDATION_ERROR", "message": message, "field": field},
-    )
+    return HTTPException(status_code=422, detail={"error": "VALIDATION_ERROR", "message": message, "field": field})
 
 
-async def _queue_website(
-    url: str,
-    name: str,
-    db: Session,
-    store: Store,
-    *,
-    required_feature=FEATURE_DATABASE_SYNC,
-):
+async def _queue_website(url: str, name: str, db: Session, store: Store, *, required_feature=FEATURE_DATABASE_SYNC):
     require_feature(store, required_feature)
     try:
         normalized = normalize_http_url(url)
@@ -60,9 +50,6 @@ async def _queue_website(
     try:
         message_id = await queue.enqueue(DataSourceService(db).build_sync_job(ds))
     except Exception as exc:
-        # The datasource was committed by DataSourceService.create(). Remove it
-        # if the durable queue is unavailable so a failed request cannot leave an
-        # unusable datasource behind.
         try:
             db.delete(ds)
             db.commit()
@@ -75,11 +62,7 @@ async def _queue_website(
 
 
 @router.post("")
-async def add_website(
-    payload: WebsiteCreate,
-    db: Session = Depends(get_db),
-    store: Store = Depends(get_current_store),
-):
+async def add_website(payload: WebsiteCreate, db: Session = Depends(get_db), store: Store = Depends(get_current_store)):
     try:
         ds, message_id = await _queue_website(payload.url, payload.name, db, store)
     except HTTPException:
@@ -90,19 +73,9 @@ async def add_website(
 
 
 @legacy_router.post("/ingest")
-async def legacy_website_ingest(
-    payload: WebsiteCreate,
-    db: Session = Depends(get_db),
-    store: Store = Depends(get_current_store),
-):
+async def legacy_website_ingest(payload: WebsiteCreate, db: Session = Depends(get_db), store: Store = Depends(get_current_store)):
     try:
-        ds, message_id = await _queue_website(
-            payload.url,
-            "Website",
-            db,
-            store,
-            required_feature=__import__("app.core.features", fromlist=["FEATURE_KNOWLEDGE_BASE"]).FEATURE_KNOWLEDGE_BASE,
-        )
+        ds, message_id = await _queue_website(payload.url, "Website", db, store, required_feature=FEATURE_KNOWLEDGE_BASE)
     except HTTPException:
         raise
     except (ValueError, ConnectionError) as exc:
@@ -120,19 +93,14 @@ async def legacy_website_ingest(
 
 
 @router.post("/{datasource_id}/resync")
-async def resync_website(
-    datasource_id: str,
-    db: Session = Depends(get_db),
-    store: Store = Depends(get_current_store),
-):
+async def resync_website(datasource_id: str, db: Session = Depends(get_db), store: Store = Depends(get_current_store)):
     require_feature(store, FEATURE_DATABASE_SYNC)
     service = DataSourceService(db)
     ds = service.get(store.id, datasource_id)
     if ds is None or ds.connector_type != "website":
         raise HTTPException(404, detail="website datasource not found")
     try:
-        normalized = normalize_http_url(ds.connection_url)
-        await assert_safe_url(normalized)
+        await assert_safe_url(normalize_http_url(ds.connection_url))
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc)) from exc
     queue = SyncQueue(settings.redis_url)
@@ -144,11 +112,7 @@ async def resync_website(
 
 
 @router.get("/{datasource_id}/status")
-async def website_status(
-    datasource_id: str,
-    db: Session = Depends(get_db),
-    store: Store = Depends(get_current_store),
-):
+async def website_status(datasource_id: str, db: Session = Depends(get_db), store: Store = Depends(get_current_store)):
     require_feature(store, FEATURE_DATABASE_SYNC)
     ds = DataSourceService(db).get(store.id, datasource_id)
     if ds is None or ds.connector_type != "website":
