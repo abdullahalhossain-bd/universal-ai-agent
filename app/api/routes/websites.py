@@ -20,13 +20,11 @@ from app.sync.quality import normalize_http_url
 from app.sync.queue import SyncQueue
 
 router = APIRouter(prefix="/v1/websites", tags=["websites"])
-legacy_router = APIRouter(prefix="/v1/knowledge", tags=["Knowledge"])
 
 
 class WebsiteCreate(BaseModel):
-    # /v1/websites uses `url`; the legacy /v1/knowledge/ingest contract uses
-    # `website_url`. Accept both at the boundary so router ordering cannot
-    # turn a valid dashboard payload into FastAPI's generic 422 response.
+    # /v1/websites historically used `url`; accept `website_url` too so clients
+    # can share the same request contract with /v1/knowledge/ingest.
     url: str | None = Field(default=None, min_length=1, max_length=2048)
     website_url: str | None = Field(default=None, min_length=1, max_length=2048)
     name: str = Field(default="Website", min_length=1, max_length=120)
@@ -107,26 +105,6 @@ async def add_website(payload: WebsiteCreate, db: Session = Depends(get_db), sto
     except (ValueError, ConnectionError) as exc:
         raise HTTPException(400, detail=str(exc)) from exc
     return {"status": "queued", "datasource": public_datasource_dict(ds), "message_id": message_id}
-
-
-@legacy_router.post("/ingest")
-async def legacy_website_ingest(payload: WebsiteCreate, db: Session = Depends(get_db), store: Store = Depends(get_current_store)):
-    try:
-        ds, message_id = await _queue_website(payload.resolved_url, "Website", db, store, required_feature=FEATURE_KNOWLEDGE_BASE)
-    except HTTPException:
-        raise
-    except (ValueError, ConnectionError) as exc:
-        raise HTTPException(400, detail=str(exc)) from exc
-    return {
-        "status": "queued",
-        "datasource_id": ds.id,
-        "message_id": message_id,
-        "pages_found": 0,
-        "pages_created": 0,
-        "chunks_created": 0,
-        "products_found": 0,
-        "message": "Website crawl queued; poll the datasource status for results.",
-    }
 
 
 @router.post("/{datasource_id}/resync")
