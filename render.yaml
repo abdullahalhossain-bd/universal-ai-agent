@@ -48,7 +48,7 @@ services:
       - key: CREDENTIAL_ENCRYPTION_KEY
         generateValue: true
       - key: JWT_SECRET_KEY
-          sync: false
+        sync: false
       - key: JWT_ACCESS_TOKEN_MINUTES
         value: "60"
       - key: API_BASE_URL
