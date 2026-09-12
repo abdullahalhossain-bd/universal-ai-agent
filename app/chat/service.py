@@ -1310,9 +1310,13 @@ class ChatService:
         Cheap pre-check for auxiliary LLM calls (typo correction) that
         run OUTSIDE the mixed path's atomic budget reservation. A store
         whose monthly budget is 0 or already exhausted must never spend
-        tokens on such calls. Fail-open: on any lookup problem return
-        True so the primary budget reservation remains the single
-        source of truth for refusing the request.
+        tokens on such calls.
+
+        Fail-closed: on any lookup problem return False so we do not
+        spend tokens when budget state is unknown. The primary atomic
+        budget reservation on the mixed path remains the hard gate for
+        the main reply; this pre-check only protects optional auxiliary
+        LLM work (typo correction / term classification).
         """
         try:
             from app.db.models import Store
@@ -1341,11 +1345,11 @@ class ChatService:
         except Exception:
             logger.warning(
                 "budget headroom pre-check failed for store %s; "
-                "allowing auxiliary LLM call",
+                "denying auxiliary LLM call (fail-closed)",
                 store_id,
                 exc_info=True,
             )
-            return True
+            return False
 
     async def _classify_unknown_term(
         self,
