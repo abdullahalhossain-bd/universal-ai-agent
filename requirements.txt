@@ -1,5 +1,5 @@
 # Generated from a full AST scan of app/**/*.py (see audit notes below).
-# Pinned to major.minor ranges, not exact versions â€” bump within these
+# Pinned to major.minor ranges, not exact versions — bump within these
 # ranges as needed, but re-run the import scan before widening them.
 psycopg[binary]>=3.2,<4
 bcrypt>=4.2,<5
@@ -35,6 +35,7 @@ redis>=5.0,<6.0
 
 # --- HTTP client ---
 httpx>=0.27,<0.28
+aiohttp>=3.10,<4.0
 
 # --- Web crawling / parsing ---
 beautifulsoup4>=4.12,<5.0
@@ -46,9 +47,6 @@ defusedxml>=0.7,<0.8
 rapidfuzz>=3.9,<4.0
 
 # --- Embeddings (knowledge/semantic search, vision) ---
-# Native Render builds use the CPU wheel explicitly. This prevents pip from
-# resolving the default PyPI CUDA-enabled torch distribution and pulling
-# hundreds of MB of NVIDIA runtime libraries into the web service.
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.14.0+cpu
 sentence-transformers>=3.0,<4.0
