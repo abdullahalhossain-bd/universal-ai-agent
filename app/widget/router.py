@@ -43,6 +43,41 @@ async def widget_bundle() -> Response:
   if (!key) return;
   var apiBase = (script.getAttribute("data-api-base") || new URL(script.src, location.href).origin).replace(/\/$/, "");
   var loaded = false;
+  var UX_CSS = [
+    "/* Embedded-widget UX layer: isolated inside Shadow DOM. */",
+    ".shell{font-family:Inter,'Segoe UI','Hind Siliguri',system-ui,sans-serif!important;color:#172033!important}",
+    ".panel{width:min(420px,calc(100vw - 24px))!important;height:min(700px,calc(100vh - 32px))!important;max-height:calc(100vh - 32px)!important;background:#ffffff!important;border:1px solid #e5e7eb!important;border-radius:22px!important;box-shadow:0 24px 70px rgba(15,23,42,.22),0 8px 24px rgba(15,23,42,.10)!important}",
+    ".header{background:#ffffff!important;color:#111827!important;border-bottom:1px solid #eef2f7!important;backdrop-filter:none!important;padding:14px 16px!important}",
+    ".header .brand-name,.header strong{color:#111827!important}",
+    ".header .status{color:#047857!important}.header .close{color:#64748b!important}.header .close:hover{background:#f1f5f9!important;color:#0f172a!important}",
+    ".modebar{background:#f8fafc!important;border-bottom:1px solid #eef2f7!important;backdrop-filter:none!important;padding:8px 12px!important}",
+    ".mode-switch{background:#eef2f7!important;border:0!important}.mode-btn{color:#64748b!important}.mode-btn.active{background:#ffffff!important;color:#111827!important;border:1px solid #dbe2ea!important;box-shadow:0 2px 7px rgba(15,23,42,.08)!important}.mode-btn.live.active{background:#ecfdf5!important;color:#047857!important;border-color:#a7f3d0!important}",
+    ".mode-note{color:#64748b!important}",
+    ".messages{background:#f8fafc!important;padding:14px 14px 12px!important;gap:9px!important;overflow-x:hidden!important;overscroll-behavior:contain!important}",
+    ".msg,.welcome-card,.product,.discover-card{max-width:92%!important;min-width:0!important;overflow-wrap:anywhere!important;word-break:break-word!important}",
+    ".msg{font-size:13px!important;line-height:1.55!important;white-space:pre-wrap!important}",
+    ".assistant{background:#ffffff!important;color:#1f2937!important;border:1px solid #e5e7eb!important;box-shadow:0 1px 3px rgba(15,23,42,.06)!important}",
+    ".user{background:#334155!important;color:#ffffff!important;border:0!important;box-shadow:0 4px 12px rgba(15,23,42,.14)!important}",
+    ".merchant{background:#ecfdf5!important;color:#14532d!important;border:1px solid #bbf7d0!important;box-shadow:0 1px 3px rgba(15,23,42,.05)!important}",
+    ".typing{background:#ffffff!important;color:#64748b!important;border:1px solid #e5e7eb!important}",
+    ".welcome-card{background:#ffffff!important;color:#1f2937!important;border:1px solid #e5e7eb!important;box-shadow:0 1px 3px rgba(15,23,42,.05)!important}",
+    ".welcome-bn{color:#1f2937!important}.welcome-en{color:#64748b!important}.example{color:#4338ca!important}",
+    ".discover-card{background:#ffffff!important;border:1px solid #e5e7eb!important}.discover-card.support{background:#ecfdf5!important;border-color:#bbf7d0!important}.discover-title{color:#111827!important}.discover-sub{color:#64748b!important}.support .discover-title{color:#14532d!important}.support-action{background:#047857!important;color:#fff!important;border:0!important}",
+    ".products{min-width:0!important}.product{background:#ffffff!important;border:1px solid #e5e7eb!important;color:#1f2937!important;box-shadow:0 2px 8px rgba(15,23,42,.05)!important}.product-name{color:#111827!important}.price{color:#111827!important}",
+    ".composer{background:#ffffff!important;border-top:1px solid #eef2f7!important;padding:10px 12px!important;gap:8px!important;min-width:0!important}",
+    ".composer-input,.composer textarea{min-width:0!important;width:100%!important;background:#f8fafc!important;color:#111827!important;border:1px solid #dbe2ea!important;border-radius:14px!important;outline:none!important;box-shadow:none!important;overflow-wrap:anywhere!important;word-break:break-word!important}",
+    ".composer-input:focus,.composer textarea:focus{border-color:#94a3b8!important;box-shadow:0 0 0 3px rgba(100,116,139,.12)!important}",
+    ".composer-send{background:#334155!important;color:#fff!important;border:0!important}.composer-icon-btn,.tool{background:#f8fafc!important;color:#475569!important;border:1px solid #e2e8f0!important}",
+    ".composer-input ~ .composer-input,.composer textarea ~ textarea{display:none!important}",
+    ".panel .composer + .composer,.panel .composer ~ .composer{display:none!important}",
+    ".shell:has(.panel.open) .bubble{opacity:0!important;visibility:hidden!important;pointer-events:none!important;transform:scale(.82)!important}",
+    ".panel.open + .bubble{opacity:0!important;visibility:hidden!important;pointer-events:none!important}",
+    ".messages,.messages *{max-width:100%}",
+    ".messages img,.product-image{max-width:100%!important}",
+    ".footer{color:#94a3b8!important;background:#fff!important}",
+    "@media(max-width:520px){.panel{position:fixed!important;inset:8px!important;width:auto!important;height:auto!important;max-height:none!important;border-radius:18px!important}.bubble{width:54px!important;height:54px!important}.messages{padding-left:12px!important;padding-right:12px!important}}",
+    "@media(prefers-reduced-motion:reduce){.panel,.bubble,.msg{animation:none!important;transition:none!important}}"
+  ].join("");
 
   function safeUrl(value) {
     if (typeof value !== "string") return "";
@@ -65,8 +100,17 @@ async def widget_bundle() -> Response:
     return null;
   }
 
+  function installUx(root) {
+    if (!root || root.querySelector("style[data-ucai-ux]")) return;
+    var style = document.createElement("style");
+    style.setAttribute("data-ucai-ux", "true");
+    style.textContent = UX_CSS;
+    root.appendChild(style);
+  }
+
   function applyBranding(root, cfg) {
     if (!root) return;
+    installUx(root);
     var header = root.querySelector(".header");
     var panel = root.querySelector(".panel");
     if (!header || !panel) return;
