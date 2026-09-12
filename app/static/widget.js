@@ -211,19 +211,31 @@
       add("merchant", "Store team: " + (m.content || ""));
     });
   }
+  var backgroundAuthFailures = 0;
+  function handleBackgroundAuthFailure(e) {
+    // A single failed background check (poll or mode-sync) can happen from an
+    // ordinary network blip and should not nuke an otherwise-healthy chat or
+    // interrupt the user with a scary message unrelated to what they just typed.
+    // Only treat it as fatal after repeated consecutive failures, and even then
+    // reset quietly — the next real send will simply start a fresh conversation.
+    // The visible "conversation access lost" message is reserved for when the
+    // user's own action (sending a message) actually fails; see sendMessage()/
+    // sendMerchant()/upload() below.
+    if (e.status !== 401 && e.status !== 403 && e.status !== 409) return;
+    backgroundAuthFailures++;
+    if (backgroundAuthFailures < 2) return;
+    backgroundAuthFailures = 0;
+    stopPolling(); stopModeSync(); resetConversation();
+  }
   function syncMode() {
     if (!conversationId || !conversationToken || modeChanging) return;
     request(messagesUrl()).then(function (data) {
       if (!data) return;
+      backgroundAuthFailures = 0;
       if (data.mode === "human" || data.mode === "ai") merchantMode = data.mode === "human";
       renderMode();
       if (merchantMode) renderMerchantMessages(data.messages);
-    }).catch(function (e) {
-      if (e.status === 401 || e.status === 403 || e.status === 409) {
-        stopPolling(); stopModeSync(); resetConversation();
-        if (panel.classList.contains("open")) add("assistant", "এই conversationটি আর access করা যাচ্ছে না। নতুন chat শুরু করুন।");
-      }
-    });
+    }).catch(handleBackgroundAuthFailure);
   }
   function startPolling() {
     if (pollTimer || !conversationId || !conversationToken) return;
@@ -231,15 +243,11 @@
       if (!conversationId || !conversationToken || modeChanging) return;
       request(messagesUrl()).then(function (data) {
         if (!data) return;
+        backgroundAuthFailures = 0;
         if (data.mode === "human" && !merchantMode) { merchantMode = true; renderMode(); }
         else if (data.mode === "ai" && merchantMode && data.mode_owner !== "merchant") { merchantMode = false; renderMode(); }
         if (merchantMode) renderMerchantMessages(data.messages);
-      }).catch(function (e) {
-        if (e.status === 401 || e.status === 403 || e.status === 409) {
-          stopPolling(); stopModeSync(); resetConversation();
-          if (panel.classList.contains("open")) add("assistant", "এই conversationটি আর access করা যাচ্ছে না। নতুন chat শুরু করুন।");
-        }
-      });
+      }).catch(handleBackgroundAuthFailure);
     }, 5000);
   }
   function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
