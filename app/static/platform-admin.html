@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Platform Admin</title>
+<style>
+  :root{
+    --accent:#111827;
+    --accent-light:#eef0f3;
+    --bg:#f7f7f8;
+    --border:#e3e4e8;
+    --text:#1f2328;
+    --muted:#6b7280;
+    --danger:#b3261e;
+    --danger-bg:#fdecea;
+    --ok:#0f7a3d;
+    --ok-bg:#e8f6ee;
+    --warn:#8a6300;
+    --warn-bg:#fff8e6;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  .shell{max-width:1080px;margin:0 auto;padding:28px 20px 80px;}
+  header.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;}
+  header.top h1{font-size:17px;margin:0;}
+  header.top .sub{font-size:12px;color:var(--muted);margin-top:2px;}
+  #admin-badge{font-size:12.5px;color:var(--muted);display:none;align-items:center;gap:8px;}
+  #admin-badge.show{display:flex;}
+  #logout-btn{background:none;border:1px solid var(--border);border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;color:var(--muted);}
+
+  .card{background:#fff;border:1px solid var(--border);border-radius:14px;padding:22px;margin-bottom:16px;}
+  .card h2{font-size:15.5px;margin:0 0 4px;}
+  .card p.sub{color:var(--muted);font-size:13px;margin:0 0 16px;}
+
+  label{display:block;font-size:12.5px;font-weight:600;margin:12px 0 5px;color:#3a3d44;}
+  label:first-of-type{margin-top:0;}
+  input, select{
+    width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:9px;
+    font-size:13.5px;font-family:inherit;outline:none;
+  }
+  input:focus, select:focus{border-color:var(--accent);}
+  .row{display:flex;gap:10px;}
+  .row > *{flex:1;}
+
+  button.btn{
+    border:none;border-radius:9px;padding:10px 16px;font-size:13.5px;font-weight:600;
+    cursor:pointer;background:var(--accent);color:#fff;
+  }
+  button.btn:disabled{opacity:.5;cursor:default;}
+  button.btn.secondary{background:var(--accent-light);color:var(--text);}
+  button.btn.danger{background:var(--danger-bg);color:var(--danger);}
+  button.btn.small{padding:6px 10px;font-size:12px;}
+
+  .msg{border-radius:10px;padding:10px 12px;font-size:12.5px;margin-top:12px;display:none;}
+  .msg.show{display:block;}
+  .msg.error{background:var(--danger-bg);color:var(--danger);}
+  .msg.ok{background:var(--ok-bg);color:var(--ok);}
+
+  #login-view{max-width:380px;margin:80px auto;}
+
+  .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:4px;}
+  .stat-box{background:var(--accent-light);border-radius:10px;padding:14px 16px;}
+  .stat-box .num{font-size:22px;font-weight:700;}
+  .stat-box .label{font-size:11.5px;color:var(--muted);margin-top:2px;}
+
+  .toolbar{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center;}
+  .toolbar input, .toolbar select{width:auto;flex:1;min-width:140px;}
+
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th, td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--border);}
+  th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.02em;}
+  tr.clickable{cursor:pointer;}
+  tr.clickable:hover{background:var(--accent-light);}
+
+  .pill{padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;background:var(--accent-light);display:inline-block;}
+  .pill.active{background:var(--ok-bg);color:var(--ok);}
+  .pill.suspended{background:var(--danger-bg);color:var(--danger);}
+  .pill.setup{background:var(--warn-bg);color:var(--warn);}
+
+  .pager{display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:12.5px;color:var(--muted);}
+
+  .modal-backdrop{position:fixed;inset:0;background:rgba(15,17,23,.45);display:none;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto;z-index:20;}
+  .modal-backdrop.show{display:flex;}
+  .modal{background:#fff;border-radius:14px;max-width:640px;width:100%;padding:24px;}
+  .modal h3{margin:0 0 4px;font-size:16px;}
+  .modal .close{float:right;background:none;border:none;font-size:18px;cursor:pointer;color:var(--muted);}
+  .kv{display:flex;justify-content:space-between;padding:6px 0;font-size:13px;border-bottom:1px dashed var(--border);}
+  .kv b{font-weight:600;}
+  .section-title{font-size:12px;font-weight:700;text-transform:uppercase;color:var(--muted);margin:18px 0 8px;letter-spacing:.03em;}
+
+  .feature-row{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px dashed var(--border);}
+  .feature-row:last-child{border-bottom:none;}
+  .feature-row input[type=checkbox]{width:auto;margin-top:3px;flex-shrink:0;}
+  .feature-row .ftext{flex:1;}
+  .feature-row .ftitle{font-size:13px;font-weight:600;}
+  .feature-row .fnum{color:var(--muted);font-weight:500;}
+  .feature-row .fdesc{font-size:12px;color:var(--muted);margin-top:1px;}
+
+  .hidden{display:none !important;}
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- ============ LOGIN ============ -->
+  <div id="login-view">
+    <div class="card">
+      <h2>Platform Admin</h2>
+      <p class="sub">Operator login — separate from the merchant dashboard.</p>
+      <label>Email</label>
+      <input id="login-email" type="email" autocomplete="username" />
+      <label>Password</label>
+      <input id="login-password" type="password" autocomplete="current-password" />
+      <div style="margin-top:16px;">
+        <button class="btn" id="login-btn" style="width:100%;">Sign in</button>
+      </div>
+      <div class="msg" id="login-msg"></div>
+    </div>
+  </div>
+
+  <!-- ============ DASHBOARD ============ -->
+  <div id="app-view" class="hidden">
+    <header class="top">
+      <div>
+        <h1>Platform Admin</h1>
+        <div class="sub">Cross-tenant store &amp; usage overview</div>
+      </div>
+      <div id="admin-badge" class="show">
+        <span id="admin-email"></span>
+        <button id="logout-btn">Log out</button>
+      </div>
+    </header>
+
+    <div class="card">
+      <h2>Overview</h2>
+      <p class="sub" id="stats-sub">This calendar month</p>
+      <div class="stat-grid" id="stat-grid"></div>
+    </div>
+
+    <div class="card">
+      <h2>Stores</h2>
+      <p class="sub">All tenants on the platform.</p>
+
+      <div class="toolbar">
+        <input id="search-input" type="text" placeholder="Search by name or website…" />
+        <select id="status-filter">
+          <option value="">Any status</option>
+          <option value="setup">setup</option>
+          <option value="active">active</option>
+          <option value="suspended">suspended</option>
+        </select>
+        <select id="plan-filter">
+          <option value="">Any plan</option>
+          <option value="starter">starter</option>
+          <option value="growth">growth</option>
+          <option value="pro">pro</option>
+        </select>
+        <button class="btn secondary small" id="refresh-btn">Refresh</button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Store</th><th>Plan</th><th>Status</th><th>Users</th><th>MTD spend</th><th>Created</th>
+          </tr>
+        </thead>
+        <tbody id="stores-tbody"></tbody>
+      </table>
+
+      <div class="pager">
+        <span id="pager-info"></span>
+        <div>
+          <button class="btn secondary small" id="prev-btn">‹ Prev</button>
+          <button class="btn secondary small" id="next-btn">Next ›</button>
+        </div>
+      </div>
+      <div class="msg" id="stores-msg"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ============ STORE DETAIL MODAL ============ -->
+<div class="modal-backdrop" id="detail-backdrop">
+  <div class="modal">
+    <button class="close" id="detail-close">&times;</button>
+    <h3 id="detail-name">—</h3>
+    <div class="sub" id="detail-website" style="color:var(--muted);font-size:12.5px;"></div>
+
+    <div class="row" style="margin-top:16px;">
+      <div>
+        <label>Status</label>
+        <select id="detail-status">
+          <option value="setup">setup</option>
+          <option value="active">active</option>
+          <option value="suspended">suspended</option>
+        </select>
+      </div>
+      <div>
+        <label>Plan</label>
+        <select id="detail-plan">
+          <option value="starter">starter</option>
+          <option value="growth">growth</option>
+          <option value="pro">pro</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:14px;">
+      <button class="btn small" id="save-store-btn">Save changes</button>
+    </div>
+    <div class="msg" id="detail-msg"></div>
+
+    <div class="section-title">AI packages</div>
+    <p class="sub" style="margin:0 0 8px;">Turn individual AI features on/off for this store — independent of Status above.</p>
+    <div id="detail-features"></div>
+    <div style="margin-top:10px;">
+      <button class="btn small secondary" id="save-features-btn">Save package toggles</button>
+    </div>
+    <div class="msg" id="features-msg"></div>
+
+    <div class="section-title">API keys</div>
+    <div id="detail-keys"></div>
+
+    <div class="section-title">Data sources</div>
+    <div id="detail-datasources"></div>
+
+    <div class="section-title">Recent usage</div>
+    <div id="detail-usage"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var API_BASE = window.location.origin;
+  var state = { token: null, offset: 0, limit: 20, total: 0 };
+
+  function el(id){ return document.getElementById(id); }
+  function show(node){ node.classList.add('show'); }
+  function hide(node){ node.classList.remove('show'); }
+  function money(n){ return '$' + (Number(n)||0).toFixed(4); }
+  function fmtDate(s){ if(!s) return '—'; try{ return new Date(s).toLocaleString(); }catch(e){ return s; } }
+
+  function setMsg(node, text, kind){
+    node.textContent = text;
+    node.className = 'msg show ' + (kind || 'info');
+  }
+
+  function authHeaders(){
+    return { 'Authorization': 'Bearer ' + state.token, 'Content-Type': 'application/json' };
+  }
+
+  function api(path, opts){
+    opts = opts || {};
+    opts.headers = Object.assign({}, authHeaders(), opts.headers || {});
+    return fetch(API_BASE + path, opts).then(function(r){
+      return r.json().then(function(body){
+        if(!r.ok){
+          var err = new Error(body.detail || 'Request failed');
+          err.status = r.status;
+          throw err;
+        }
+        return body;
+      });
+    });
+  }
+
+  // ---------------- Auth ----------------
+
+  function restoreSession(){
+    var saved = sessionStorage.getItem('platform_admin_token');
+    var savedEmail = sessionStorage.getItem('platform_admin_email');
+    if(saved){
+      state.token = saved;
+      enterApp(savedEmail || '');
+    }
+  }
+
+  el('login-btn').addEventListener('click', function(){
+    var email = el('login-email').value.trim();
+    var password = el('login-password').value;
+    if(!email || !password){
+      setMsg(el('login-msg'), 'Enter email and password.', 'error');
+      return;
+    }
+    el('login-btn').disabled = true;
+    fetch(API_BASE + '/v1/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, password: password })
+    }).then(function(r){
+      return r.json().then(function(body){ return { ok: r.ok, body: body }; });
+    }).then(function(res){
+      el('login-btn').disabled = false;
+      if(!res.ok){
+        setMsg(el('login-msg'), res.body.detail || 'Login failed.', 'error');
+        return;
+      }
+      state.token = res.body.access_token;
+      sessionStorage.setItem('platform_admin_token', state.token);
+      sessionStorage.setItem('platform_admin_email', res.body.admin.email);
+      enterApp(res.body.admin.email);
+    }).catch(function(){
+      el('login-btn').disabled = false;
+      setMsg(el('login-msg'), 'Network error — check the server is reachable.', 'error');
+    });
+  });
+
+  el('logout-btn').addEventListener('click', function(){
+    sessionStorage.removeItem('platform_admin_token');
+    sessionStorage.removeItem('platform_admin_email');
+    state.token = null;
+    el('app-view').classList.add('hidden');
+    el('login-view').classList.remove('hidden');
+  });
+
+  function enterApp(email){
+    el('login-view').classList.add('hidden');
+    el('app-view').classList.remove('hidden');
+    el('admin-email').textContent = email;
+    loadFeatureCatalog();
+    loadStats();
+    loadStores();
+  }
+
+  // ---------------- Feature catalog ("packages") ----------------
+
+  function loadFeatureCatalog(){
+    if(state.featureCatalog) return;
+    api('/v1/admin/features').then(function(res){
+      state.featureCatalog = res.features;
+    }).catch(function(){ /* detail modal falls back gracefully if this never loads */ });
+  }
+
+  // ---------------- Stats ----------------
+
+  function loadStats(){
+    api('/v1/admin/stats').then(function(s){
+      var boxes = [
+        { num: s.total_stores, label: 'Total stores' },
+        { num: s.active_stores, label: 'Active' },
+        { num: s.suspended_stores, label: 'Suspended' },
+        { num: money(s.month_to_date_spend), label: 'MTD spend (all stores)' }
+      ];
+      el('stat-grid').innerHTML = boxes.map(function(b){
+        return '<div class="stat-box"><div class="num">' + b.num + '</div><div class="label">' + b.label + '</div></div>';
+      }).join('');
+    }).catch(function(err){
+      if(err.status === 401){ el('logout-btn').click(); }
+    });
+  }
+
+  // ---------------- Stores list ----------------
+
+  function statusPill(status){
+    var cls = ['setup','active','suspended'].indexOf(status) >= 0 ? status : '';
+    return '<span class="pill ' + cls + '">' + status + '</span>';
+  }
+
+  function loadStores(){
+    var params = new URLSearchParams();
+    params.set('limit', state.limit);
+    params.set('offset', state.offset);
+    var q = el('search-input').value.trim();
+    var status = el('status-filter').value;
+    var plan = el('plan-filter').value;
+    if(q) params.set('q', q);
+    if(status) params.set('status', status);
+    if(plan) params.set('plan', plan);
+
+    api('/v1/admin/stores?' + params.toString()).then(function(res){
+      state.total = res.total;
+      el('stores-tbody').innerHTML = res.stores.map(function(s){
+        return '<tr class="clickable" data-id="' + s.id + '">' +
+          '<td>' + escapeHtml(s.name) + '</td>' +
+          '<td>' + escapeHtml(s.plan) + '</td>' +
+          '<td>' + statusPill(s.status) + '</td>' +
+          '<td>' + s.user_count + '</td>' +
+          '<td>' + money(s.month_to_date_spend) + '</td>' +
+          '<td>' + fmtDate(s.created_at) + '</td>' +
+        '</tr>';
+      }).join('') || '<tr><td colspan="6" style="color:var(--muted);">No stores match.</td></tr>';
+
+      Array.prototype.forEach.call(document.querySelectorAll('#stores-tbody tr[data-id]'), function(row){
+        row.addEventListener('click', function(){ openStoreDetail(row.getAttribute('data-id')); });
+      });
+
+      var shown = res.stores.length;
+      var from = shown ? state.offset + 1 : 0;
+      var to = state.offset + shown;
+      el('pager-info').textContent = from + '–' + to + ' of ' + res.total;
+      el('prev-btn').disabled = state.offset <= 0;
+      el('next-btn').disabled = to >= res.total;
+    }).catch(function(err){
+      if(err.status === 401){ el('logout-btn').click(); return; }
+      setMsg(el('stores-msg'), err.message, 'error');
+    });
+  }
+
+  function escapeHtml(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+
+  el('refresh-btn').addEventListener('click', function(){ state.offset = 0; loadStats(); loadStores(); });
+  el('search-input').addEventListener('keydown', function(e){ if(e.key === 'Enter'){ state.offset = 0; loadStores(); } });
+  el('status-filter').addEventListener('change', function(){ state.offset = 0; loadStores(); });
+  el('plan-filter').addEventListener('change', function(){ state.offset = 0; loadStores(); });
+  el('prev-btn').addEventListener('click', function(){ state.offset = Math.max(0, state.offset - state.limit); loadStores(); });
+  el('next-btn').addEventListener('click', function(){ state.offset += state.limit; loadStores(); });
+
+  // ---------------- Store detail modal ----------------
+
+  var currentStoreId = null;
+
+  function renderFeatureToggles(enabledFeatures){
+    var catalog = state.featureCatalog;
+    if(!catalog || !catalog.length){
+      el('detail-features').innerHTML = '<div class="sub" style="color:var(--muted);font-size:12.5px;">Package list unavailable — try reopening this store.</div>';
+      return;
+    }
+    var sorted = catalog.slice().sort(function(a,b){ return a.package_number - b.package_number; });
+    el('detail-features').innerHTML = sorted.map(function(f){
+      var checked = enabledFeatures[f.key] !== false ? 'checked' : '';
+      return '<label class="feature-row">' +
+        '<input type="checkbox" data-feature-key="' + escapeHtml(f.key) + '" ' + checked + ' />' +
+        '<span class="ftext">' +
+          '<div class="ftitle"><span class="fnum">Package ' + f.package_number + ':</span> ' + escapeHtml(f.label) + '</div>' +
+          '<div class="fdesc">' + escapeHtml(f.description) + '</div>' +
+        '</span>' +
+      '</label>';
+    }).join('');
+  }
+
+  function openStoreDetail(storeId){
+    currentStoreId = storeId;
+    el('detail-msg').className = 'msg';
+    el('features-msg').className = 'msg';
+    api('/v1/admin/stores/' + storeId).then(function(s){
+      el('detail-name').textContent = s.name;
+      el('detail-website').textContent = s.website_url || 'no website on file';
+      el('detail-status').value = s.status;
+      el('detail-plan').value = s.plan;
+
+      renderFeatureToggles(s.enabled_features || {});
+
+      el('detail-keys').innerHTML = s.api_keys.length ? s.api_keys.map(function(k){
+        return '<div class="kv"><span>' + escapeHtml(k.name) + ' (' + escapeHtml(k.key_prefix) + '…)</span>' +
+          '<b>' + (k.revoked ? 'revoked' : 'active') + '</b></div>';
+      }).join('') : '<div class="sub" style="color:var(--muted);font-size:12.5px;">No API keys.</div>';
+
+      el('detail-datasources').innerHTML = s.datasources.length ? s.datasources.map(function(d){
+        return '<div class="kv"><span>' + escapeHtml(d.name) + ' (' + escapeHtml(d.connector_type) + ')</span>' +
+          '<b>' + escapeHtml(d.last_sync_status || 'never synced') + '</b></div>';
+      }).join('') : '<div class="sub" style="color:var(--muted);font-size:12.5px;">No data sources.</div>';
+
+      el('detail-usage').innerHTML = s.recent_usage.length ? s.recent_usage.map(function(u){
+        return '<div class="kv"><span>' + escapeHtml(u.route) + ' · ' + escapeHtml(u.model || '—') + '</span>' +
+          '<b>' + money(u.estimated_cost) + '</b></div>';
+      }).join('') : '<div class="sub" style="color:var(--muted);font-size:12.5px;">No usage recorded yet.</div>';
+
+      el('detail-backdrop').classList.add('show');
+    }).catch(function(err){
+      if(err.status === 401){ el('logout-btn').click(); return; }
+      alert(err.message);
+    });
+  }
+
+  el('detail-close').addEventListener('click', function(){ el('detail-backdrop').classList.remove('show'); });
+  el('detail-backdrop').addEventListener('click', function(e){
+    if(e.target === el('detail-backdrop')) el('detail-backdrop').classList.remove('show');
+  });
+
+  el('save-store-btn').addEventListener('click', function(){
+    if(!currentStoreId) return;
+    var payload = { status: el('detail-status').value, plan: el('detail-plan').value };
+    el('save-store-btn').disabled = true;
+    api('/v1/admin/stores/' + currentStoreId, { method: 'PATCH', body: JSON.stringify(payload) })
+      .then(function(){
+        setMsg(el('detail-msg'), 'Saved.', 'ok');
+        loadStores();
+        loadStats();
+      })
+      .catch(function(err){ setMsg(el('detail-msg'), err.message, 'error'); })
+      .then(function(){ el('save-store-btn').disabled = false; });
+  });
+
+  el('save-features-btn').addEventListener('click', function(){
+    if(!currentStoreId) return;
+    var boxes = document.querySelectorAll('#detail-features input[data-feature-key]');
+    var enabled_features = {};
+    Array.prototype.forEach.call(boxes, function(box){
+      enabled_features[box.getAttribute('data-feature-key')] = box.checked;
+    });
+    el('save-features-btn').disabled = true;
+    api('/v1/admin/stores/' + currentStoreId, { method: 'PATCH', body: JSON.stringify({ enabled_features: enabled_features }) })
+      .then(function(res){
+        setMsg(el('features-msg'), 'Package toggles saved.', 'ok');
+        renderFeatureToggles(res.enabled_features || {});
+      })
+      .catch(function(err){ setMsg(el('features-msg'), err.message, 'error'); })
+      .then(function(){ el('save-features-btn').disabled = false; });
+  });
+
+  restoreSession();
+})();
+</script>
+
+</body>
+</html>

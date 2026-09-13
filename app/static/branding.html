@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Universal Commerce AI — Widget Branding</title>
+<style>
+:root{--accent:#111827;--bg:#f7f7f8;--border:#e3e4e8;--text:#1f2328;--muted:#6b7280;--ok:#0f7a3d;--okbg:#e8f6ee;--danger:#b3261e;--dangerbg:#fdecea}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}.shell{max-width:900px;margin:auto;padding:28px 20px 70px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}.top h1{font-size:19px;margin:0}.back{color:var(--muted);font-size:13px;text-decoration:none}.grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px}.card{background:#fff;border:1px solid var(--border);border-radius:14px;padding:22px}.card h2{font-size:16px;margin:0 0 5px}.sub{font-size:13px;color:var(--muted);margin:0 0 18px}label{display:block;font-size:12.5px;font-weight:600;margin:13px 0 5px}input,select,textarea{width:100%;padding:10px 11px;border:1px solid var(--border);border-radius:9px;font:inherit;font-size:13.5px;outline:0}textarea{min-height:82px;resize:vertical}input:focus,select:focus,textarea:focus{border-color:var(--accent)}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.color-row{display:flex;gap:8px}.color-row input[type=color]{width:48px;padding:3px;height:40px}.btn{margin-top:18px;border:0;border-radius:9px;padding:10px 16px;background:var(--accent);color:#fff;font-weight:700;cursor:pointer}.btn:disabled{opacity:.5}.msg{display:none;margin-top:12px;border-radius:9px;padding:10px 12px;font-size:12.5px}.msg.show{display:block}.ok{background:var(--okbg);color:var(--ok)}.error{background:var(--dangerbg);color:var(--danger)}.preview{border-radius:18px;background:#eef0f3;padding:35px 14px;min-height:460px;display:flex;align-items:flex-end;justify-content:flex-end;position:relative}.preview.left{justify-content:flex-start}.widget{width:290px;height:390px;background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 18px 55px rgba(0,0,0,.18);overflow:hidden;display:flex;flex-direction:column}.wh{background:var(--accent);color:#fff;padding:14px;display:flex;gap:9px;align-items:center}.logo{width:32px;height:32px;border-radius:8px;background:#fff;object-fit:cover}.wh strong{display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.wh small{opacity:.75}.msgs{flex:1;padding:13px;background:#f8fafc}.bubble{background:#fff;border:1px solid #e5e7eb;padding:9px 11px;border-radius:13px;font-size:12px;line-height:1.45}.composer{padding:10px;border-top:1px solid #eee;font-size:11px;color:#999}.hint{font-size:11px;color:var(--muted);margin-top:12px;line-height:1.5}@media(max-width:760px){.grid{grid-template-columns:1fr}.preview{min-height:410px}.row{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top"><h1>Widget branding</h1><a class="back" href="/admin">← Back to dashboard</a></div>
+  <div class="grid">
+    <section class="card">
+      <h2>Customize your customer chat</h2>
+      <p class="sub">These settings are applied dynamically to your website widget. You do not need to edit the embed code after saving.</p>
+      <label for="store-name">Store / Website Name</label>
+      <input id="store-name" maxlength="255" placeholder="Daraz Store">
+      <label for="logo-url">Logo URL</label>
+      <input id="logo-url" maxlength="2048" placeholder="https://example.com/logo.png">
+      <div class="hint">Use a public HTTPS/HTTP image URL. The widget will safely fall back to no logo when empty.</div>
+      <label for="brand-color">Brand color</label>
+      <div class="color-row"><input id="brand-color" type="color" value="#111827"><input id="brand-color-text" maxlength="7" value="#111827"></div>
+      <div class="row">
+        <div><label for="assistant-name">Assistant name</label><input id="assistant-name" maxlength="100" placeholder="Shopping Assistant"></div>
+        <div><label for="position">Position</label><select id="position"><option value="bottom-right">Bottom right</option><option value="bottom-left">Bottom left</option></select></div>
+      </div>
+      <label for="greeting">Greeting</label>
+      <textarea id="greeting" maxlength="1000" placeholder="Welcome to our store! How can I help?"></textarea>
+      <button class="btn" id="save" type="button">Save branding</button>
+      <div class="msg" id="msg"></div>
+    </section>
+    <aside class="preview" id="preview"><div class="widget"><div class="wh"><img id="p-logo" class="logo" style="display:none"><div style="min-width:0"><strong id="p-name">Your Store</strong><small id="p-assistant">Shopping Assistant</small></div></div><div class="msgs"><div class="bubble" id="p-greeting">Welcome!</div></div><div class="composer">Ask about a product…</div></div></aside>
+  </div>
+</div>
+<script>
+(function(){"use strict";
+var API_BASE=window.location.origin,STATE_KEY="ucai_dashboard_state";
+function state(){try{return JSON.parse(localStorage.getItem(STATE_KEY)||"null")}catch(e){return null}}
+function api(path,opts){opts=opts||{};var s=state();if(!s||!s.apiKey){throw new Error("Open the main dashboard and connect your store first.")}return fetch(API_BASE+path,{method:opts.method||"GET",headers:Object.assign({"content-type":"application/json","x-api-key":s.apiKey},opts.headers||{}),body:opts.body?JSON.stringify(opts.body):undefined}).then(function(r){return r.json().catch(function(){return{}}).then(function(d){if(!r.ok)throw new Error(d.detail||("HTTP "+r.status));return d})})}
+function set(id,v){document.getElementById(id).value=v==null?"":v}
+function updatePreview(){var c=document.getElementById("brand-color-text").value.trim();if(!/^#[0-9a-fA-F]{6}$/.test(c))c="#111827";document.documentElement.style.setProperty("--accent",c);document.getElementById("p-name").textContent=document.getElementById("store-name").value||"Your Store";document.getElementById("p-assistant").textContent=document.getElementById("assistant-name").value||"Shopping Assistant";document.getElementById("p-greeting").textContent=document.getElementById("greeting").value||"Welcome!";var url=document.getElementById("logo-url").value.trim(),img=document.getElementById("p-logo");if(/^https?:\/\//i.test(url)){img.src=url;img.style.display="block"}else img.style.display="none";document.getElementById("preview").classList.toggle("left",document.getElementById("position").value==="bottom-left")}
+function load(){api("/v1/stores/me/widget-config").then(function(d){set("store-name",d.store_name);set("logo-url",d.logo_url);set("brand-color",d.brand_color||"#111827");set("brand-color-text",d.brand_color||"#111827");set("assistant-name",d.assistant_name||"Shopping Assistant");set("position",d.position||"bottom-right");set("greeting",d.greeting||"আসসালামু আলাইকুম! কীভাবে সাহায্য করতে পারি?");updatePreview()}).catch(function(e){show(e.message,"error")})}
+function show(t,k){var m=document.getElementById("msg");m.textContent=t;m.className="msg show "+k}
+document.getElementById("brand-color").addEventListener("input",function(){document.getElementById("brand-color-text").value=this.value;updatePreview()});document.getElementById("brand-color-text").addEventListener("input",function(){updatePreview()});["store-name","logo-url","assistant-name","position","greeting"].forEach(function(id){document.getElementById(id).addEventListener("input",updatePreview);document.getElementById(id).addEventListener("change",updatePreview)});
+document.getElementById("save").addEventListener("click",function(){var b=document.getElementById("save"),color=document.getElementById("brand-color-text").value.trim();if(!/^#[0-9a-fA-F]{6}$/.test(color)){show("Brand color must be a 6-digit hex color, e.g. #6C5CE7.","error");return}b.disabled=true;api("/v1/stores/me/widget-config",{method:"PUT",body:{store_name:document.getElementById("store-name").value.trim(),logo_url:document.getElementById("logo-url").value.trim()||null,brand_color:color,greeting:document.getElementById("greeting").value.trim(),assistant_name:document.getElementById("assistant-name").value.trim(),position:document.getElementById("position").value}}).then(function(d){set("store-name",d.store_name);show("Branding saved. Existing widget embeds will use the new settings automatically.","ok");updatePreview()}).catch(function(e){show(e.message,"error")}).finally(function(){b.disabled=false})});
+load();
+})();
+</script>
+</body>
+</html>
