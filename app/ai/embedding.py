@@ -1,0 +1,12 @@
+﻿from abc import ABC, abstractmethod
+
+
+class EmbeddingProvider(ABC):
+
+    @abstractmethod
+    async def embed(
+        self,
+        texts: list[str],
+    ):
+
+        raise NotImplementedError

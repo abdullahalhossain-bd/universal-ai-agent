@@ -1,0 +1,65 @@
+/* Premium visual layer — keeps core chat styles intact. */
+:root {
+  --premium-bg: #f7f8fc;
+  --premium-card: rgba(255,255,255,.94);
+  --premium-line: #e8eaf0;
+  --premium-ink: #101828;
+  --premium-muted: #667085;
+  --premium-accent: #635bff;
+  --premium-accent-soft: #f2f0ff;
+}
+
+body { background: radial-gradient(circle at 50% -10%, #eef0ff 0, transparent 34%), var(--premium-bg); }
+.app { max-width: 900px; background: rgba(255,255,255,.86); border-color: var(--premium-line); box-shadow: 0 0 90px rgba(31,35,55,.06); }
+.bar { min-height: 68px; padding: 13px 24px; background: rgba(255,255,255,.88); border-bottom-color: rgba(232,234,240,.9); }
+.bar-store { gap: 11px; }
+.bar-name { font-size: 19px; }
+.dot-online { background: #12b76a; box-shadow: 0 0 0 4px rgba(18,183,106,.10); }
+.bar-reset { padding: 9px 14px; color: #475467; background: rgba(255,255,255,.9); border-color: #e4e7ec; }
+.bar-reset:hover { color: var(--premium-accent); border-color: #c9c5ff; background: #fafaff; }
+
+.thread { padding: 28px clamp(16px, 5vw, 42px); gap: 18px; }
+.msg { max-width: min(88%, 720px); }
+.bubble { padding: 13px 16px; border-radius: 16px; font-size: 14.5px; line-height: 1.62; }
+.msg-assistant .bubble { background: rgba(248,249,252,.92); border-color: #e8eaf0; border-top-left-radius: 7px; }
+.msg-user .bubble { background: linear-gradient(135deg,#635bff,#5148e5); border-top-right-radius: 7px; box-shadow: 0 8px 22px rgba(99,91,255,.18); }
+
+.empty { padding: 64px 20px; }
+.empty::before { width: 50px; height: 50px; border-radius: 16px; background: var(--premium-accent-soft); box-shadow: inset 0 0 0 1px rgba(99,91,255,.08); }
+.empty-title { font-size: 25px; }
+.empty p { color: #667085; }
+
+.products { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; margin-top: 12px; width: min(100%, 720px); }
+.product-tag { grid-template-columns: 88px minmax(0,1fr); padding: 11px; border-radius: 16px; border-color: #e7e9ef; box-shadow: 0 4px 18px rgba(16,24,40,.045); }
+.product-tag:hover { transform: translateY(-3px); border-color: #d5d1ff; box-shadow: 0 14px 30px rgba(16,24,40,.09); }
+.product-tag::before { width: 3px; background: var(--premium-accent); border-radius: 3px; }
+.product-thumb { width: 88px; height: 88px; border-radius: 12px; background: linear-gradient(135deg,#f3f4f7,#eef0f5); }
+.product-name { font-size: 14px; margin-bottom: 6px; }
+.product-meta { font-size: 11px; }
+.product-price { margin-top: 8px; color: #475467; background: #f8f9fb; border: 1px solid #eaecf0; font-size: 11.5px; }
+.product-actions { margin-top: 10px; gap: 7px; }
+.product-action { min-height: 31px; padding: 7px 10px; border-color: #e4e7ec; color: #344054; background: #fff; }
+.product-action:hover { color: var(--premium-accent); border-color: #c9c5ff; background: #fafaff; }
+
+.composer { padding: 13px 18px; gap: 9px; background: rgba(255,255,255,.9); border-top-color: rgba(232,234,240,.95); }
+.composer-input { min-height: 42px; padding: 11px 17px; border-radius: 21px; background: #f8f9fb; border-color: #e4e7ec; }
+.composer-input:focus { border-color: #aaa5ff; box-shadow: 0 0 0 4px rgba(99,91,255,.09); }
+.composer-icon-btn { width: 42px; height: 42px; }
+.composer-send { width: 42px; height: 42px; background: linear-gradient(135deg,#635bff,#5148e5); box-shadow: 0 7px 18px rgba(99,91,255,.20); }
+.attach-preview { margin-left: 18px; margin-right: 18px; }
+
+.ucai-quick-replies { padding: 3px clamp(16px, 5vw, 42px) 9px !important; background: rgba(255,255,255,.72); }
+.ucai-quick { border-color: #e4e7ec !important; color: #475467 !important; background: #fff !important; padding: 8px 12px !important; box-shadow: 0 2px 9px rgba(16,24,40,.035) !important; }
+.ucai-quick:hover { color: var(--premium-accent) !important; border-color: #c9c5ff !important; background: #fafaff !important; }
+
+@media (max-width:680px) {
+  .products { grid-template-columns: 1fr; }
+  .product-tag { grid-template-columns: 82px minmax(0,1fr); }
+  .product-thumb { width: 82px; height: 82px; }
+}
+@media (max-width:480px) {
+  .bar { min-height: 62px; padding: 11px 13px; }
+  .bar-name { font-size: 17px; }
+  .thread { padding: 18px 12px; }
+  .composer { padding: 10px; }
+}
