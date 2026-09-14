@@ -12,9 +12,10 @@ import hmac
 import io
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
+from app.auth.dashboard_auth import is_dashboard_request_for_store
 from app.chat.models import ChatSession
 from app.chat.schemas import ImageAnalyzeRequest, ImageChatResponse
 from app.chat.service import ChatService
@@ -54,6 +55,7 @@ def _verify_conversation_access(
 
 @router.post("")
 async def upload_image(
+    http_request: Request,
     file: UploadFile = File(...),
     conversation_id: str | None = Form(default=None),
     x_conversation_token: str | None = Header(default=None, alias="x-conversation-token"),
@@ -62,7 +64,12 @@ async def upload_image(
     store: Store = Depends(get_current_store),
     db: Session = Depends(get_db),
 ):
-    dashboard_authenticated = bool(authorization) and not bool(x_api_key)
+    # Validate the merchant JWT against the resolved store — the same rule
+    # as /v1/chat. Never infer dashboard identity from header presence:
+    # a request with BOTH a Bearer JWT and a public x-api-key must be
+    # classified by the JWT (which, if valid and store-matching, grants
+    # merchant context; if absent/invalid, the conversation token applies).
+    dashboard_authenticated = await is_dashboard_request_for_store(http_request, db, store)
     require_feature(store, FEATURE_IMAGE_SEARCH)
     _verify_conversation_access(db, store.id, conversation_id, x_conversation_token, dashboard_authenticated)
 
@@ -98,6 +105,7 @@ async def upload_image(
 
 @router.post("/{image_id}/analyze", response_model=ImageChatResponse)
 async def analyze_image(
+    http_request: Request,
     image_id: str,
     request: ImageAnalyzeRequest,
     x_conversation_token: str | None = Header(default=None, alias="x-conversation-token"),
@@ -106,7 +114,7 @@ async def analyze_image(
     store: Store = Depends(get_current_store),
     db: Session = Depends(get_db),
 ):
-    dashboard_authenticated = bool(authorization) and not bool(x_api_key)
+    dashboard_authenticated = await is_dashboard_request_for_store(http_request, db, store)
     require_feature(store, FEATURE_IMAGE_SEARCH)
     image_record = ImageRepository(db).get(store_id=store.id, image_id=image_id)
     if image_record is None:

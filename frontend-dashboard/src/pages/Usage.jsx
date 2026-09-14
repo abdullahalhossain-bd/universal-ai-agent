@@ -59,7 +59,7 @@ export default function Usage() {
         </Card>
         <Card>
           <div className="flex items-center gap-2 text-muted"><Coins size={16} /> Plan</div>
-          <div className="mt-4 text-2xl font-display font-semibold text-text">{summary.plan}</div>
+          <div className="mt-4 text-2xl font-display font-semibold text-text">{summary?.plan || '—'}</div>
           <div className="mt-1 text-xs text-muted">Current subscription</div>
         </Card>
         <Card>

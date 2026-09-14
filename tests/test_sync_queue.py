@@ -2,6 +2,7 @@ import json
 
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import ResponseError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from app.sync.queue import GROUP, SyncQueue
@@ -69,6 +70,39 @@ async def test_malformed_message_keeps_raw_job_in_dlq_script():
 
     _, _, args = queue.redis.evals[0]
     assert args[2] == "not-json"
+
+
+@pytest.mark.asyncio
+async def test_stats_initializes_missing_consumer_group_and_reads_empty_queue():
+    class FreshRedisQueue:
+        def __init__(self):
+            self.group_created = False
+
+        async def xgroup_create(self, stream, group, id="0", mkstream=True):
+            self.group_created = True
+            return "OK"
+
+        async def xpending(self, stream, group):
+            if not self.group_created:
+                raise ResponseError(f"NOGROUP No such key \"{stream}\"")
+            return {"pending": 0}
+
+        async def xlen(self, stream):
+            return 0
+
+        async def zcard(self, key):
+            return 0
+
+    queue = SyncQueue.__new__(SyncQueue)
+    queue.redis = FreshRedisQueue()
+    queue.stream = "fresh_sync_jobs"
+    queue.group = "fresh_sync_workers"
+    queue.dlq_stream = "fresh_sync_jobs_dlq"
+    queue.delayed_key = "fresh_sync_jobs:delayed"
+
+    stats = await queue.stats()
+
+    assert stats == {"stream_length": 0, "pending": 0, "delayed": 0, "dead_letter": 0}
 
 
 @pytest.mark.asyncio

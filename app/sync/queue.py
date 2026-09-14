@@ -238,6 +238,7 @@ class SyncQueue:
 
     async def stats(self) -> dict[str, int]:
         try:
+            await self._ensure_group()
             pending = await self.redis.xpending(self.stream, self.group)
             return {
                 "stream_length": int(await self.redis.xlen(self.stream)),
@@ -245,6 +246,10 @@ class SyncQueue:
                 "delayed": int(await self.redis.zcard(self.delayed_key)),
                 "dead_letter": int(await self.redis.xlen(self.dlq_stream)),
             }
+        except redis.ResponseError as exc:
+            if "NOGROUP" not in str(exc) and "BUSYGROUP" not in str(exc):
+                raise
+            return {"stream_length": 0, "pending": 0, "delayed": 0, "dead_letter": 0}
         except Exception:
             logger.exception("failed reading sync queue stats")
             return {"stream_length": -1, "pending": -1, "delayed": -1, "dead_letter": -1}

@@ -78,8 +78,17 @@ export default function Billing() {
       {checkoutStatus === 'cancelled' && <div className="mb-5"><Alert tone="warn">Checkout was cancelled — no changes were made.</Alert></div>}
       {error && <div className="mb-5"><Alert>{error}</Alert></div>}
 
-      {summary === null ? (
+      {summary === null && !error ? (
         <div className="flex justify-center py-16 text-muted"><Spinner className="h-6 w-6" /></div>
+      ) : summary === null ? (
+        // Load failed: show the error above plus a retry affordance
+        // instead of a spinner that never resolves.
+        <Card>
+          <div className="py-8 text-center">
+            <p className="text-sm text-muted">Billing data could not be loaded.</p>
+            <Button className="mt-3" onClick={() => load()}>Retry</Button>
+          </div>
+        </Card>
       ) : (
         <>
           <Card className="mb-6">

@@ -79,6 +79,14 @@ class Settings(BaseSettings):
         if not environments.intersection({"production", "prod"}): return self
         if self.jwt_secret_key == "dev-only-insecure-secret-change-me": raise ValueError("JWT_SECRET_KEY must be explicitly configured in production")
         if len(self.jwt_secret_key.encode("utf-8")) < 32: raise ValueError("JWT_SECRET_KEY must be at least 32 bytes in production")
+        import os
+        # ALLOW_LOCAL_DATASOURCE_HOSTS disables the crawler/connector SSRF
+        # guard entirely (localhost, private ranges, cloud metadata become
+        # fetchable). It exists only for local development fixtures; leaking
+        # it into a production deployment would neutralize SSRF protection,
+        # so refuse to boot rather than run an unprotected crawler.
+        if os.getenv("ALLOW_LOCAL_DATASOURCE_HOSTS", "").strip().lower() in {"1", "true", "yes", "on"}:
+            raise ValueError("ALLOW_LOCAL_DATASOURCE_HOSTS must not be enabled in production: it disables SSRF protection")
         database_host = urlparse(self.database_url).hostname
         if database_host and (database_host.endswith(".localhost") or database_host in {"localhost", "127.0.0.1", "::1"}): raise ValueError("DATABASE_URL must not point to localhost in production")
         redis_host = urlparse(self.redis_url).hostname

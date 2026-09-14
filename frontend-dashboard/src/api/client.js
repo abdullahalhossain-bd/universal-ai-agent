@@ -51,7 +51,12 @@ function parseErrorDetail(data, status) {
   return `Request failed (${status})`
 }
 
-function handleMerchantUnauthorized(path, auth, resolvedToken, explicitToken) {
+function handleMerchantUnauthorized(path, auth, resolvedToken, explicitToken, status) {
+  // Only an actual auth rejection (401) ends the session. 403 = suspended
+  // store / permission issue, 404/409/422/429/5xx = ordinary errors the
+  // page error banners should surface — logging the merchant out on any
+  // failed request would kill perfectly valid sessions.
+  if (status !== 401) return
   if (!auth || !resolvedToken || explicitToken || path.startsWith('/v1/auth/')) return
   if (resolvedToken !== getToken()) return
   setToken(null)
@@ -96,7 +101,7 @@ async function request(path, { method = 'GET', body, form, auth = true, headers 
     try { data = JSON.parse(text) } catch { data = text }
   }
   if (!res.ok) {
-    handleMerchantUnauthorized(path, auth, resolvedToken, token)
+    handleMerchantUnauthorized(path, auth, resolvedToken, token, res.status)
     throw new ApiError(res.status, parseErrorDetail(data, res.status))
   }
   return data

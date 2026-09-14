@@ -7,6 +7,15 @@ from app.auth.admin_session import create_admin_access_token
 from app.core.config import Settings, settings
 
 
+@pytest.fixture(autouse=True)
+def _no_local_hosts_dev_flag(monkeypatch):
+    # conftest enables ALLOW_LOCAL_DATASOURCE_HOSTS suite-wide (datasource
+    # tests hit the local test DB). The production validator refuses that
+    # flag, which would otherwise mask the specific validation these
+    # settings tests assert on.
+    monkeypatch.delenv("ALLOW_LOCAL_DATASOURCE_HOSTS", raising=False)
+
+
 def test_admin_access_token_has_expiry():
     token = create_admin_access_token(admin_id="admin-1")
     payload = jwt.decode(

@@ -81,6 +81,18 @@
   function request(url, options) {
     options = options || {};
     options.headers = headers(options.headers || {});
+    // Every widget request gets a timeout: the 5s/30s poll interval must
+    // never stack with requests that hang forever (hung fetches would
+    // accumulate for the lifetime of the page on a stalled connection).
+    var timeoutMs = options.timeoutMs || 15000;
+    delete options.timeoutMs;
+    var controller = ("AbortController" in window) ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
+    if (controller && options.signal) {
+      // Caller-supplied abort (panel close) still wins.
+      options.signal.addEventListener("abort", function () { controller.abort(); });
+    }
+    if (controller) options.signal = controller.signal;
     return fetch(API_BASE + url, options).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (data) {
         if (!r.ok) {
@@ -90,6 +102,15 @@
         }
         return data;
       });
+    }).catch(function (err) {
+      if (err && err.name === "AbortError") {
+        var t = new Error("Request timed out.");
+        t.status = 0;
+        throw t;
+      }
+      throw err;
+    }).finally(function () {
+      if (timer) clearTimeout(timer);
     });
   }
   function money(v, currency) {
@@ -253,8 +274,13 @@
   function pollInterval() {
     return panel.classList.contains("open") ? POLL_INTERVAL_OPEN_MS : POLL_INTERVAL_CLOSED_MS;
   }
+  var pollInFlight = false;
   function pollOnce() {
     if (!conversationId || !conversationToken || modeChanging) return;
+    // One in-flight poll at a time: with the 15s request timeout above, a
+    // slow backend would otherwise stack concurrent polls per interval.
+    if (pollInFlight) return;
+    pollInFlight = true;
     request(messagesUrl()).then(function (data) {
       if (!data) return;
       backgroundAuthFailures = 0;
@@ -262,7 +288,7 @@
       else if (data.mode === "ai" && merchantMode && data.mode_owner !== "merchant") { merchantMode = false; }
       renderMode();
       if (merchantMode) renderMerchantMessages(data.messages);
-    }).catch(handleBackgroundAuthFailure);
+    }).catch(handleBackgroundAuthFailure).finally(function () { pollInFlight = false; });
   }
   function startPolling() {
     stopPolling();

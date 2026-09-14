@@ -25,8 +25,20 @@ def _is_dangerous_ip(ip: ipaddress._BaseAddress) -> bool:
 
 
 def _check_literal_host(host: str) -> bool:
+    # ip_address() rejects string forms like "2130706433" or "0x7f000001"
+    # (both == 127.0.0.1) even though browsers happily connect to them.
+    # Normalize those notations to an int, which ip_address() does accept.
+    candidate: str | int = host
     try:
-        return _is_dangerous_ip(ipaddress.ip_address(host))
+        stripped = host.strip()
+        if stripped[:2].lower() == "0x":
+            candidate = int(stripped, 16)
+        elif stripped.isdigit():
+            candidate = int(stripped)
+    except (ValueError, AttributeError):
+        candidate = host
+    try:
+        return _is_dangerous_ip(ipaddress.ip_address(candidate))
     except ValueError:
         return False
 

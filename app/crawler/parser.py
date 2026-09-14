@@ -220,8 +220,57 @@ def extract_metadata(html: str):
             "headings": [h.get_text(" ", strip=True) for h in soup.find_all(["h1", "h2", "h3"])]}
 
 
+_OG_PRODUCT_FIELDS = {
+    "og:title": "name",
+    "og:description": "description",
+    "product:sku": "sku",
+    "product:brand": "brand",
+    "product:category": "category",
+}
+
+
+def extract_og_product(html: str, page_url: str | None = None) -> list[dict]:
+    """Extract a product from OpenGraph / product: meta tags.
+
+    Many storefronts (Shopify, WooCommerce themes, custom carts) emit
+    og:type=product plus product:price:amount instead of JSON-LD. This
+    generic fallback only fires when the page actually declares itself a
+    product page, so ordinary content pages are unaffected.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    metas = {}
+    for meta in soup.find_all("meta"):
+        key = (meta.get("property") or meta.get("name") or "").strip().lower()
+        content = (meta.get("content") or "").strip()
+        if key and content and key not in metas:
+            metas[key] = content
+    is_product_page = metas.get("og:type", "").lower() == "product" or "product:price:amount" in metas
+    if not is_product_page:
+        return []
+    row = {"@type": "Product", "_extraction": "opengraph"}
+    for og_key, field in _OG_PRODUCT_FIELDS.items():
+        value = metas.get(og_key)
+        if value:
+            row[field] = value
+    price = metas.get("product:price:amount") or metas.get("og:price:amount")
+    if price:
+        row["offers"] = {"price": price, "priceCurrency": metas.get("product:price:currency") or metas.get("og:price:currency")}
+    image = metas.get("og:image") or metas.get("og:image:secure_url")
+    if image:
+        row["image"] = urljoin(page_url, image) if page_url else image
+    url = metas.get("og:url")
+    if url:
+        row["url"] = urljoin(page_url, url) if page_url else url
+    elif page_url:
+        row["url"] = page_url
+    if row.get("name"):
+        return [row]
+    return []
+
+
 def parse_page(html: str, page_url: str | None = None) -> dict:
     metadata = extract_metadata(html)
     structured = extract_structured_data(html)
     semantic = extract_html_products(html, page_url)
-    return {**metadata, "content": extract_text(html), "structured_data": _dedupe_products(structured + semantic)}
+    og_products = extract_og_product(html, page_url)
+    return {**metadata, "content": extract_text(html), "structured_data": _dedupe_products(structured + semantic + og_products)}

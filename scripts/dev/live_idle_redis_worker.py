@@ -5,6 +5,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -36,7 +37,7 @@ def main() -> int:
     threading.Thread(target=fixture.serve_forever, daemon=True).start()
     worker = None
     store_id = datasource_id = None
-    log_path = Path(os.environ.get("TEMP", ".")) / f"uaa-idle-worker-{uuid.uuid4().hex}.log"
+    log_path = Path(tempfile.gettempdir()) / f"uaa-idle-worker-{uuid.uuid4().hex}.log"
     started = time.monotonic()
     try:
         db = SessionLocal()

@@ -60,7 +60,10 @@ export default function ChatPreview() {
 
   const sendChat = async () => {
     const next = message.trim()
-    if (!next) return
+    // Guard covers the Enter-key path too: it bypasses the disabled
+    // button, and a second send while one is in flight corrupts the
+    // transcript (responses splice by position).
+    if (!next || loading || uploading) return
     setLoading(true)
     setError('')
     setConversation((prev) => [...prev, { role: 'user', content: next }, { role: 'assistant', content: 'Thinking…' }])

@@ -45,6 +45,14 @@ export default function Websites() {
     // terminal state and an unbounded 2s loop would spin forever.
     const POLL_INTERVAL_MS = 2000
     const POLL_MAX_MS = 10 * 60 * 1000
+    // Stop after consecutive failures: a dead API / auth expiry must not
+    // produce ~300 failed requests over the full 10-minute window. One
+    // transient blip is tolerated; three in a row stops the loop.
+    const MAX_CONSECUTIVE_FAILURES = 3
+    let consecutiveFailures = 0
+    // setInterval cannot await, so a slow status endpoint would otherwise
+    // stack concurrent requests (10s timeout > 2s interval).
+    let inFlight = false
     const stopPolling = () => {
       if (pollRef.current) clearInterval(pollRef.current)
       pollRef.current = null
@@ -56,15 +64,24 @@ export default function Websites() {
         stopPolling()
         return
       }
+      if (inFlight) return
+      inFlight = true
       try {
         const status = await api.get(`/v1/websites/${encodeURIComponent(datasourceId)}/status`, { timeoutMs: 10000 })
+        consecutiveFailures = 0
         setCrawl({ progress: status.crawl_progress || {}, lastRun: status.last_run })
         if (['success', 'partial', 'error'].includes(status.last_run?.status)) {
           stopPolling()
           load()
         }
       } catch (err) {
+        consecutiveFailures += 1
         setError(errorMessage(err, 'Unable to read crawl progress.'))
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          stopPolling()
+        }
+      } finally {
+        inFlight = false
       }
     }
     poll()

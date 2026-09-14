@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, BarChart3, HelpCircle, MessageCircleQuestion, RefreshCw, Search, Target } from 'lucide-react'
 import { api } from '../api/client'
 import { Badge, Button, Card, PageHeader, Spinner } from '../components/ui'
@@ -10,8 +10,12 @@ export default function Analytics() {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  // Sequence guard: switching periods quickly must not let a slower older
+  // response resolve last and render stale numbers under the new selection.
+  const requestSeq = useRef(0)
 
   const load = async () => {
+    const seq = ++requestSeq.current
     setLoading(true); setError('')
     try {
       const [overview, daily, questions, gaps, intents] = await Promise.all([
@@ -21,9 +25,10 @@ export default function Analytics() {
         api.get(`/v1/analytics/knowledge-gaps?days=${days}&limit=12`),
         api.get(`/v1/analytics/intents?days=${days}`),
       ])
+      if (seq !== requestSeq.current) return
       setData({ overview, daily, questions, gaps, intents })
-    } catch (e) { setError(e?.message || 'Analytics could not be loaded.') }
-    finally { setLoading(false) }
+    } catch (e) { if (seq === requestSeq.current) setError(e?.message || 'Analytics could not be loaded.') }
+    finally { if (seq === requestSeq.current) setLoading(false) }
   }
 
   useEffect(() => { load() }, [days])

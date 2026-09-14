@@ -8,10 +8,13 @@ cached fallback for paraphrases and mixed Bangla/Banglish/English phrasing.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Awaitable, Callable
 
 from app.core.redis import redis_client
+
+logger = logging.getLogger(__name__)
 
 
 def _norm(value: str) -> str:
@@ -142,7 +145,7 @@ async def extract_semantic_attributes(
             value = json.loads(cached)
             return value if isinstance(value, dict) else {}
     except Exception:
-        pass
+        logger.debug("semantic attribute cache read failed store=%s", key, exc_info=True)
 
     schema_for_prompt = {key: aliases for key, aliases in schema.items()}
     messages = [
@@ -168,6 +171,9 @@ async def extract_semantic_attributes(
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE)
         parsed = json.loads(raw)
     except Exception:
+        # LLM unavailable or malformed JSON: planner proceeds without
+        # semantic aliases (they are an enrichment, not a dependency).
+        logger.info("semantic attribute LLM enrichment failed store key=%s", key, exc_info=True)
         return {}
 
     if not isinstance(parsed, dict):
@@ -185,5 +191,5 @@ async def extract_semantic_attributes(
     try:
         await redis_client.set(key, json.dumps(result, ensure_ascii=False), ex=24 * 60 * 60)
     except Exception:
-        pass
+        logger.debug("semantic attribute cache write failed store=%s", key, exc_info=True)
     return result

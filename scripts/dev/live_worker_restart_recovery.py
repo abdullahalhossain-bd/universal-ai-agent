@@ -126,7 +126,18 @@ def _write_public_fixture_shim(test_dir: Path) -> Path:
     shim_path = test_dir / "sitecustomize.py"
     shim_path.write_text(
         """
+import os
 import socket
+import sys
+
+# sitecustomize runs during interpreter startup, BEFORE the `-m` runpy
+# machinery puts the launch cwd on sys.path. The worker subprocess is
+# launched with cwd=REPO_ROOT, so add it here first, otherwise
+# `import app.knowledge.crawler` fails and this shim silently no-ops
+# (which made the recovery fixture crawl fail DNS for the .test host).
+_repo_root = os.getcwd()
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
 
 _PUBLIC_HOST = "public-example.test"
 _PUBLIC_IP = "127.0.0.1"
@@ -169,7 +180,8 @@ try:
     crawler.assert_safe_url = _patched_assert_safe_url
     crawler._PinnedResolver = _LocalPublicResolver
 except Exception:
-    pass
+    import traceback
+    traceback.print_exc()
 """.strip() + "\n",
         encoding="utf-8",
     )
@@ -212,7 +224,7 @@ def main():
     worker1 = worker2 = None
     worker2_stream = None
     store_id = datasource_id = None
-    worker2_log = Path(os.environ.get("TEMP", ".")) / f"uaa-recovery-worker2-{uuid.uuid4().hex}.log"
+    worker2_log = Path(tempfile.gettempdir()) / f"uaa-recovery-worker2-{uuid.uuid4().hex}.log"
     public_fixture_dir = Path(tempfile.mkdtemp(prefix="uaa-public-host-"))
     _write_public_fixture_shim(public_fixture_dir)
     try:

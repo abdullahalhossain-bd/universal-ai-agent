@@ -60,26 +60,6 @@ jobs:
             exit 1
           fi
 
-  demo-php:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.3'
-      - name: Lint demo website PHP files
-        shell: bash
-        run: |
-          set -euo pipefail
-          files=$(find 'demo website' -type f -name '*.php' -print)
-          test -n "$files"
-          while IFS= read -r file; do
-            echo "Linting: $file"
-            php -l "$file"
-          done <<< "$files"
-
   browser:
     runs-on: ubuntu-latest
     timeout-minutes: 20

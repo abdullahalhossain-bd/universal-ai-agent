@@ -1,96 +1,136 @@
-# Database migrations (Alembic)
+# Universal Commerce AI Agent
 
-Before this, schema changes only happened through
-`Base.metadata.create_all()` at app startup (`AUTO_CREATE_TABLES=true`,
-the default). That call can add a table that doesn't exist yet, but it
-**can never alter an existing one** — rename/resize/retype a column,
-add a `NOT NULL`, backfill data, drop a column. Once real merchant
-data exists, any of those changes had no path except manual `ALTER
-TABLE` by hand against production (or downtime + a dump/reload). This
-directory replaces that with reviewable, ordered migrations.
+A multi-tenant SaaS platform that lets merchants add an AI shopping
+assistant to their own websites.
 
-## One-time setup per environment
+```
+Merchant signup/login → Dashboard → Store → Add Website / Product DB
+  → discovery/crawl → products + knowledge stored & indexed
+  → API key + embeddable widget on the merchant's site
+  → customer asks product/site questions
+  → intent detection → tenant-scoped search → grounded answer
+```
 
-`alembic/env.py` reads the DB connection from `app.core.config.settings`
-(the same `DATABASE_URL` the app uses) — nothing DB-related needs to
-be configured a second time in `alembic.ini`. It also needs
-`CREDENTIAL_ENCRYPTION_KEY` set (importing the app's models imports
-`app.datasources.service`'s dependencies), same as running the app.
+**Stack**: FastAPI · PostgreSQL (+pgvector) · Redis (Streams queue) ·
+SQLAlchemy · Alembic · React (Vite) merchant dashboard · vanilla-JS
+embeddable widget · Groq LLM (optional — the chat has a deterministic,
+store-data-grounded fallback when no LLM key is configured).
 
-## Day-to-day workflow
+---
 
-1. Change a model in `app/db/models.py`, `app/chat/models.py`,
-   `app/usage/models.py`, or `app/knowledge/chunk.py` (the "Active ORM
-   Models" set — see `app/main.py`).
-2. Generate a migration from the diff:
-   ```bash
-   alembic revision --autogenerate -m "add stores.timezone"
-   ```
-3. **Read the generated file in `alembic/versions/` before committing
-   it.** Autogenerate is a diffing tool, not a design tool — it won't
-   notice a rename (it'll emit a drop + add, which loses data) and
-   won't write a backfill for a new `NOT NULL` column. Rewrite those
-   parts by hand; see the *Common cases* section below.
-4. Apply it locally: `alembic upgrade head`.
-5. Commit the migration file alongside the model change, in the same
-   PR. A model change without a matching migration is exactly the bug
-   this setup exists to catch — `tests/test_migrations.py` fails the
-   build if they drift apart.
+## Architecture (what runs where)
 
-## Deploying
+| Process | Start command | Purpose |
+| --- | --- | --- |
+| API | `uvicorn app.main:app --host 0.0.0.0 --port 8000` | REST API, dashboard auth, chat endpoints, static widget/chat UIs |
+| Worker | `python -m app.sync.worker` | Redis Streams consumer: website crawls, product syncs, embeddings. Per-datasource locks, bounded retries, dead-letter queue, stale-message reclaim (XAUTOCLAIM) |
+| Scheduler | runs inside the worker loop (default) or standalone `python -m app.sync.scheduler` | Re-enqueues datasources past their recrawl interval |
+| Dashboard | `cd frontend-dashboard && npm run dev` (or build `dist/`) | Merchant console |
 
-Run this as a deploy step, before the new app code starts serving
-traffic:
+`RUN_SYNC_INLINE` (default **true**) starts a worker + scheduler inside the
+API process — convenient for single-process local dev. In any deployment
+with a dedicated worker container, set `RUN_SYNC_INLINE=false` (both
+docker-compose files already do) or every job runs twice.
+
+Key directories:
+
+- `app/api/routes/` + `app/chat/router.py` — all HTTP endpoints
+- `app/auth/` — merchant JWT sessions, inbox cookie+CSRF, platform-admin
+  JWT, public `pk_live_…` API keys (SHA-256 hashed at rest)
+- `app/sync/` — durable queue, worker, processor, stale/DLQ lifecycle
+- `app/crawler/` + `app/knowledge/` — SSRF-guarded crawler, chunker,
+  keyword + optional vector search
+- `alembic/versions/` — 40+ ordered migrations (single head)
+- `frontend/chat/` + `app/static/widget.js` — customer-facing UIs
+- `tests/` — pytest suite; `tests/e2e/` — live end-to-end scripts
+
+## Authentication model (do not mix these)
+
+- **Merchant dashboard** — `Authorization: Bearer <JWT>` from
+  `POST /v1/auth/signup|login`. Inbox pages additionally use an HttpOnly
+  cookie + CSRF header. A merchant chatting inside their own dashboard
+  does **not** need a customer conversation token.
+- **Public customer chat** — `x-api-key: pk_live_…` only. The first
+  `POST /v1/chat` returns a `conversation_token`; every later request on
+  that conversation must also send `x-conversation-token`. Tokens are
+  per-conversation secrets compared with constant-time HMAC.
+- Tenant isolation: every store-scoped query filters by `store_id`
+  resolved from the credential — never from a request parameter.
+
+## Local setup
 
 ```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt            # add -r requirements-dev.txt for tests
+cp .env.example .env                       # fill DATABASE_URL, REDIS_URL, CREDENTIAL_ENCRYPTION_KEY
+alembic upgrade head                       # REQUIRED before first boot (AUTO_CREATE_TABLES=false)
+uvicorn app.main:app --reload              # API (+ inline worker) on :8000
+```
+
+Postgres needs the `pgvector` extension available (the `pgvector/pgvector:pg16`
+image in docker-compose has it); without it the app boots fine and semantic
+search degrades to keyword search.
+
+Quick stack alternative: `docker compose up` (postgres, redis, api, worker —
+migrations run in the api entrypoint).
+
+## Environment variables that matter
+
+| Variable | Notes |
+| --- | --- |
+| `DATABASE_URL`, `REDIS_URL` | required |
+| `CREDENTIAL_ENCRYPTION_KEY` | Fernet key — required to encrypt merchant datasource credentials |
+| `GROQ_API_KEY_1..14` | optional pool; without keys chat uses deterministic answers |
+| `ENVIRONMENT=production` | turns on hard validation: JWT secret ≥32B, no localhost DB/Redis, non-empty CORS, and **refuses `ALLOW_LOCAL_DATASOURCE_HOSTS`** |
+| `ALLOW_LOCAL_DATASOURCE_HOSTS` | dev-only SSRF bypass for local fixtures. Refused in production |
+| `RUN_SYNC_INLINE` | false whenever a dedicated worker runs |
+| `AUTO_CREATE_TABLES` | must be false in production; `alembic upgrade head` is the deploy step |
+| `SYNC_QUEUE_CLAIM_IDLE_MS` / `SYNC_QUEUE_LOCK_TTL_MS` | crash-recovery tuning (default 5 min / 10 min) |
+| `SYNC_WORKER_CONCURRENCY` / `SYNC_WORKER_POLL_MS` | worker sizing (default 4 / 5000) |
+
+## Database migrations
+
+Change a model in `app/db/models.py`, `app/chat/models.py`,
+`app/usage/models.py`, or `app/knowledge/chunk.py`, then:
+
+```bash
+alembic revision --autogenerate -m "add stores.timezone"
+# READ the generated file before committing (autogenerate drops+adds renames)
 alembic upgrade head
 ```
 
-`AUTO_CREATE_TABLES` must be `false` wherever `ENVIRONMENT=production`
-— `app/main.py`'s startup now refuses to boot otherwise, specifically
-so this doesn't get skipped by accident.
+Existing create_all-era database? `alembic stamp 0001` first. Details in
+`alembic/README.md`. `tests/test_migrations.py` fails the build if the
+migration history and ORM models drift apart.
 
-## Adopting this on an existing database
-
-If an environment's tables were created by `create_all()` (i.e. it has
-every table but no `alembic_version` table), don't run `alembic
-upgrade head` blind — `0001_baseline_schema` would try to `CREATE
-TABLE` things that already exist and fail. Tell Alembic that database
-is already at the baseline without re-running the DDL:
+## Testing
 
 ```bash
-alembic stamp 0001
+# unit + integration (needs local postgres+redis, or they auto-skip):
+DATABASE_URL=postgresql://user:pass@127.0.0.1:5432/test_db \
+REDIS_URL=redis://127.0.0.1:6379/0 \
+CREDENTIAL_ENCRYPTION_KEY=<key> pytest
+
+# live end-to-end (real worker, real redis, deterministic fixtures):
+python scripts/dev/live_website_worker_e2e.py
+python scripts/dev/live_worker_restart_recovery.py   # kill -9 + reclaim + no duplicates
+python scripts/dev/live_idle_redis_worker.py         # 5-minute idle worker health
+python scripts/dev/live_tenant_isolation_e2e.py      # cross-merchant negative tests
+python tests/e2e/api_smoke_test.py                   # against a running server
+python tests/e2e/acceptance_a_to_z.py                # full merchant journey, 30 checks
 ```
 
-Then future `alembic upgrade head` runs apply only what comes after
-0001. (Nothing to migrate yet on a brand-new database — `alembic
-upgrade head` there runs `0001` for real and creates everything.)
+## Deployment
 
-## Common cases autogenerate gets wrong
+- `render.yaml` — Render blueprint (api service runs migrations in the
+  entrypoint and sets `RUN_SYNC_INLINE=false`; separate worker service).
+- `docker-compose.prod.yml` — api + worker + postgres + redis + caddy.
+- Production checklist: `ENVIRONMENT=production`, strong `JWT_SECRET_KEY`,
+  `AUTO_CREATE_TABLES=false`, `RUN_SYNC_INLINE=false`, migrations as a
+  deploy step, `ALLOW_LOCAL_DATASOURCE_HOSTS` unset.
+- Single-instance note: `STORAGE_BACKEND=local` chat images live on one
+  disk — move to S3 (vars are ready) before scaling to multiple API
+  instances.
 
-- **Renaming a column/table**: autogenerate emits `drop` + `add`,
-  which drops the data. Replace with `op.alter_column(...,
-  new_column_name=...)` / `op.rename_table(...)`.
-- **New `NOT NULL` column on a table with existing rows**: add it
-  nullable, `op.execute(...)` an `UPDATE` to backfill, then a second
-  migration to add the `NOT NULL` constraint. Doing all three in one
-  step on a large table also holds a long lock — consider splitting
-  across deploys for that reason alone.
-- **`knowledge_chunks.embedding`**: type depends on whether the
-  `pgvector` extension is enabled on the *target* database at
-  migration time (see `_knowledge_embedding_column()` in
-  `0001_baseline_schema.py`, which mirrors
-  `app/knowledge/vector_support.py`'s runtime probe). If you add a
-  migration that touches this table, generate/review it against a
-  database with the same pgvector availability as production, not
-  whatever's on your laptop.
-
-## Sanity checks
-
-- `alembic heads` should print exactly one revision. Two means someone
-  branched migrations (two PRs both based off the same parent
-  revision) — merge them into a single linear chain with `alembic
-  merge`, don't just pick one.
-- `tests/test_migrations.py` applies every migration to a scratch
-  sqlite DB and asserts a fresh autogenerate diff against it is empty
-  — i.e. the migration history and the ORM models actually agree.
+See `DEPLOY.md` for the full runbook and `LAUNCH_READINESS_REPORT.md`
+for the pre-launch status.

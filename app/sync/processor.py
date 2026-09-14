@@ -10,6 +10,7 @@ from app.db.models import DataSource, Product, SyncRun
 from app.sync.normalize import discover_mapping
 from app.sync.result import SyncResult
 from app.sync.retry import run_with_retry
+from app.sync.runs import mark_superseded_runs
 from app.sync.service import ProductSyncService
 from app.sync.quality import repair_suggestions, schema_analysis
 from app.sync.stale import apply_stale_policy
@@ -70,6 +71,10 @@ async def _auto_discover_mapping(connector, table_name, mapping):
     return candidate, {"table": str(table_name), "columns": names}, _semantic_mapping(candidate) != _semantic_mapping(effective)
 
 def _start_run(db, store_id, datasource_id, sync_mode, execution=None):
+    # Close out any still-"running" run for this datasource: the lock
+    # serializes syncs, so a running row here belongs to a dead worker.
+    if datasource_id:
+        mark_superseded_runs(db, store_id, datasource_id)
     run = SyncRun(store_id=store_id, datasource_id=datasource_id, status="running", sync_mode=sync_mode, started_at=datetime.utcnow())
     db.add(run); db.flush()
     db.info["sync_run_id"] = run.id

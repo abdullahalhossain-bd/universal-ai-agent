@@ -109,9 +109,9 @@ export default function Overview() {
           <StatCard
             icon={TrendingUp}
             label="Usage this month"
-            value={`$${Number(billing.spent_this_month).toFixed(2)}`}
-            sub={`of $${Number(billing.monthly_budget).toFixed(2)} budget`}
-            progress={billing.monthly_budget > 0 ? Math.min(1, billing.spent_this_month / billing.monthly_budget) : 0}
+            value={billing ? `$${Number(billing.spent_this_month).toFixed(2)}` : '—'}
+            sub={billing ? `of $${Number(billing.monthly_budget).toFixed(2)} budget` : 'Billing unavailable'}
+            progress={billing && billing.monthly_budget > 0 ? Math.min(1, billing.spent_this_month / billing.monthly_budget) : 0}
           />
           <StatCard
             icon={Globe}

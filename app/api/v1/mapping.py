@@ -33,6 +33,26 @@ class ApplyMappingRequest(BaseModel):
     table: str
     mapping: dict[str, str]
 
+
+def _column_dicts(columns):
+    """Normalize the union request type (ColumnPayload objects or plain
+    strings) into the plain dicts MappingConfirmationService expects.
+    Pydantic models are not subscriptable, so passing them through
+    unconverted crashed the route with a 500 TypeError.
+    """
+    normalized = []
+    for column in columns:
+        if isinstance(column, str):
+            normalized.append({"name": column, "type": None})
+        elif isinstance(column, ColumnPayload):
+            normalized.append({"name": column.name, "type": column.type})
+        elif isinstance(column, dict):
+            normalized.append(column)
+        else:
+            # Unknown shape: fall back to attribute access if possible.
+            normalized.append({"name": getattr(column, "name", str(column)), "type": getattr(column, "type", None)})
+    return normalized
+
 @router.post("/suggest")
 async def suggest_mapping(payload: SuggestMappingRequest, store: Store = Depends(get_current_store)):
     require_feature(store, FEATURE_DATABASE_SYNC)
@@ -40,14 +60,14 @@ async def suggest_mapping(payload: SuggestMappingRequest, store: Store = Depends
     # body is accepted for contract compatibility but never trusted (the
     # authenticated store is the only tenant identity, as in /apply).
     if payload.store_id != store.id: raise HTTPException(status_code=403, detail="store_id does not match the authenticated store")
-    result=MappingConfirmationService().confirm(table=payload.table, columns=payload.columns, sample_data=payload.sample_data, merchant_overrides=payload.overrides)
+    result=MappingConfirmationService().confirm(table=payload.table, columns=_column_dicts(payload.columns), sample_data=payload.sample_data, merchant_overrides=payload.overrides)
     return result.to_dict()
 
 @router.post("/confirm")
 async def confirm_mapping(payload: ConfirmMappingRequest, store: Store = Depends(get_current_store)):
     require_feature(store, FEATURE_DATABASE_SYNC)
     if payload.store_id != store.id: raise HTTPException(status_code=403, detail="store_id does not match the authenticated store")
-    service=MappingConfirmationService(); baseline=service.confirm(table=payload.table, columns=payload.columns, sample_data=payload.sample_data)
+    service=MappingConfirmationService(); baseline=service.confirm(table=payload.table, columns=_column_dicts(payload.columns), sample_data=payload.sample_data)
     result=service.apply_merchant_choices(baseline,payload.choices) if payload.choices else baseline
     body=result.to_dict(); body["sync_mapping"]=service.to_sync_mapping(result); return body
 

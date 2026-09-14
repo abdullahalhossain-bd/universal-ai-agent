@@ -18,6 +18,14 @@ class CreateStoreRequest(BaseModel):
 
 @router.post("")
 async def create_store(http_request: Request, payload: CreateStoreRequest, db: Session = Depends(get_db)):
+    # Legacy bootstrap endpoint: it creates a Store + live API key without
+    # an owning User. The real merchant onboarding path is POST /v1/auth/signup
+    # (user + store + key + password). Keep this endpoint for local dev and
+    # the test suite, but refuse it in production so anonymous visitors
+    # cannot mint unowned API keys (and the LLM/sync budget they carry).
+    from app.core.config import settings as _settings
+    if (_settings.environment or "").lower().strip() in {"production", "prod"}:
+        raise HTTPException(status_code=403, detail="Direct store creation is disabled in production. Use POST /v1/auth/signup.")
     client_ip = resolve_client_ip(peer_host=http_request.client.host if http_request.client else None, forwarded_for=http_request.headers.get("x-forwarded-for"))
     await enforce_signup_rate_limit(client_ip=client_ip)
     plan_name = payload.plan.lower().strip()

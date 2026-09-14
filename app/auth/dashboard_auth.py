@@ -49,3 +49,23 @@ async def get_current_user_and_store(
     if store.status == "suspended":
         raise HTTPException(status_code=403, detail="This store has been suspended. Contact support.")
     return user, store
+
+
+async def is_dashboard_request_for_store(http_request, db: Session, store: Store) -> bool:
+    """Return True only when the Bearer credential is a valid merchant JWT for this store.
+
+    Do not infer dashboard identity from the mere presence of an Authorization
+    header: a request carrying both a valid Bearer JWT and a public x-api-key
+    (proxy injection, merchant pasting the widget key) must still resolve
+    correctly, and a JWT belonging to a *different* merchant must never
+    bypass this store's public conversation-token requirement. Shared by
+    /v1/chat and /v1/images so both use one consistent rule.
+    """
+    authorization = http_request.headers.get("authorization")
+    if not authorization:
+        return False
+    try:
+        user = await get_current_user(authorization=authorization, db=db)
+    except HTTPException:
+        return False
+    return str(user.store_id) == str(store.id)

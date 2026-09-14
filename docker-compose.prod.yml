@@ -40,6 +40,9 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       DB_NAME: ${POSTGRES_DB:-app}
       REDIS_URL: redis://redis:6379/0
+      # Dedicated worker service consumes the queue; do not also run the
+      # inline worker/scheduler in the API container (double processing).
+      RUN_SYNC_INLINE: "false"
     volumes:
       - chat_images:/app/data/chat-images
     depends_on:

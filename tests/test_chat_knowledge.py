@@ -697,18 +697,11 @@ class TestSSRFGuard:
             "http://0x7f000001/",
         ],
     )
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Known gap: ipaddress.ip_address() rejects non-dotted and "
-            "leading-zero IPv4 strings on Python >= 3.9.5, so "
-            "_check_literal_host does not recognise decimal/hex loopback "
-            "encodings despite its docstring. Exploitability is contained: "
-            "assert_safe_url (the enforcement layer) still rejects them "
-            "after DNS resolution."
-        ),
-    )
     def test_is_private_host_blocks_encoded_loopback(self, url):
+        # Regression test (was xfail): _check_literal_host now normalizes
+        # decimal/hex IPv4 notations (== 127.0.0.1) before the
+        # ipaddress check, so these encodings are rejected at parse
+        # time as well as at DNS-resolution time.
         assert is_private_host(url) is True
 
     def test_is_private_host_allows_public_urls(self):

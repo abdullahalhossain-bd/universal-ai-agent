@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 from sqlalchemy import distinct, text
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.core.redis import redis_client
 from app.db.models import DataSource, Product
+
+logger = logging.getLogger(__name__)
 
 _CACHE_TTL_SECONDS = 6 * 60 * 60
 _CACHE_KEY_PREFIX = "store_vocab"
@@ -74,7 +77,9 @@ def _collect_schema(db: Session, store_id: str) -> dict[str, list[str]]:
             for key, aliases in _normalize_attribute_schema(mapping).items():
                 schema[key] = list(dict.fromkeys(schema.get(key, []) + aliases))
     except Exception:
-        pass
+        # Degrade to the product-table vocabulary; a broken datasource
+        # mapping must not fail chat, but it should be visible in logs.
+        logger.warning("vocabulary schema collection failed store=%s", store_id, exc_info=True)
     return schema
 
 
@@ -116,7 +121,8 @@ def _collect_from_db(db: Session, store_id: str, schema: dict[str, list[str]]) -
                 if isinstance(value, (str, int, float, bool)):
                     vocabulary.update(_tokenize(str(value)))
     except Exception:
-        pass
+        # JSON attribute column is best-effort vocabulary enrichment.
+        logger.debug("vocabulary attribute scan failed store=%s", store_id, exc_info=True)
 
     return vocabulary
 
@@ -133,7 +139,8 @@ async def get_store_vocabulary(db: Session, store_id: str) -> StoreVocabulary:
             if isinstance(payload, list):
                 return StoreVocabulary(payload)
     except Exception:
-        pass
+        # Cache read failed: recompute from the DB (authoritative).
+        logger.debug("vocabulary cache read failed store=%s", store_id, exc_info=True)
 
     schema = _collect_schema(db, store_id)
     vocabulary = _collect_from_db(db, store_id, schema)
@@ -144,7 +151,8 @@ async def get_store_vocabulary(db: Session, store_id: str) -> StoreVocabulary:
             ex=_CACHE_TTL_SECONDS,
         )
     except Exception:
-        pass
+        # Write-through cache is best-effort; the vocabulary itself is valid.
+        logger.debug("vocabulary cache write failed store=%s", store_id, exc_info=True)
     return StoreVocabulary(vocabulary, schema)
 
 
@@ -152,4 +160,5 @@ async def invalidate_store_vocabulary(store_id: str) -> None:
     try:
         await redis_client.delete(_cache_key(store_id))
     except Exception:
-        pass
+        # Stale cache self-heals via TTL; invalidation is best-effort.
+        logger.debug("vocabulary cache invalidation failed store=%s", store_id, exc_info=True)

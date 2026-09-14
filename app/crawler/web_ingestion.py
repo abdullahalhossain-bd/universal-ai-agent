@@ -245,6 +245,15 @@ async def run_website_sync(job: dict):
         if store is None:
             raise LookupError("store not found")
 
+        from app.sync.runs import mark_superseded_runs
+        superseded = mark_superseded_runs(db, store_id, datasource_id)
+        if superseded:
+            logger.warning(
+                "closed %s orphaned running sync run(s) for datasource=%s "
+                "before starting a new one",
+                superseded,
+                datasource_id,
+            )
         run = SyncRun(
             store_id=store_id,
             datasource_id=datasource_id,

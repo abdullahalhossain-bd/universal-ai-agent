@@ -13,7 +13,7 @@ FAIL = 0
 SKIP = 0
 
 
-def request(method, path, data=None, api_key=None, timeout=60):
+def request(method, path, data=None, api_key=None, timeout=60, conversation_token=None):
     url = BASE + path
     headers = {"Accept": "application/json"}
 
@@ -25,6 +25,8 @@ def request(method, path, data=None, api_key=None, timeout=60):
 
     if api_key:
         headers["x-api-key"] = api_key
+    if conversation_token:
+        headers["x-conversation-token"] = conversation_token
 
     req = urllib.request.Request(
         url,
@@ -52,7 +54,7 @@ def request(method, path, data=None, api_key=None, timeout=60):
         return None, str(e)
 
 
-def multipart_upload(path, filename, content, api_key, conversation_id=None):
+def multipart_upload(path, filename, content, api_key, conversation_id=None, conversation_token=None):
     boundary = "----E2ETestBoundary" + uuid.uuid4().hex
 
     parts = []
@@ -80,14 +82,18 @@ def multipart_upload(path, filename, content, api_key, conversation_id=None):
 
     body = b"".join(parts)
 
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "x-api-key": api_key,
+    }
+    if conversation_token:
+        headers["x-conversation-token"] = conversation_token
+
     req = urllib.request.Request(
         BASE + path,
         data=body,
-        headers={
-            "Accept": "application/json",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-            "x-api-key": api_key,
-        },
+        headers=headers,
         method="POST",
     )
 
@@ -212,7 +218,21 @@ png_1x1 = bytes.fromhex(
     "0000000049454E44AE426082"
 )
 
+# Images attach to a customer conversation: a real client first POSTs
+# /v1/chat (which creates the session and returns the conversation
+# token), then uploads. Uploading straight to a made-up conversation_id
+# correctly 404s — the conversation-validation contract has existed since
+# chat sessions gained per-conversation access tokens.
 conversation_id = "image-e2e-" + uuid.uuid4().hex
+conversation_token = None
+create_status, create_body = request(
+    "POST",
+    "/v1/chat",
+    {"message": "hello, I have a question about a product image", "conversation_id": conversation_id},
+    api_key=API_KEY,
+)
+if create_status == 200 and isinstance(create_body, dict):
+    conversation_token = create_body.get("conversation_token")
 
 status, body = multipart_upload(
     "/v1/images",
@@ -220,6 +240,7 @@ status, body = multipart_upload(
     png_1x1,
     API_KEY,
     conversation_id,
+    conversation_token=conversation_token,
 )
 
 if status == 200:
@@ -258,6 +279,7 @@ else:
         },
         API_KEY,
         timeout=90,
+        conversation_token=conversation_token,
     )
 
     if status == 200:

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { MessageSquare, Send, RefreshCw, Clock, UserRound, Bot, UserRoundCog } from 'lucide-react'
 import { api, ApiError } from '../api/client'
 import { Alert, Button, Card, EmptyState, Input, PageHeader, Spinner } from '../components/ui'
@@ -21,8 +21,14 @@ export default function Messages() {
   const [sending, setSending] = useState(false)
   const [changingMode, setChangingMode] = useState(false)
   const [error, setError] = useState('')
+  // Polling safety: one in-flight load at a time. setInterval cannot
+  // await, so without this guard a slow backend stacks concurrent
+  // requests whose out-of-order responses clobber fresher state.
+  const loadInFlight = useRef(false)
 
   const load = async (conversationId = selected?.conversation_id) => {
+    if (loadInFlight.current) return
+    loadInFlight.current = true
     setLoading(true)
     setError('')
     try {
@@ -36,7 +42,7 @@ export default function Messages() {
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : 'Could not load messages.')
-    } finally { setLoading(false) }
+    } finally { setLoading(false); loadInFlight.current = false }
   }
 
   useEffect(() => { load() }, [])
@@ -65,7 +71,9 @@ export default function Messages() {
 
   const sendReply = async () => {
     const text = reply.trim()
-    if (!text || !selected) return
+    // sending guard also covers the Enter-key path (bypasses the disabled
+    // button) so a double keypress cannot fire two identical replies.
+    if (!text || !selected || sending) return
     setSending(true); setError('')
     try {
       await api.post(`/v1/messages/conversations/${encodeURIComponent(selected.conversation_id)}/reply`, { message: text })

@@ -46,6 +46,10 @@ services:
     environment:
       DATABASE_URL: postgresql://app:app@postgres:5432/app
       REDIS_URL: redis://redis:6379/0
+      # A dedicated `worker` service consumes the queue. Running the
+      # inline worker/scheduler here as well would double-process every
+      # sync job and double-run the scheduler.
+      RUN_SYNC_INLINE: "false"
     depends_on:
       postgres:
         condition: service_healthy

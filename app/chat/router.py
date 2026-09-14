@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.chat.intelligent_service import IntelligentCommerceChatService
 from app.chat.dynamic_service import DynamicAttributeChatService
+from app.auth.dashboard_auth import is_dashboard_request_for_store
 from app.chat.models import ChatSession, ChatMessage
 from app.chat.schemas import ChatRequest, ChatResponse
 from app.core.rate_limit import enforce_rate_limit
@@ -105,25 +106,12 @@ def _attach_conversation_token(result: dict, session: ChatSession | None) -> dic
 
 
 async def _is_authenticated_dashboard_request(http_request: Request, db: Session, store: Store) -> bool:
-    """Return True only when the Bearer credential is a valid merchant JWT for this store.
+    """Shared JWT-validating dashboard check (see app.auth.dashboard_auth).
 
-    Do not infer dashboard identity from the mere presence of an Authorization header.
-    This also makes the decision independent of whether a second credential (such as
-    x-api-key) was attached by a proxy or client. A valid JWT for another merchant does
-    not bypass the public conversation-token requirement for this store.
+    Kept as a thin alias so existing call sites and tests stay stable while
+    the implementation lives in one place.
     """
-    authorization = http_request.headers.get("authorization")
-    if not authorization:
-        return False
-
-    from app.auth.dashboard_auth import get_current_user
-
-    try:
-        user = await get_current_user(authorization=authorization, db=db)
-    except HTTPException:
-        return False
-
-    return str(user.store_id) == str(store.id)
+    return await is_dashboard_request_for_store(http_request, db, store)
 
 
 @router.post("", response_model=ChatResponse)

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
-import { adminApi, api, getAdminToken, getToken, setAdminToken, setToken } from '../api/client'
+import { adminApi, api, ApiError, getAdminToken, getToken, setAdminToken, setToken } from '../api/client'
 
 const AuthContext = createContext(null)
 
@@ -22,15 +22,24 @@ const AuthProvider = ({ children }) => {
       const data = await api.get('/v1/auth/me')
       setUser(data.user); setStore(data.store)
       await establishInboxSession()
-    } catch {
-      setToken(null); setUser(null); setStore(null)
+    } catch (err) {
+      // Only clear the stored session when the server actually rejected
+      // the token (401/403). A transient network error or timeout at page
+      // load must not throw a logged-in merchant back to /login.
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+        setToken(null); setUser(null); setStore(null)
+      }
     } finally { setLoading(false) }
   }, [])
 
   const loadAdminMe = useCallback(async () => {
     if (!getAdminToken()) { setAdminLoading(false); return }
     try { setAdminUser(await adminApi.get('/v1/admin/me')) }
-    catch { setAdminToken(null); setAdminUser(null) }
+    catch (err) {
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+        setAdminToken(null); setAdminUser(null)
+      }
+    }
     finally { setAdminLoading(false) }
   }, [])
 
